@@ -58,9 +58,9 @@ impl ObsApp {
     fn handle_ui_action(&mut self, ctx: &egui::Context, action: UiAction) {
         match action {
             UiAction::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            UiAction::Scene(action) => {
+            UiAction::Project(command) => {
                 if let Some(manager) = &self.project_manager {
-                    manager.dispatch(action);
+                    manager.dispatch(command);
                 }
             }
             UiAction::SetFullscreen(fullscreen) => {

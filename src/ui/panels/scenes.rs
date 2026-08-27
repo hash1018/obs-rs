@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::scene::SceneAction;
+use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::ScenesSnapshot;
 
 use super::super::UiAction;
@@ -39,7 +39,7 @@ pub(in crate::ui) fn show(
                     )
                     .clicked()
                 {
-                    actions.push(UiAction::Scene(SceneAction::Select(scene.id)));
+                    actions.push(scene_action(SceneCommand::Select(scene.id)));
                 }
             }
         });
@@ -61,7 +61,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 if tool_button(ui, ToolIcon::Add, "Add scene", true) {
-                    actions.push(UiAction::Scene(SceneAction::Add));
+                    actions.push(scene_action(SceneCommand::Add));
                 }
                 if tool_button(
                     ui,
@@ -70,7 +70,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                     selected.is_some() && snapshot.items.len() > 1,
                 ) && let Some(scene_id) = selected
                 {
-                    actions.push(UiAction::Scene(SceneAction::Delete(scene_id)));
+                    actions.push(scene_action(SceneCommand::Delete(scene_id)));
                 }
                 if tool_button(
                     ui,
@@ -79,7 +79,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                     selected.is_some(),
                 ) && let Some(scene_id) = selected
                 {
-                    actions.push(UiAction::Scene(SceneAction::Duplicate(scene_id)));
+                    actions.push(scene_action(SceneCommand::Duplicate(scene_id)));
                 }
                 if tool_button(
                     ui,
@@ -88,7 +88,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                     selected_index.is_some_and(|index| index > 0),
                 ) && let Some(scene_id) = selected
                 {
-                    actions.push(UiAction::Scene(SceneAction::MoveUp(scene_id)));
+                    actions.push(scene_action(SceneCommand::MoveUp(scene_id)));
                 }
                 if tool_button(
                     ui,
@@ -97,10 +97,14 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                     selected_index.is_some_and(|index| index + 1 < snapshot.items.len()),
                 ) && let Some(scene_id) = selected
                 {
-                    actions.push(UiAction::Scene(SceneAction::MoveDown(scene_id)));
+                    actions.push(scene_action(SceneCommand::MoveDown(scene_id)));
                 }
             });
         });
+}
+
+fn scene_action(command: SceneCommand) -> UiAction {
+    UiAction::Project(ProjectCommand::Scene(command))
 }
 
 fn tool_button(ui: &mut egui::Ui, icon: ToolIcon, tooltip: &str, enabled: bool) -> bool {

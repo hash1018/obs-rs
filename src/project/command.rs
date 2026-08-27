@@ -1,7 +1,12 @@
-use super::SceneId;
+use crate::domain::SceneId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SceneAction {
+pub enum ProjectCommand {
+    Scene(SceneCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneCommand {
     Add,
     Delete(SceneId),
     Duplicate(SceneId),

@@ -1,4 +1,4 @@
-use crate::scene::SceneId;
+use crate::domain::SceneId;
 
 #[derive(Clone, Default)]
 pub struct ScenesSnapshot {

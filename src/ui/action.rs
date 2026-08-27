@@ -1,11 +1,11 @@
 use eframe::egui;
 
-use crate::scene::SceneAction;
+use crate::project::ProjectCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiAction {
     Exit,
-    Scene(SceneAction),
+    Project(ProjectCommand),
     SetFullscreen(bool),
     SetTheme(egui::ThemePreference),
 }

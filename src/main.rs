@@ -13,10 +13,10 @@
 
 mod app;
 mod capture;
+mod domain;
 mod persistence;
 mod project;
 mod resource_manager;
-mod scene;
 mod snapshots;
 mod ui;
 

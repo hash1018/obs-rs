@@ -1,36 +1,27 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::scene::SceneId;
-use crate::snapshots::{SceneSnapshot, ScenesSnapshot};
+use crate::domain::{Scene, SceneId};
 
 use super::PersistenceResult;
 
 pub(crate) struct SceneStore;
 
 impl SceneStore {
-    pub(crate) fn snapshot(connection: &Connection) -> PersistenceResult<ScenesSnapshot> {
-        let selected_scene_id = connection
-            .query_row(
-                "SELECT selected_scene_id FROM app_state WHERE id = 1",
-                [],
-                |row| row.get::<_, Option<i64>>(0),
-            )?
-            .map(SceneId);
+    pub(crate) fn list(connection: &Connection) -> PersistenceResult<Vec<Scene>> {
         let mut statement =
             connection.prepare("SELECT id, name FROM scenes ORDER BY position, id")?;
-        let items = statement
+        Ok(statement
             .query_map([], |row| {
-                Ok(SceneSnapshot {
+                Ok(Scene {
                     id: SceneId(row.get(0)?),
                     name: row.get(1)?,
                 })
             })?
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?)
+    }
 
-        Ok(ScenesSnapshot {
-            items,
-            selected_scene_id,
-        })
+    pub(crate) fn selected_scene_id(connection: &Connection) -> PersistenceResult<Option<SceneId>> {
+        selected_scene_id(connection)
     }
 
     pub(crate) fn add(transaction: &Transaction<'_>) -> PersistenceResult<SceneId> {
