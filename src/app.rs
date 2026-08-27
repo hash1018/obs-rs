@@ -149,6 +149,11 @@ impl ObsApp {
                 #[cfg(not(target_os = "linux"))]
                 let _ = scene_id;
             }
+            UiAction::DragSceneItem(item_id, transform) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_dragging_transform(item_id, transform);
+                }
+            }
             UiAction::SetFullscreen(fullscreen) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
             }

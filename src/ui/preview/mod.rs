@@ -129,6 +129,9 @@ fn handle_pointer(
                 )
             }
         };
+        if editor.transform_override != Some((drag.item_id, transform)) {
+            actions.push(UiAction::DragSceneItem(drag.item_id, transform));
+        }
         editor.transform_override = Some((drag.item_id, transform));
         ui.ctx().request_repaint();
     }

@@ -18,6 +18,7 @@ use media_pp::{
     pipeline::Pipeline,
 };
 
+use crate::domain::Transform;
 use crate::snapshots::SceneItemSnapshot;
 
 pub(super) type OpenError = Box<dyn Error + Send + Sync>;
@@ -35,8 +36,12 @@ pub(super) struct OpenSource {
 /// Transform, so the fit is [`VideoFit::Stretch`]: whatever aspect the user
 /// asked for is expressed in that rectangle, and letterboxing inside it would
 /// second-guess them.
-pub(super) fn layer_for(item: &SceneItemSnapshot, z_index: i32) -> VideoLayer {
-    let [x, y, width, height] = item.canvas_rect(item.transform);
+pub(super) fn layer_for(
+    item: &SceneItemSnapshot,
+    transform: Transform,
+    z_index: i32,
+) -> VideoLayer {
+    let [x, y, width, height] = item.canvas_rect(transform);
     let mut layer = VideoLayer::new(VideoRect::new(
         x.round() as i32,
         y.round() as i32,

@@ -39,7 +39,7 @@ use media_pp::{
     queue::OverflowPolicy,
 };
 
-use crate::domain::{SceneCanvas, SceneItemId, SourceKind};
+use crate::domain::{SceneCanvas, SceneItemId, SourceKind, Transform};
 use crate::snapshots::SourcesSnapshot;
 
 use nv12::Nv12Target;
@@ -65,11 +65,19 @@ pub struct CompositeFrame {
     pub texture_id: egui::TextureId,
 }
 
+/// What the application asks the engine to change.
+enum EngineCommand {
+    /// The selected Scene's contents, as the project now holds them.
+    Scene(Box<SourcesSnapshot>),
+    /// One item's Transform mid-gesture, which the project does not hold yet.
+    Dragging(SceneItemId, Transform),
+}
+
 pub struct EngineManager {
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     /// `f32` bits, so the UI can read the rate without a lock.
     active_fps: Arc<AtomicU32>,
-    scenes: Sender<SourcesSnapshot>,
+    commands: Sender<EngineCommand>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -84,7 +92,7 @@ impl EngineManager {
         let frame = Arc::new(ArcSwapOption::empty());
         let active_fps = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let (scenes, scene_rx) = mpsc::channel();
+        let (commands, command_rx) = mpsc::channel();
 
         let worker = thread::Builder::new().name("engine".to_owned()).spawn({
             let frame = Arc::clone(&frame);
@@ -96,7 +104,7 @@ impl EngineManager {
                     size,
                     frame,
                     active_fps,
-                    scene_rx,
+                    command_rx,
                     &stop,
                     wake_ui,
                 ) {
@@ -110,7 +118,7 @@ impl EngineManager {
         Ok(Self {
             frame,
             active_fps,
-            scenes,
+            commands,
             stop,
             worker: Some(worker),
         })
@@ -123,7 +131,20 @@ impl EngineManager {
     /// still open everything the project holds, and selecting a Scene replaces
     /// the whole set at once.
     pub fn apply(&self, sources: &SourcesSnapshot) {
-        let _ = self.scenes.send(sources.clone());
+        let _ = self
+            .commands
+            .send(EngineCommand::Scene(Box::new(sources.clone())));
+    }
+
+    /// Moves one layer while the pointer is still down.
+    ///
+    /// The project database only learns the Transform when the gesture ends,
+    /// which is correct — a drag is not a series of edits. But the compositor
+    /// would then show the item where it used to be until the pointer is
+    /// released, with the gizmo somewhere else entirely, so the layer follows
+    /// the gesture directly and the snapshot confirms it afterwards.
+    pub fn set_dragging_transform(&self, item: SceneItemId, transform: Transform) {
+        let _ = self.commands.send(EngineCommand::Dragging(item, transform));
     }
 
     /// The most recent composited frame, or `None` before the first one.
@@ -157,7 +178,7 @@ fn run(
     size: [u32; 2],
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     active_fps: Arc<AtomicU32>,
-    scenes: mpsc::Receiver<SourcesSnapshot>,
+    commands: mpsc::Receiver<EngineCommand>,
     stop: &AtomicBool,
     wake_ui: impl Fn() + Send + Sync + 'static,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -246,16 +267,20 @@ fn run(
     let mut compositing = false;
 
     let mut open = HashMap::new();
+    let mut scene = SourcesSnapshot::default();
     while !stop.load(Ordering::Acquire) {
-        match scenes.recv_timeout(Duration::from_millis(100)) {
-            Ok(snapshot) => {
-                // Only the newest snapshot describes the project now; the ones
-                // behind it were already superseded before this woke up.
-                let mut latest = snapshot;
-                while let Ok(newer) = scenes.try_recv() {
-                    latest = newer;
+        match commands.recv_timeout(Duration::from_millis(100)) {
+            Ok(command) => {
+                let mut reconciled =
+                    apply_command(&device, &handle, &mut open, &mut scene, command);
+                // Whatever else is already waiting, so a gesture's newer
+                // positions are not left a poll behind the pointer.
+                while let Ok(next) = commands.try_recv() {
+                    reconciled |= apply_command(&device, &handle, &mut open, &mut scene, next);
                 }
-                reconcile(&device, &handle, &mut open, &latest);
+                if !reconciled {
+                    continue;
+                }
 
                 // A Scene with no running Source composites the background
                 // colour, forever, at the full frame rate — a download and two
@@ -293,6 +318,36 @@ fn run(
     Ok(())
 }
 
+/// Applies one change, reporting whether the running Sources may have moved
+/// on — a Scene change can start or stop them, a drag never does.
+fn apply_command(
+    device: &CudaDevice,
+    handle: &CudaVideoCompositorHandle,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    scene: &mut SourcesSnapshot,
+    command: EngineCommand,
+) -> bool {
+    match command {
+        EngineCommand::Scene(snapshot) => {
+            *scene = *snapshot;
+            reconcile(device, handle, open, scene);
+            true
+        }
+        EngineCommand::Dragging(item_id, transform) => {
+            let Some(index) = scene.items.iter().position(|item| item.id == item_id) else {
+                return false;
+            };
+            let Some(SourceState::Open(source)) = open.get(&item_id) else {
+                return false;
+            };
+            let item = &scene.items[index];
+            let layer = layer_for(item, transform, (scene.items.len() - index) as i32);
+            let _ = source.layer.set_layer(layer);
+            false
+        }
+    }
+}
+
 enum SourceState {
     Open(OpenSource),
     /// Opening failed once and will not be retried.
@@ -316,7 +371,7 @@ fn reconcile(
         }
         // The snapshot is ordered front-most first, and the compositor draws
         // larger z later, so the two run opposite ways.
-        let layer = layer_for(item, (count - index) as i32);
+        let layer = layer_for(item, item.transform, (count - index) as i32);
         match open.get(&item.id) {
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
