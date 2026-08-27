@@ -50,10 +50,8 @@ use source::{OpenSource, layer_for, open_display_capture};
 /// clock.
 const TARGET_FPS: u32 = 60;
 
-/// What is behind every layer, and all there is to see before any Source is
-/// connected. Deliberately not black: it has to be distinguishable from the
-/// empty-Viewport fill the Preview paints when there is no frame at all.
-const BACKGROUND: Color = Color::new(16, 40, 56);
+/// What is behind every layer: the Canvas itself, where no Source covers it.
+const BACKGROUND: Color = Color::BLACK;
 
 /// One composited frame, already resident on the GPU.
 ///
