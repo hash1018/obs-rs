@@ -40,6 +40,13 @@ path = "../media-pp/lib"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Performance", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Never referenced from code. `eframe`'s default features include
+# `winit/default`, which is what pulls in `sctk-adwaita` and draws Wayland's
+# client-side decorations properly; turning eframe's defaults off to avoid its
+# `glow` backend took that with it, leaving winit's fallback decorations —
+# plain rectangles where the close button's cross should be. Naming winit here
+# puts the feature back through Cargo's own unification.
+winit = { version = "0.30", features = ["wayland-csd-adwaita"] }
 # `async-io`, not the default `tokio` backend. `media-pp` runs its own portal
 # handshake on this same crate and picks `async-io`; ashpd refuses to compile
 # with both backends enabled, so the choice is the library's, not ours.
