@@ -36,6 +36,7 @@ use media_pp::{
     },
     ffmpeg,
     pipeline::Pipeline,
+    queue::OverflowPolicy,
 };
 
 use crate::domain::{SceneCanvas, SceneItemId, SourceKind};
@@ -166,6 +167,7 @@ fn run(
     // One per process, not one per pipeline: creating or dropping a device
     // while another thread is encoding can fault inside the NVIDIA driver.
     let device = CudaDevice::new()?;
+
     let target = Nv12Target::new(&render_state.device, width, height);
     let texture_id = render_state.renderer.write().register_native_texture(
         &render_state.device,
@@ -216,7 +218,18 @@ fn run(
     });
 
     let pipeline = Pipeline::new("preview", compositor, |source, context| {
-        let branch = context.branch().pipe(download).to(Box::new(sink))?;
+        // The Preview must not set the compositor's pace. `CudaDownload`
+        // waits for the GPU to finish before the CPU can read, and a
+        // synchronous chain makes the compositor wait with it — which is what
+        // dragged a 60 fps compositor down to exactly half that. Behind a
+        // queue the download runs on its own thread, and a Preview that
+        // cannot keep up drops frames instead of slowing the output everything
+        // else will be built from.
+        let branch = context
+            .branch()
+            .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
+            .pipe(download)
+            .to(Box::new(sink))?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
