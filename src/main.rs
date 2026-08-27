@@ -16,6 +16,7 @@ mod capture;
 mod domain;
 mod engine;
 mod i18n;
+mod paths;
 mod persistence;
 mod project;
 mod resource_manager;

@@ -48,38 +48,8 @@ impl SettingsStore {
     }
 }
 
-#[cfg(target_os = "windows")]
 fn settings_path() -> PathBuf {
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("obs-rs")
-        .join("settings.toml")
-}
-
-#[cfg(target_os = "macos")]
-fn settings_path() -> PathBuf {
-    home_dir()
-        .join("Library")
-        .join("Application Support")
-        .join("obs-rs")
-        .join("settings.toml")
-}
-
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-fn settings_path() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".config"))
-        .join("obs-rs")
-        .join("settings.toml")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+    crate::paths::config_dir().join("settings.toml")
 }
 
 #[cfg(test)]

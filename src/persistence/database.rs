@@ -15,7 +15,7 @@ pub(crate) struct ProjectDatabase {
 
 impl ProjectDatabase {
     pub(crate) fn open_default() -> PersistenceResult<Self> {
-        Self::open(default_database_path()?)
+        Self::open(default_database_path())
     }
 
     pub(crate) fn open(path: impl AsRef<Path>) -> PersistenceResult<Self> {
@@ -55,23 +55,6 @@ impl ProjectDatabase {
     }
 }
 
-fn default_database_path() -> PersistenceResult<PathBuf> {
-    let directory = if cfg!(target_os = "windows") {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|path| path.join("Library/Application Support"))
-    } else {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|path| path.join(".local/share"))
-            })
-    }
-    .unwrap_or(std::env::current_dir()?);
-
-    Ok(directory.join("obs-rs").join("project.db"))
+fn default_database_path() -> PathBuf {
+    crate::paths::data_dir().join("project.db")
 }
