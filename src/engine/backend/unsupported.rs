@@ -1,9 +1,9 @@
 //! A platform with no compositor backend written yet.
 //!
-//! Windows is the one that matters: `media-pp` has `DxgiCaptureSource` and
-//! `D3d11VideoCompositor` waiting for it, and those pair with each other —
-//! DXGI capture produces D3D11 textures, which a CUDA compositor cannot
-//! accept at all. See this module's parent for what a backend has to provide.
+//! macOS is what remains: `media-pp` has no ScreenCaptureKit capture or Metal
+//! compositor yet, so there is nothing to pair the way Linux pairs PipeWire
+//! with CUDA and Windows pairs DXGI with D3D11. See this module's parent for
+//! what a backend has to provide.
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;

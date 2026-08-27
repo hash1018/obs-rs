@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor  → download → NV12 resolve
-//! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor → shared texture
+//! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor → download → BGRA copy
 //! ```
 //!
 //! Wiring a D3D11 capture into a CUDA compositor is not merely slow, it is
@@ -53,7 +53,11 @@ use media_pp::{color::Color, pipeline::Pipeline};
 use crate::snapshots::SceneItemSnapshot;
 
 #[cfg_attr(target_os = "linux", path = "cuda/mod.rs")]
-#[cfg_attr(not(target_os = "linux"), path = "unsupported.rs")]
+#[cfg_attr(target_os = "windows", path = "d3d11/mod.rs")]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows")),
+    path = "unsupported.rs"
+)]
 mod platform;
 
 pub(super) use platform::{Backend, Layer};
@@ -90,4 +94,35 @@ pub(super) fn input_name(item: &SceneItemSnapshot) -> String {
 /// Convenience for a backend that has no Source of a given kind yet.
 pub(super) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendError {
     format!("{:?} is not connected to the compositor yet", item.kind).into()
+}
+
+/// One BGRA frame filled with a single colour, ready for a backend's upload
+/// element. Backend-independent: both compositors take their Color Source
+/// this way, differing only in which upload carries it to the GPU.
+#[allow(dead_code)]
+pub(super) fn flat_bgra(width: u32, height: u32, rgba: [u8; 4]) -> media_pp::buffer::MediaBuffer {
+    use media_pp::{buffer::MediaBuffer, ffmpeg, pool::UnboundObjectPool};
+
+    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
+    let stride = frame.stride(0);
+    // Opaque: the item's own alpha is the layer's opacity, and applying it
+    // twice would darken the colour against the Canvas.
+    let pixel = [rgba[2], rgba[1], rgba[0], 255];
+    let row: Vec<u8> = pixel
+        .iter()
+        .copied()
+        .cycle()
+        .take(width as usize * 4)
+        .collect();
+    let data = frame.data_mut(0);
+    for line in 0..height as usize {
+        data[line * stride..line * stride + row.len()].copy_from_slice(&row);
+    }
+
+    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
+    // it and never returns to one, which an unbound pool of zero expresses.
+    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
+    let mut slot = pool.get();
+    *slot = frame;
+    MediaBuffer::Video(Arc::new(slot))
 }

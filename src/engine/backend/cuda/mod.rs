@@ -22,7 +22,7 @@ use media_pp::{
 use crate::domain::{SourceKind, SourceSettings};
 use crate::snapshots::SceneItemSnapshot;
 
-use super::{BACKGROUND, BackendError, OpenSource, input_name, unsupported_kind};
+use super::{BACKGROUND, BackendError, OpenSource, flat_bgra, input_name, unsupported_kind};
 
 use nv12::Nv12Target;
 
@@ -211,35 +211,7 @@ fn open_color_source(
     })
 }
 
-/// One BGRA frame filled with a single colour, ready for `CudaUpload`.
-fn flat_bgra(width: u32, height: u32, rgba: [u8; 4]) -> media_pp::buffer::MediaBuffer {
-    use media_pp::{buffer::MediaBuffer, ffmpeg, pool::UnboundObjectPool};
-
-    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
-    let stride = frame.stride(0);
-    // Opaque: the item's own alpha is the layer's opacity, and applying it
-    // twice would darken the colour against the Canvas.
-    let pixel = [rgba[2], rgba[1], rgba[0], 255];
-    let row: Vec<u8> = pixel
-        .iter()
-        .copied()
-        .cycle()
-        .take(width as usize * 4)
-        .collect();
-    let data = frame.data_mut(0);
-    for line in 0..height as usize {
-        data[line * stride..line * stride + row.len()].copy_from_slice(&row);
-    }
-
-    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
-    // it and never returns to one, which an unbound pool of zero expresses.
-    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
-    let mut slot = pool.get();
-    *slot = frame;
-    MediaBuffer::Video(std::sync::Arc::new(slot))
-}
-
-/// The name a SceneItem's compositor input is registered under.
+/// Opens the portal's screen cast and wires it into the compositor.
 fn open_display_capture(
     device: &CudaDevice,
     handle: &CudaVideoCompositorHandle,
