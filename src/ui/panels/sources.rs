@@ -175,60 +175,49 @@ fn show_toolbar(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    egui::Panel::bottom("sources_toolbar")
-        .exact_size(toolbar::HEIGHT)
-        .resizable(false)
-        .frame(
-            egui::Frame::new()
-                .fill(ui.visuals().panel_fill)
-                .inner_margin(egui::Margin::symmetric(4, 5)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                let selected = editor.selected_item_id();
-                let index =
-                    selected.and_then(|id| snapshot.items.iter().position(|item| item.id == id));
+    toolbar::strip(ui, "sources_toolbar", |ui| {
+        let selected = editor.selected_item_id();
+        let index = selected.and_then(|id| snapshot.items.iter().position(|item| item.id == id));
 
-                if toolbar::button(
-                    ui,
-                    ToolIcon::Add,
-                    i18n.text(TextKey::SourceAdd),
-                    snapshot.scene_id.is_some(),
-                ) {
-                    state.add_dialog_open = true;
-                }
-                if toolbar::button(
-                    ui,
-                    ToolIcon::Remove,
-                    i18n.text(TextKey::SourceRemove),
-                    selected.is_some(),
-                ) && let Some(item_id) = selected
-                {
-                    actions.push(source_action(SourceCommand::Delete(item_id)));
-                    editor.clear_selection();
-                }
-                // The dock lists front-most first, so "up" moves an item in
-                // front of its neighbour.
-                if toolbar::button(
-                    ui,
-                    ToolIcon::MoveUp,
-                    i18n.text(TextKey::SourceMoveUp),
-                    index.is_some_and(|index| index > 0),
-                ) && let Some(item_id) = selected
-                {
-                    actions.push(source_action(SourceCommand::MoveUp(item_id)));
-                }
-                if toolbar::button(
-                    ui,
-                    ToolIcon::MoveDown,
-                    i18n.text(TextKey::SourceMoveDown),
-                    index.is_some_and(|index| index + 1 < snapshot.items.len()),
-                ) && let Some(item_id) = selected
-                {
-                    actions.push(source_action(SourceCommand::MoveDown(item_id)));
-                }
-            });
-        });
+        if toolbar::button(
+            ui,
+            ToolIcon::Add,
+            i18n.text(TextKey::SourceAdd),
+            snapshot.scene_id.is_some(),
+        ) {
+            state.add_dialog_open = true;
+        }
+        if toolbar::button(
+            ui,
+            ToolIcon::Remove,
+            i18n.text(TextKey::SourceRemove),
+            selected.is_some(),
+        ) && let Some(item_id) = selected
+        {
+            actions.push(source_action(SourceCommand::Delete(item_id)));
+            editor.clear_selection();
+        }
+        // The dock lists front-most first, so "up" moves an item in
+        // front of its neighbour.
+        if toolbar::button(
+            ui,
+            ToolIcon::MoveUp,
+            i18n.text(TextKey::SourceMoveUp),
+            index.is_some_and(|index| index > 0),
+        ) && let Some(item_id) = selected
+        {
+            actions.push(source_action(SourceCommand::MoveUp(item_id)));
+        }
+        if toolbar::button(
+            ui,
+            ToolIcon::MoveDown,
+            i18n.text(TextKey::SourceMoveDown),
+            index.is_some_and(|index| index + 1 < snapshot.items.len()),
+        ) && let Some(item_id) = selected
+        {
+            actions.push(source_action(SourceCommand::MoveDown(item_id)));
+        }
+    });
 }
 
 fn show_add_dialog(

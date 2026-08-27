@@ -147,57 +147,47 @@ fn show_toolbar(
     let selected_index =
         selected.and_then(|selected| snapshot.items.iter().position(|scene| scene.id == selected));
 
-    egui::Panel::bottom("scenes_toolbar")
-        .exact_size(toolbar::HEIGHT)
-        .resizable(false)
-        .frame(
-            egui::Frame::new()
-                .fill(ui.visuals().panel_fill)
-                .inner_margin(egui::Margin::symmetric(4, 5)),
-        )
-        .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                if toolbar::button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true) {
-                    actions.push(scene_action(SceneCommand::Add));
-                }
-                if toolbar::button(
-                    ui,
-                    ToolIcon::Remove,
-                    i18n.text(TextKey::SceneRemove),
-                    selected.is_some() && snapshot.items.len() > 1,
-                ) && let Some(scene_id) = selected
-                {
-                    actions.push(scene_action(SceneCommand::Delete(scene_id)));
-                }
-                if toolbar::button(
-                    ui,
-                    ToolIcon::Duplicate,
-                    i18n.text(TextKey::SceneDuplicate),
-                    selected.is_some(),
-                ) && let Some(scene_id) = selected
-                {
-                    actions.push(scene_action(SceneCommand::Duplicate(scene_id)));
-                }
-                if toolbar::button(
-                    ui,
-                    ToolIcon::MoveUp,
-                    i18n.text(TextKey::SceneMoveUp),
-                    selected_index.is_some_and(|index| index > 0),
-                ) && let Some(scene_id) = selected
-                {
-                    actions.push(scene_action(SceneCommand::MoveUp(scene_id)));
-                }
-                if toolbar::button(
-                    ui,
-                    ToolIcon::MoveDown,
-                    i18n.text(TextKey::SceneMoveDown),
-                    selected_index.is_some_and(|index| index + 1 < snapshot.items.len()),
-                ) && let Some(scene_id) = selected
-                {
-                    actions.push(scene_action(SceneCommand::MoveDown(scene_id)));
-                }
-            });
-        });
+    toolbar::strip(ui, "scenes_toolbar", |ui| {
+        if toolbar::button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true) {
+            actions.push(scene_action(SceneCommand::Add));
+        }
+        if toolbar::button(
+            ui,
+            ToolIcon::Remove,
+            i18n.text(TextKey::SceneRemove),
+            selected.is_some() && snapshot.items.len() > 1,
+        ) && let Some(scene_id) = selected
+        {
+            actions.push(scene_action(SceneCommand::Delete(scene_id)));
+        }
+        if toolbar::button(
+            ui,
+            ToolIcon::Duplicate,
+            i18n.text(TextKey::SceneDuplicate),
+            selected.is_some(),
+        ) && let Some(scene_id) = selected
+        {
+            actions.push(scene_action(SceneCommand::Duplicate(scene_id)));
+        }
+        if toolbar::button(
+            ui,
+            ToolIcon::MoveUp,
+            i18n.text(TextKey::SceneMoveUp),
+            selected_index.is_some_and(|index| index > 0),
+        ) && let Some(scene_id) = selected
+        {
+            actions.push(scene_action(SceneCommand::MoveUp(scene_id)));
+        }
+        if toolbar::button(
+            ui,
+            ToolIcon::MoveDown,
+            i18n.text(TextKey::SceneMoveDown),
+            selected_index.is_some_and(|index| index + 1 < snapshot.items.len()),
+        ) && let Some(scene_id) = selected
+        {
+            actions.push(scene_action(SceneCommand::MoveDown(scene_id)));
+        }
+    });
 }
 
 fn scene_action(command: SceneCommand) -> UiAction {

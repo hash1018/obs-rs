@@ -8,6 +8,28 @@ use eframe::egui;
 
 pub(super) const HEIGHT: f32 = 36.0;
 const BUTTON_SIZE: f32 = 26.0;
+const SIDE_MARGIN: i8 = 4;
+
+/// Draws a dock's bottom button strip.
+///
+/// Owning the panel here rather than in each dock is what keeps the two
+/// looking like one control. The vertical centring is left to the layout
+/// instead of being arranged by margins that happen to add up to the button
+/// height — that arithmetic is only correct until one of the three numbers
+/// changes, and it fails silently by a few pixels when it stops being.
+pub(super) fn strip(ui: &mut egui::Ui, id: &'static str, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Panel::bottom(id)
+        .exact_size(HEIGHT)
+        .resizable(false)
+        .frame(
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .inner_margin(egui::Margin::symmetric(SIDE_MARGIN, 0)),
+        )
+        .show(ui, |ui| {
+            ui.horizontal_centered(contents);
+        });
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum ToolIcon {
