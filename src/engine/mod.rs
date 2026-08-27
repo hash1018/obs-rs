@@ -39,12 +39,12 @@ use media_pp::{
     queue::OverflowPolicy,
 };
 
-use crate::domain::{SceneCanvas, SceneItemId, SourceKind, Transform};
+use crate::domain::{SceneCanvas, SceneItemId, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::SourcesSnapshot;
 
 use nv12::Nv12Target;
-use source::{OpenSource, layer_for, open_display_capture};
+use source::{OpenSource, layer_for, open_source};
 
 /// The compositor's output rate. Independent of the egui repaint rate: egui
 /// redraws when something asks it to, this advances on the compositor's own
@@ -389,9 +389,6 @@ fn reconcile(
 ) {
     let count = snapshot.items.len();
     for (index, item) in snapshot.items.iter().enumerate() {
-        if item.kind != SourceKind::DisplayCapture {
-            continue;
-        }
         // The snapshot is ordered front-most first, and the compositor draws
         // larger z later, so the two run opposite ways.
         let layer = layer_for(item, item.transform, (count - index) as i32);
@@ -401,7 +398,7 @@ fn reconcile(
             }
             Some(SourceState::Failed) => {}
             None => {
-                let state = match open_display_capture(device, handle, item, layer, TARGET_FPS) {
+                let state = match open_source(device, handle, item, layer, TARGET_FPS) {
                     Ok(source) => {
                         // The portal may hand back a different token than the
                         // one it was given. Keeping the old one would mean

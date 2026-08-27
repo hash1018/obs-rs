@@ -18,7 +18,7 @@ use media_pp::{
     pipeline::Pipeline,
 };
 
-use crate::domain::Transform;
+use crate::domain::{SourceKind, SourceSettings, Transform};
 use crate::snapshots::SceneItemSnapshot;
 
 pub(super) type OpenError = Box<dyn Error + Send + Sync>;
@@ -58,7 +58,108 @@ pub(super) fn layer_for(
     layer.z_index = z_index;
     layer.visible = item.visible;
     layer.fit = VideoFit::Stretch;
+    // NV12 carries no alpha, so a Color Source's own is the layer's opacity
+    // rather than something the blend could read out of its pixels.
+    if let SourceSettings::Color(settings) = &item.settings {
+        layer.opacity = f32::from(settings.rgba[3]) / 255.0;
+    }
     layer
+}
+
+/// Starts whatever Source the item names, or reports that this build cannot.
+pub(super) fn open_source(
+    device: &CudaDevice,
+    handle: &CudaVideoCompositorHandle,
+    item: &SceneItemSnapshot,
+    layer: VideoLayer,
+    fps: u32,
+) -> Result<OpenSource, OpenError> {
+    match item.kind {
+        SourceKind::DisplayCapture => open_display_capture(device, handle, item, layer, fps),
+        SourceKind::Color => open_color_source(device, handle, item, layer),
+        kind => Err(format!("{kind:?} is not connected to the compositor yet").into()),
+    }
+}
+
+/// Feeds the compositor one frame of flat colour and leaves it there.
+///
+/// Pushed once rather than per frame: the compositor keeps the latest frame
+/// each input gave it, and a colour that never changes never needs another.
+/// Position, size and opacity are the layer's, so nothing here is redrawn
+/// when the item moves.
+fn open_color_source(
+    device: &CudaDevice,
+    handle: &CudaVideoCompositorHandle,
+    item: &SceneItemSnapshot,
+    layer: VideoLayer,
+) -> Result<OpenSource, OpenError> {
+    use media_pp::elements::{
+        AppSource, CudaConverter, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput,
+    };
+
+    let SourceSettings::Color(settings) = &item.settings else {
+        return Err("scene item is not a color source".into());
+    };
+    let width = (settings.size[0].round() as u32).max(2) & !1;
+    let height = (settings.size[1].round() as u32).max(2) & !1;
+
+    let name = input_name(item);
+    let (source, pusher) = AppSource::new(name.clone(), 1);
+    // BGRA in, so `CudaConverter` performs the RGB-to-BT.709 conversion the
+    // compositor expects instead of this having its own copy of that matrix.
+    let upload = CudaUpload::new(
+        format!("{name}-upload"),
+        device,
+        CudaFrameFormat::Bgra,
+        width,
+        height,
+    )?;
+    let converter = CudaConverter::new(format!("{name}-convert"), device, width, height)?;
+
+    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+        let branch = context.branch().pipe(upload).pipe(converter).to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    pipeline.run()?;
+    pusher.push(flat_bgra(width, height, settings.rgba))?;
+
+    Ok(OpenSource {
+        pipeline,
+        layer,
+        name,
+        refreshed_token: None,
+        showing: true,
+    })
+}
+
+/// One BGRA frame filled with a single colour, ready for `CudaUpload`.
+fn flat_bgra(width: u32, height: u32, rgba: [u8; 4]) -> media_pp::buffer::MediaBuffer {
+    use media_pp::{buffer::MediaBuffer, ffmpeg, pool::UnboundObjectPool};
+
+    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
+    let stride = frame.stride(0);
+    // Opaque: the item's own alpha is the layer's opacity, and applying it
+    // twice would darken the colour against the Canvas.
+    let pixel = [rgba[2], rgba[1], rgba[0], 255];
+    let row: Vec<u8> = pixel
+        .iter()
+        .copied()
+        .cycle()
+        .take(width as usize * 4)
+        .collect();
+    let data = frame.data_mut(0);
+    for line in 0..height as usize {
+        data[line * stride..line * stride + row.len()].copy_from_slice(&row);
+    }
+
+    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
+    // it and never returns to one, which an unbound pool of zero expresses.
+    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
+    let mut slot = pool.get();
+    *slot = frame;
+    MediaBuffer::Video(std::sync::Arc::new(slot))
 }
 
 /// The name a SceneItem's compositor input is registered under.
