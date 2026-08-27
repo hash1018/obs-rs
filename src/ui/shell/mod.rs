@@ -27,8 +27,7 @@ pub fn show(
         ui,
         &mut state.preview,
         &mut state.editor,
-        &resources.snapshots.sources,
-        resources.i18n,
+        resources,
         actions,
     );
     menu_bar::show_about(ui, state, resources.i18n);

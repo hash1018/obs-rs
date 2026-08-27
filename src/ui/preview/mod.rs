@@ -10,8 +10,8 @@ use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
-use super::UiAction;
 use super::editor::{SceneEditorState, TransformDrag, TransformDragMode};
+use super::{UiAction, UiResources};
 use viewport_transform::{ViewportTransform, fit_aspect_ratio};
 
 const PREVIEW_MARGIN: i8 = 18;
@@ -21,10 +21,11 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     view_state: &mut PreviewViewState,
     editor: &mut SceneEditorState,
-    snapshot: &SourcesSnapshot,
-    i18n: &LocalizationManager,
+    resources: &UiResources<'_>,
     actions: &mut Vec<UiAction>,
 ) {
+    let snapshot = &resources.snapshots.sources;
+    let i18n = resources.i18n;
     egui::CentralPanel::default()
         .frame(
             egui::Frame::central_panel(ui.style())
