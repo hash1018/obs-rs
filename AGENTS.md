@@ -144,6 +144,6 @@ cargo build --release
 git diff --check
 ```
 
-A platform file that no build here compiles is a platform build that breaks on someone else's machine. When changing `src/engine/source/unsupported.rs` or a `<os>.rs` this host does not build, point `engine/source/mod.rs`'s `#[cfg_attr(path)]` at it once and check that it compiles before putting it back.
+A platform file that no build here compiles is a platform build that breaks on someone else's machine. When changing `src/engine/backend/unsupported.rs` or a backend this host does not build, point `engine/backend/mod.rs`'s `#[cfg_attr(path)]` at it once and check that it compiles before putting it back.
 
 The Windows capture enumeration test requires an interactive capturable window and can fail in a headless or restricted session. Report that environmental failure explicitly; do not weaken the test to hide it. Run focused tests for changed modules when the environment prevents the full suite from completing.
