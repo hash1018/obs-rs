@@ -8,10 +8,10 @@ use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 use crate::ui::UiAction;
 use crate::ui::editor::SceneEditorState;
 
+use super::toolbar::{self, ToolIcon};
+
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
 const ICON_WIDTH: f32 = 22.0;
-const TOOLBAR_HEIGHT: f32 = 36.0;
-const TOOL_BUTTON_SIZE: f32 = 26.0;
 const LIST_ROW_HEIGHT: f32 = 26.0;
 const SOURCE_KIND_LIST_HEIGHT: f32 = 96.0;
 const DISPLAY_LIST_HEIGHT: f32 = 200.0;
@@ -33,12 +33,6 @@ enum AddSourceKind {
     DisplayCapture,
     #[default]
     Color,
-}
-
-#[derive(Clone, Copy)]
-enum SourceToolIcon {
-    Add,
-    Remove,
 }
 
 pub(in crate::ui) fn show(
@@ -78,7 +72,7 @@ pub(in crate::ui) fn show(
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for item in &snapshot.items {
-                    show_source_row(ui, editor, item, i18n);
+                    show_source_row(ui, editor, item, i18n, actions);
                 }
             });
     }
@@ -92,6 +86,7 @@ fn show_source_row(
     editor: &mut SceneEditorState,
     item: &SceneItemSnapshot,
     i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
 ) {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), SOURCE_ROW_HEIGHT),
@@ -112,10 +107,12 @@ fn show_source_row(
     } else {
         ui.visuals().text_color()
     };
-    let eye_center = egui::pos2(rect.left() + ICON_WIDTH * 0.5, rect.center().y);
-    paint_visibility(ui.painter(), eye_center, item.visible, color);
-    let lock_center = egui::pos2(rect.left() + ICON_WIDTH * 1.5, rect.center().y);
-    paint_lock(ui.painter(), lock_center, item.locked, color);
+    // Interacted with after the row itself so these take the click when the
+    // pointer is over them, leaving the rest of the row to select the item.
+    let eye = icon_hit(ui, rect, 0, ("visible", item.id.0));
+    let lock = icon_hit(ui, rect, 1, ("locked", item.id.0));
+    paint_visibility(ui.painter(), eye.rect.center(), item.visible, color);
+    paint_lock(ui.painter(), lock.rect.center(), item.locked, color);
     ui.painter().text(
         egui::pos2(rect.left() + ICON_WIDTH * 2.0 + 4.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -124,9 +121,38 @@ fn show_source_row(
         color,
     );
 
-    if response.clicked() {
+    if eye.clicked() {
+        actions.push(source_action(SourceCommand::SetVisible(
+            item.id,
+            !item.visible,
+        )));
+    } else if lock.clicked() {
+        actions.push(source_action(SourceCommand::SetLocked(
+            item.id,
+            !item.locked,
+        )));
+    } else if response.clicked() {
         editor.select(item.id);
     }
+}
+
+/// The clickable area of one row icon, in the slot at `column`.
+fn icon_hit(
+    ui: &egui::Ui,
+    row: egui::Rect,
+    column: usize,
+    id: (&'static str, i64),
+) -> egui::Response {
+    let center = egui::pos2(
+        row.left() + ICON_WIDTH * (column as f32 + 0.5),
+        row.center().y,
+    );
+    let rect = egui::Rect::from_center_size(center, egui::vec2(ICON_WIDTH, row.height()));
+    ui.interact(rect, ui.id().with(id), egui::Sense::click())
+}
+
+fn source_action(command: SourceCommand) -> UiAction {
+    UiAction::Project(ProjectCommand::Source(command))
 }
 
 fn source_kind_key(kind: SourceKind) -> TextKey {
@@ -150,7 +176,7 @@ fn show_toolbar(
     actions: &mut Vec<UiAction>,
 ) {
     egui::Panel::bottom("sources_toolbar")
-        .exact_size(TOOLBAR_HEIGHT)
+        .exact_size(toolbar::HEIGHT)
         .resizable(false)
         .frame(
             egui::Frame::new()
@@ -159,59 +185,50 @@ fn show_toolbar(
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                if source_tool_button(
+                let selected = editor.selected_item_id();
+                let index =
+                    selected.and_then(|id| snapshot.items.iter().position(|item| item.id == id));
+
+                if toolbar::button(
                     ui,
-                    SourceToolIcon::Add,
+                    ToolIcon::Add,
                     i18n.text(TextKey::SourceAdd),
                     snapshot.scene_id.is_some(),
                 ) {
                     state.add_dialog_open = true;
                 }
-                if source_tool_button(
+                if toolbar::button(
                     ui,
-                    SourceToolIcon::Remove,
+                    ToolIcon::Remove,
                     i18n.text(TextKey::SourceRemove),
-                    editor.selected_item_id().is_some(),
-                ) && let Some(item_id) = editor.selected_item_id()
+                    selected.is_some(),
+                ) && let Some(item_id) = selected
                 {
-                    actions.push(UiAction::Project(ProjectCommand::Source(
-                        SourceCommand::Delete(item_id),
-                    )));
+                    actions.push(source_action(SourceCommand::Delete(item_id)));
                     editor.clear_selection();
+                }
+                // The dock lists front-most first, so "up" moves an item in
+                // front of its neighbour.
+                if toolbar::button(
+                    ui,
+                    ToolIcon::MoveUp,
+                    i18n.text(TextKey::SourceMoveUp),
+                    index.is_some_and(|index| index > 0),
+                ) && let Some(item_id) = selected
+                {
+                    actions.push(source_action(SourceCommand::MoveUp(item_id)));
+                }
+                if toolbar::button(
+                    ui,
+                    ToolIcon::MoveDown,
+                    i18n.text(TextKey::SourceMoveDown),
+                    index.is_some_and(|index| index + 1 < snapshot.items.len()),
+                ) && let Some(item_id) = selected
+                {
+                    actions.push(source_action(SourceCommand::MoveDown(item_id)));
                 }
             });
         });
-}
-
-fn source_tool_button(
-    ui: &mut egui::Ui,
-    icon: SourceToolIcon,
-    tooltip: impl Into<egui::WidgetText>,
-    enabled: bool,
-) -> bool {
-    let response = ui.add_enabled(
-        enabled,
-        egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
-    );
-    let center = response.rect.center();
-    let stroke = ui.style().interact(&response).fg_stroke;
-    ui.painter().line_segment(
-        [
-            center + egui::vec2(-5.0, 0.0),
-            center + egui::vec2(5.0, 0.0),
-        ],
-        stroke,
-    );
-    if matches!(icon, SourceToolIcon::Add) {
-        ui.painter().line_segment(
-            [
-                center + egui::vec2(0.0, -5.0),
-                center + egui::vec2(0.0, 5.0),
-            ],
-            stroke,
-        );
-    }
-    response.on_hover_text(tooltip).clicked()
 }
 
 fn show_add_dialog(

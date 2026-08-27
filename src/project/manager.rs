@@ -117,6 +117,16 @@ fn handle_source_command(
         SourceCommand::Delete(scene_item_id) => {
             SourceStore::delete_scene_item(transaction, scene_item_id)
         }
+        SourceCommand::MoveUp(scene_item_id) => SourceStore::move_up(transaction, scene_item_id),
+        SourceCommand::MoveDown(scene_item_id) => {
+            SourceStore::move_down(transaction, scene_item_id)
+        }
+        SourceCommand::SetLocked(scene_item_id, locked) => {
+            SourceStore::set_locked(transaction, scene_item_id, locked)
+        }
+        SourceCommand::SetVisible(scene_item_id, visible) => {
+            SourceStore::set_visible(transaction, scene_item_id, visible)
+        }
         SourceCommand::SetTransform(scene_item_id, transform) => {
             SourceStore::set_transform(transaction, scene_item_id, transform)
         }
@@ -442,6 +452,95 @@ mod tests {
                     restore_token: Some("token-1".into())
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn source_visibility_lock_and_compositing_order_are_persisted() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        for _ in 0..3 {
+            handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
+        }
+
+        let names = |database: &ProjectDatabase| {
+            project_snapshot(database)
+                .unwrap()
+                .1
+                .items
+                .into_iter()
+                .map(|item| item.name)
+                .collect::<Vec<_>>()
+        };
+        // The dock lists front-most first, which is the newest item.
+        assert_eq!(
+            names(&database),
+            ["Color Source 3", "Color Source 2", "Color Source"]
+        );
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        let back = sources.items[2].id;
+        handle_source_command(&mut database, SourceCommand::MoveUp(back)).unwrap();
+        assert_eq!(
+            names(&database),
+            ["Color Source 3", "Color Source", "Color Source 2"]
+        );
+
+        handle_source_command(&mut database, SourceCommand::MoveDown(back)).unwrap();
+        assert_eq!(
+            names(&database),
+            ["Color Source 3", "Color Source 2", "Color Source"]
+        );
+
+        // Moving past the ends is a no-op rather than an error, so a toolbar
+        // that lets it through cannot corrupt the order.
+        let front = sources.items[0].id;
+        handle_source_command(&mut database, SourceCommand::MoveUp(front)).unwrap();
+        handle_source_command(&mut database, SourceCommand::MoveDown(back)).unwrap();
+        assert_eq!(
+            names(&database),
+            ["Color Source 3", "Color Source 2", "Color Source"]
+        );
+
+        handle_source_command(&mut database, SourceCommand::SetVisible(front, false)).unwrap();
+        handle_source_command(&mut database, SourceCommand::SetLocked(front, true)).unwrap();
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert!(!sources.items[0].visible);
+        assert!(sources.items[0].locked);
+    }
+
+    #[test]
+    fn reordering_still_works_across_a_gap_left_by_a_deletion() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        for _ in 0..3 {
+            handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
+        }
+
+        // Removing the middle item leaves its z_index unused, so the two that
+        // remain are no longer adjacent numbers. Looking a neighbour up by
+        // `z_index + 1` would find nothing and silently do nothing.
+        let (_, sources) = project_snapshot(&database).unwrap();
+        handle_source_command(&mut database, SourceCommand::Delete(sources.items[1].id)).unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items.len(), 2);
+        handle_source_command(&mut database, SourceCommand::MoveUp(sources.items[1].id)).unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(
+            sources
+                .items
+                .into_iter()
+                .map(|item| item.name)
+                .collect::<Vec<_>>(),
+            ["Color Source", "Color Source 3"]
         );
     }
 

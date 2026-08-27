@@ -14,7 +14,11 @@ pub enum SourceCommand {
         settings: DisplayCaptureSettings,
     },
     Delete(SceneItemId),
+    MoveUp(SceneItemId),
+    MoveDown(SceneItemId),
+    SetLocked(SceneItemId, bool),
     SetTransform(SceneItemId, Transform),
+    SetVisible(SceneItemId, bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

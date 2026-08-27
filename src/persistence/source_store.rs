@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, SceneCanvas, SceneId,
@@ -218,6 +218,46 @@ impl SourceStore {
         Ok(())
     }
 
+    pub(crate) fn set_visible(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        visible: bool,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_items SET visible = ?1 WHERE id = ?2",
+            params![visible, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn set_locked(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        locked: bool,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_items SET locked = ?1 WHERE id = ?2",
+            params![locked, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Moves an item in front of the one currently ahead of it.
+    pub(crate) fn move_up(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+    ) -> PersistenceResult<()> {
+        swap_with_neighbour(transaction, scene_item_id, Neighbour::Above)
+    }
+
+    /// Moves an item behind the one currently after it.
+    pub(crate) fn move_down(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+    ) -> PersistenceResult<()> {
+        swap_with_neighbour(transaction, scene_item_id, Neighbour::Below)
+    }
+
     pub(crate) fn delete_scene_item(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
@@ -253,6 +293,64 @@ fn display_capture_target(
         "portal" => Some(DisplayCaptureTarget::Portal { restore_token }),
         _ => None,
     }
+}
+
+#[derive(Clone, Copy)]
+enum Neighbour {
+    /// Composited in front, which is a higher `z_index`.
+    Above,
+    Below,
+}
+
+/// Exchanges an item's compositing order with its adjacent neighbour.
+///
+/// The neighbour is found by ordering rather than by an expected `z_index`
+/// value: deleting an item leaves a gap, so the two are not adjacent numbers
+/// for long, and looking one up by `z_index + 1` would silently do nothing.
+fn swap_with_neighbour(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    neighbour: Neighbour,
+) -> PersistenceResult<()> {
+    let Some((scene_id, z_index)) = transaction
+        .query_row(
+            "SELECT scene_id, z_index FROM scene_items WHERE id = ?1",
+            [scene_item_id.0],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+
+    let query = match neighbour {
+        Neighbour::Above => {
+            "SELECT id, z_index FROM scene_items
+             WHERE scene_id = ?1 AND z_index > ?2
+             ORDER BY z_index ASC LIMIT 1"
+        }
+        Neighbour::Below => {
+            "SELECT id, z_index FROM scene_items
+             WHERE scene_id = ?1 AND z_index < ?2
+             ORDER BY z_index DESC LIMIT 1"
+        }
+    };
+    let Some((other_id, other_z)) = transaction
+        .query_row(query, params![scene_id, z_index], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()?
+    else {
+        return Ok(());
+    };
+
+    transaction.execute(
+        "UPDATE scene_items
+         SET z_index = CASE id WHEN ?1 THEN ?2 WHEN ?3 THEN ?4 END
+         WHERE id IN (?1, ?3)",
+        params![scene_item_id.0, other_z, other_id, z_index],
+    )?;
+    Ok(())
 }
 
 fn create(

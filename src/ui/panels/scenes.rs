@@ -6,10 +6,9 @@ use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::ScenesSnapshot;
 
 use super::super::UiAction;
+use super::toolbar::{self, ToolIcon};
 
 const SCENE_ROW_HEIGHT: f32 = 28.0;
-const TOOLBAR_HEIGHT: f32 = 36.0;
-const TOOL_BUTTON_SIZE: f32 = 26.0;
 
 #[derive(Default)]
 pub(in crate::ui) struct ScenesPanelState {
@@ -21,15 +20,6 @@ struct RenameState {
     name: String,
     request_focus: bool,
     error: Option<TextKey>,
-}
-
-#[derive(Clone, Copy)]
-enum ToolIcon {
-    Add,
-    Remove,
-    Duplicate,
-    MoveUp,
-    MoveDown,
 }
 
 pub(in crate::ui) fn show(
@@ -158,7 +148,7 @@ fn show_toolbar(
         selected.and_then(|selected| snapshot.items.iter().position(|scene| scene.id == selected));
 
     egui::Panel::bottom("scenes_toolbar")
-        .exact_size(TOOLBAR_HEIGHT)
+        .exact_size(toolbar::HEIGHT)
         .resizable(false)
         .frame(
             egui::Frame::new()
@@ -167,10 +157,10 @@ fn show_toolbar(
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                if tool_button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true) {
+                if toolbar::button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true) {
                     actions.push(scene_action(SceneCommand::Add));
                 }
-                if tool_button(
+                if toolbar::button(
                     ui,
                     ToolIcon::Remove,
                     i18n.text(TextKey::SceneRemove),
@@ -179,7 +169,7 @@ fn show_toolbar(
                 {
                     actions.push(scene_action(SceneCommand::Delete(scene_id)));
                 }
-                if tool_button(
+                if toolbar::button(
                     ui,
                     ToolIcon::Duplicate,
                     i18n.text(TextKey::SceneDuplicate),
@@ -188,7 +178,7 @@ fn show_toolbar(
                 {
                     actions.push(scene_action(SceneCommand::Duplicate(scene_id)));
                 }
-                if tool_button(
+                if toolbar::button(
                     ui,
                     ToolIcon::MoveUp,
                     i18n.text(TextKey::SceneMoveUp),
@@ -197,7 +187,7 @@ fn show_toolbar(
                 {
                     actions.push(scene_action(SceneCommand::MoveUp(scene_id)));
                 }
-                if tool_button(
+                if toolbar::button(
                     ui,
                     ToolIcon::MoveDown,
                     i18n.text(TextKey::SceneMoveDown),
@@ -212,98 +202,4 @@ fn show_toolbar(
 
 fn scene_action(command: SceneCommand) -> UiAction {
     UiAction::Project(ProjectCommand::Scene(command))
-}
-
-fn tool_button(
-    ui: &mut egui::Ui,
-    icon: ToolIcon,
-    tooltip: impl Into<egui::WidgetText>,
-    enabled: bool,
-) -> bool {
-    let response = ui.add_enabled(
-        enabled,
-        egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
-    );
-    paint_icon(ui, &response, icon);
-    response.on_hover_text(tooltip).clicked()
-}
-
-fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
-    let center = response.rect.center();
-    let stroke = ui.style().interact(response).fg_stroke;
-    let painter = ui.painter();
-
-    match icon {
-        ToolIcon::Add => {
-            painter.line_segment(
-                [
-                    center + egui::vec2(-5.0, 0.0),
-                    center + egui::vec2(5.0, 0.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    center + egui::vec2(0.0, -5.0),
-                    center + egui::vec2(0.0, 5.0),
-                ],
-                stroke,
-            );
-        }
-        ToolIcon::Remove => {
-            painter.line_segment(
-                [
-                    center + egui::vec2(-5.0, 0.0),
-                    center + egui::vec2(5.0, 0.0),
-                ],
-                stroke,
-            );
-        }
-        ToolIcon::Duplicate => {
-            painter.rect_stroke(
-                egui::Rect::from_center_size(center + egui::vec2(-2.0, -2.0), egui::vec2(8.0, 8.0)),
-                0.0,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            painter.rect_stroke(
-                egui::Rect::from_center_size(center + egui::vec2(2.0, 2.0), egui::vec2(8.0, 8.0)),
-                0.0,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        ToolIcon::MoveUp => {
-            painter.line_segment(
-                [
-                    center + egui::vec2(-5.0, 2.5),
-                    center + egui::vec2(0.0, -2.5),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    center + egui::vec2(0.0, -2.5),
-                    center + egui::vec2(5.0, 2.5),
-                ],
-                stroke,
-            );
-        }
-        ToolIcon::MoveDown => {
-            painter.line_segment(
-                [
-                    center + egui::vec2(-5.0, -2.5),
-                    center + egui::vec2(0.0, 2.5),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    center + egui::vec2(0.0, 2.5),
-                    center + egui::vec2(5.0, -2.5),
-                ],
-                stroke,
-            );
-        }
-    }
 }
