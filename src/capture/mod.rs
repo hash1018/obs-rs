@@ -9,9 +9,9 @@
 //!
 //! - **Windows** lets a process enumerate windows and monitors, so obs-rs
 //!   builds the list and draws it.
-//! - **Linux** does not. `xdg-desktop-portal` shows *its own* picker and hands
-//!   back only what the user chose; an application neither sees the list nor
-//!   is allowed to. That is the security model, not a missing API.
+//! - **Linux/X11** permits enumeration through EWMH and XRandR. **Wayland**
+//!   does not: `xdg-desktop-portal` shows *its own* picker and hands back only
+//!   what the user chose. That is the security model, not a missing API.
 //! - **macOS** does return a list (`SCShareableContent`), but only after the
 //!   user has granted screen-recording permission, so the list can be empty
 //!   for a reason that is not "nothing to capture".
@@ -24,6 +24,8 @@
 // platform API is still intentionally unused.
 #![allow(dead_code)]
 
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
@@ -42,9 +44,8 @@ pub enum SourcePicker {
 /// One capturable top-level window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowTarget {
-    /// The raw window handle, as an integer so this type stays `Send` and
-    /// platform-agnostic to name. On Windows this is what
-    /// `WgcCaptureSource::open` wants; see [`windows::WindowTarget`] helpers.
+    /// The raw platform window identifier, as an integer so this type stays
+    /// `Send`. It is an `HWND` on Windows and an X11 window ID on Linux/X11.
     pub handle: isize,
     /// The window's own title, as the user sees it in the task bar.
     pub title: String,
@@ -59,11 +60,11 @@ pub struct WindowTarget {
 /// One capturable display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonitorTarget {
-    /// The device name, e.g. `\\.\DISPLAY1`.
+    /// The stable display name, e.g. `\\.\DISPLAY1` or `DP-1`.
     pub name: String,
-    /// Position and size in the virtual desktop's coordinates — the same
-    /// space `DxgiCaptureOptions::area` is expressed in, so this can be
-    /// handed over as a capture region unchanged.
+    /// Position and size in the virtual desktop's coordinates. On Windows it
+    /// is the same space `DxgiCaptureOptions::area` uses; on X11 it is the
+    /// XRandR root-window coordinate space.
     pub rect: MonitorRect,
     /// Whether this is the primary display.
     pub is_primary: bool,
@@ -91,7 +92,11 @@ pub fn source_picker() -> SourcePicker {
             monitors: windows::monitors(),
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::source_picker()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         SourcePicker::SystemDialog
     }

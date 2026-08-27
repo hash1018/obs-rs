@@ -37,7 +37,6 @@ source-display-prompt = Display
 source-display-monitor = { $name } — { $width }×{ $height }
 source-display-monitor-primary = { $name } — { $width }×{ $height } (Primary)
 source-display-none = No displays are available.
-source-display-system-picker-unavailable = The system display picker is not implemented yet.
 source-kind-color = Color
 source-kind-display-capture = Display Capture
 source-kind-window-capture = Window Capture

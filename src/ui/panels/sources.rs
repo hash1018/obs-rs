@@ -25,7 +25,6 @@ pub(in crate::ui) struct SourcesPanelState {
     display_dialog_open: bool,
     display_targets: Vec<MonitorTarget>,
     selected_monitor_name: Option<String>,
-    system_display_picker_required: bool,
     select_new_item: bool,
 }
 
@@ -285,17 +284,22 @@ fn show_add_dialog(
                     state.select_new_item = true;
                 }
             }
-            AddSourceKind::DisplayCapture => prepare_display_dialog(state),
+            AddSourceKind::DisplayCapture => {
+                prepare_display_picker(state, snapshot.scene_id, actions)
+            }
         }
         open = false;
     }
     state.add_dialog_open = open;
 }
 
-fn prepare_display_dialog(state: &mut SourcesPanelState) {
+fn prepare_display_picker(
+    state: &mut SourcesPanelState,
+    scene_id: Option<SceneId>,
+    actions: &mut Vec<UiAction>,
+) {
     state.display_targets.clear();
     state.selected_monitor_name = None;
-    state.system_display_picker_required = false;
 
     match crate::capture::source_picker() {
         SourcePicker::Enumerated { monitors, .. } => {
@@ -305,10 +309,14 @@ fn prepare_display_dialog(state: &mut SourcesPanelState) {
                 .or_else(|| monitors.first())
                 .map(|monitor| monitor.name.clone());
             state.display_targets = monitors;
+            state.display_dialog_open = true;
         }
-        SourcePicker::SystemDialog => state.system_display_picker_required = true,
+        SourcePicker::SystemDialog => {
+            if let Some(scene_id) = scene_id {
+                actions.push(UiAction::OpenSystemDisplayPicker(scene_id));
+            }
+        }
     }
-    state.display_dialog_open = true;
 }
 
 fn show_display_dialog(
@@ -338,9 +346,7 @@ fn show_display_dialog(
             ui.add_space(4.0);
 
             show_list_view(ui, DISPLAY_LIST_HEIGHT, |ui| {
-                if state.system_display_picker_required {
-                    ui.weak(i18n.text(TextKey::SourceDisplaySystemPickerUnavailable));
-                } else if state.display_targets.is_empty() {
+                if state.display_targets.is_empty() {
                     ui.weak(i18n.text(TextKey::SourceDisplayNone));
                 } else {
                     egui::ScrollArea::vertical()
@@ -402,7 +408,6 @@ fn show_display_dialog(
     state.display_dialog_open = open;
     if !open {
         state.display_targets.clear();
-        state.system_display_picker_required = false;
     }
 }
 

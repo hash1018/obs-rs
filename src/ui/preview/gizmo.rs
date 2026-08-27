@@ -85,20 +85,24 @@ fn resize_corner(original: egui::Rect, handle: ResizeHandle, dragged: egui::Pos2
         ResizeHandle::BottomLeft => original.right_top(),
         _ => unreachable!("only corner handles use resize_corner"),
     };
-    let raw = dragged - fixed;
-    let x_sign = if raw.x < 0.0 { -1.0 } else { 1.0 };
-    let y_sign = if raw.y < 0.0 { -1.0 } else { 1.0 };
-    let aspect = original.width() / original.height();
-    let width_change = (raw.x.abs() / original.width() - 1.0).abs();
-    let height_change = (raw.y.abs() / original.height() - 1.0).abs();
-    let (width, height) = if width_change >= height_change {
-        let width = raw.x.abs().max(MIN_ITEM_SIZE);
-        (width, (width / aspect).max(MIN_ITEM_SIZE))
-    } else {
-        let height = raw.y.abs().max(MIN_ITEM_SIZE);
-        ((height * aspect).max(MIN_ITEM_SIZE), height)
+    let original_corner = match handle {
+        ResizeHandle::TopLeft => original.min,
+        ResizeHandle::TopRight => original.right_top(),
+        ResizeHandle::BottomRight => original.max,
+        ResizeHandle::BottomLeft => original.left_bottom(),
+        _ => unreachable!("only corner handles use resize_corner"),
     };
-    let resized = fixed + egui::vec2(width * x_sign, height * y_sign);
+    let diagonal = original_corner - fixed;
+    let dragged_from_fixed = dragged - fixed;
+    let diagonal_length_squared = diagonal.length_sq();
+    let projected_scale = dragged_from_fixed.dot(diagonal) / diagonal_length_squared;
+    let minimum_scale = (MIN_ITEM_SIZE / original.width())
+        .max(MIN_ITEM_SIZE / original.height())
+        .min(1.0);
+    // Project onto the original diagonal instead of switching between the X
+    // and Y axes every frame. This keeps the opposite corner fixed, preserves
+    // aspect ratio, and prevents the rectangle from flipping across its anchor.
+    let resized = fixed + diagonal * projected_scale.max(minimum_scale);
     egui::Rect::from_two_pos(fixed, resized)
 }
 
@@ -123,6 +127,45 @@ mod tests {
     fn corner_resize_keeps_aspect_ratio() {
         let original = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 90.0));
         let resized = resize_rect(original, ResizeHandle::BottomRight, egui::vec2(160.0, 20.0));
+        assert!((resized.width() / resized.height() - 16.0 / 9.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn every_corner_resize_keeps_its_opposite_corner_fixed() {
+        let original = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(160.0, 90.0));
+        let cases = [
+            (ResizeHandle::TopLeft, original.max),
+            (ResizeHandle::TopRight, original.left_bottom()),
+            (ResizeHandle::BottomRight, original.min),
+            (ResizeHandle::BottomLeft, original.right_top()),
+        ];
+        for (handle, fixed) in cases {
+            let resized = resize_rect(original, handle, egui::vec2(45.0, -20.0));
+            assert!(
+                [
+                    resized.min,
+                    resized.right_top(),
+                    resized.max,
+                    resized.left_bottom()
+                ]
+                .into_iter()
+                .any(|corner| corner.distance(fixed) < 0.001),
+                "{handle:?}: {resized:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn corner_cannot_flip_past_the_opposite_corner() {
+        let original = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 90.0));
+        let resized = resize_rect(
+            original,
+            ResizeHandle::BottomRight,
+            egui::vec2(-320.0, -180.0),
+        );
+        assert_eq!(resized.min, original.min);
+        assert!(resized.width() >= MIN_ITEM_SIZE);
+        assert!(resized.height() >= MIN_ITEM_SIZE);
         assert!((resized.width() / resized.height() - 16.0 / 9.0).abs() < 0.001);
     }
 }

@@ -11,6 +11,8 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -38,6 +40,8 @@ impl ResourceManager {
             .spawn(move || {
                 #[cfg(target_os = "windows")]
                 let mut sampler = windows::ProcessResourceSampler::new();
+                #[cfg(target_os = "linux")]
+                let mut sampler = linux::ProcessResourceSampler::new();
 
                 while !worker_stop.load(Ordering::Acquire) {
                     thread::park_timeout(SAMPLE_INTERVAL);
@@ -47,7 +51,9 @@ impl ResourceManager {
 
                     #[cfg(target_os = "windows")]
                     let usage = sampler.sample();
-                    #[cfg(not(target_os = "windows"))]
+                    #[cfg(target_os = "linux")]
+                    let usage = sampler.sample();
+                    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
                     let usage = ResourceUsage::default();
 
                     if sender.send(usage).is_err() {
@@ -80,7 +86,7 @@ impl Drop for ResourceManager {
     }
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
 mod tests {
     use std::time::Instant;
 

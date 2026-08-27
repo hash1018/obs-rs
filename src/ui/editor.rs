@@ -1,7 +1,7 @@
 use crate::domain::{SceneId, SceneItemId, Transform};
 use crate::snapshots::SourcesSnapshot;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(super) enum ResizeHandle {
     TopLeft,
     Top,

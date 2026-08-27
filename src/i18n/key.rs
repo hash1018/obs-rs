@@ -36,7 +36,6 @@ pub enum TextKey {
     SourceDisplayMonitor,
     SourceDisplayMonitorPrimary,
     SourceDisplayNone,
-    SourceDisplaySystemPickerUnavailable,
     SourceKindColor,
     SourceKindDisplayCapture,
     SourceKindWindowCapture,
@@ -95,9 +94,6 @@ impl TextKey {
             Self::SourceDisplayMonitor => "source-display-monitor",
             Self::SourceDisplayMonitorPrimary => "source-display-monitor-primary",
             Self::SourceDisplayNone => "source-display-none",
-            Self::SourceDisplaySystemPickerUnavailable => {
-                "source-display-system-picker-unavailable"
-            }
             Self::SourceKindColor => "source-kind-color",
             Self::SourceKindDisplayCapture => "source-kind-display-capture",
             Self::SourceKindWindowCapture => "source-kind-window-capture",

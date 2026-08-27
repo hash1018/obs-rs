@@ -58,9 +58,9 @@ The Compositor and Composite Frame are not implemented yet, so the Preview Viewp
 ## Current source support
 
 - Color Source is persisted and can be moved and resized in the editor.
-- Display Capture can enumerate monitors, persist the selected monitor name, and create a SceneItem. Runtime capture is not connected yet, so it does not produce Preview pixels.
+- Display Capture can enumerate monitors on Windows and Linux/X11, persist the selected monitor name, and create a SceneItem. On Wayland, source creation opens the system-owned `xdg-desktop-portal` picker and persists its opaque stream target. Runtime capture is not connected on either platform, so it does not produce Preview pixels.
 
-Monitor geometry is intentionally not persisted. The runtime capture layer will resolve the saved monitor name against the current display layout and open `DxgiCaptureSource` in GPU mode. GPU mode is an application invariant rather than a user setting and does not currently support cursor inclusion.
+Monitor geometry is intentionally not persisted. The runtime capture layer will resolve the saved monitor name against the current display layout; on Windows it will open `DxgiCaptureSource` in GPU mode. GPU mode is an application invariant rather than a user setting and does not currently support cursor inclusion.
 
 ## Localization
 

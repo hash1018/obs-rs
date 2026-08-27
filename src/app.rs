@@ -1,17 +1,22 @@
 use eframe::egui;
 
 use crate::i18n::{LocalizationManager, install_locale_fonts};
-use crate::project::{ProjectManager, ProjectUpdate};
+use crate::project::{ProjectCommand, ProjectManager, ProjectUpdate};
 use crate::resource_manager::ResourceManager;
 use crate::settings::{AppSettings, SettingsStore};
 use crate::snapshots::Snapshots;
 use crate::ui::{self, UiAction, UiState};
+
+#[cfg(target_os = "linux")]
+use crate::capture::linux::{SystemDisplayPicker, SystemDisplayPickerUpdate};
 
 pub struct ObsApp {
     ui_state: UiState,
     snapshots: Snapshots,
     project_manager: Option<ProjectManager>,
     resource_manager: Option<ResourceManager>,
+    #[cfg(target_os = "linux")]
+    system_display_picker: Option<SystemDisplayPicker>,
     localization: LocalizationManager,
     settings: AppSettings,
     settings_store: SettingsStore,
@@ -34,6 +39,8 @@ impl ObsApp {
         let localization = LocalizationManager::new(settings.locale);
         let resource_repaint_ctx = cc.egui_ctx.clone();
         let project_repaint_ctx = cc.egui_ctx.clone();
+        #[cfg(target_os = "linux")]
+        let picker_repaint_ctx = cc.egui_ctx.clone();
 
         Self {
             ui_state,
@@ -42,6 +49,11 @@ impl ObsApp {
                 .ok(),
             resource_manager: ResourceManager::spawn(move || {
                 resource_repaint_ctx.request_repaint();
+            })
+            .ok(),
+            #[cfg(target_os = "linux")]
+            system_display_picker: SystemDisplayPicker::spawn(move || {
+                picker_repaint_ctx.request_repaint();
             })
             .ok(),
             localization,
@@ -76,6 +88,32 @@ impl ObsApp {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn poll_system_display_picker(&mut self) {
+        let Some(picker) = &self.system_display_picker else {
+            return;
+        };
+        match picker.latest() {
+            Some(SystemDisplayPickerUpdate::Selected {
+                scene_id,
+                portal_target,
+            }) => {
+                if let Some(manager) = &self.project_manager {
+                    manager.dispatch(ProjectCommand::Source(
+                        crate::project::SourceCommand::AddDisplayCapture {
+                            scene_id,
+                            monitor_name: portal_target,
+                        },
+                    ));
+                }
+            }
+            Some(SystemDisplayPickerUpdate::Error(error)) => {
+                eprintln!("system display picker error: {error}");
+            }
+            Some(SystemDisplayPickerUpdate::Cancelled) | None => {}
+        }
+    }
+
     fn handle_ui_action(&mut self, ctx: &egui::Context, action: UiAction) {
         match action {
             UiAction::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -83,6 +121,14 @@ impl ObsApp {
                 if let Some(manager) = &self.project_manager {
                     manager.dispatch(command);
                 }
+            }
+            UiAction::OpenSystemDisplayPicker(scene_id) => {
+                #[cfg(target_os = "linux")]
+                if let Some(picker) = &self.system_display_picker {
+                    picker.open(scene_id);
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = scene_id;
             }
             UiAction::SetFullscreen(fullscreen) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
@@ -104,6 +150,8 @@ impl eframe::App for ObsApp {
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_project();
         self.poll_resource_usage();
+        #[cfg(target_os = "linux")]
+        self.poll_system_display_picker();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
