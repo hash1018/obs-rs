@@ -3,7 +3,7 @@ use eframe::egui;
 use crate::domain::SceneCanvas;
 use crate::engine::EngineManager;
 use crate::i18n::{LocalizationManager, install_locale_fonts};
-use crate::project::{ProjectCommand, ProjectManager, ProjectUpdate};
+use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
 use crate::settings::{AppSettings, SettingsStore};
 use crate::snapshots::Snapshots;
@@ -130,7 +130,7 @@ impl ObsApp {
         match picker.latest() {
             Some(SystemDisplayPickerUpdate::Selected { scene_id, settings }) => {
                 if let Some(manager) = &self.project_manager {
-                    manager.dispatch(ProjectCommand::Source(
+                    manager.dispatch(crate::project::ProjectCommand::Source(
                         crate::project::SourceCommand::AddDisplayCapture { scene_id, settings },
                     ));
                 }

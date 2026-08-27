@@ -31,6 +31,11 @@ pub enum GpuScope {
     /// Every process on the adapter. Used only where no per-process counter
     /// exists — NVIDIA's Linux driver exposes neither `drm-engine-*` fdinfo
     /// nor working per-process NVML samples on GeForce parts.
+    ///
+    /// Only the Linux backend reports it, so on every other platform nothing
+    /// constructs this variant — it is still read there, since the status bar
+    /// marks a device figure differently from a process one.
+    #[allow(dead_code)]
     Device,
 }
 
