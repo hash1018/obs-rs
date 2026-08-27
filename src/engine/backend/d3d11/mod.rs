@@ -21,7 +21,9 @@ use media_pp::{
     queue::OverflowPolicy,
 };
 use windows::Win32::Graphics::{
-    Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+    Direct3D::{
+        D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+    },
     Direct3D11::{
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
         ID3D11DeviceContext,
@@ -199,6 +201,18 @@ impl Backend {
     }
 }
 
+/// The feature levels this backend asks for, best first.
+///
+/// 11_0 is the floor, and it is a real requirement rather than a
+/// precaution: `D3d11VideoCompositor` compiles its shaders at
+/// `vs_5_0`/`ps_5_0`, and shader model 5.0 is what feature level 11_0
+/// means. Passing no list at all — the obvious thing to write — accepts
+/// anything down to 9_1, so a machine below the line gets a device that
+/// works right up until the compositor tries to create its shaders, and
+/// fails there with an error naming none of this. Asking up front turns
+/// that into one refusal at startup that says what is missing.
+const FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 2] = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
+
 /// The device every D3D11 element here shares, and its immediate context.
 ///
 /// `BGRA_SUPPORT` because everything this backend touches is BGRA: the
@@ -206,24 +220,36 @@ impl Backend {
 /// what the Preview download hands back. `media-pp` enables the context's
 /// runtime multithread protection itself the moment the device reaches its
 /// first element, so nothing more is done here.
+///
+/// Nothing about this is vendor-specific — `D3D_DRIVER_TYPE_HARDWARE` takes
+/// whichever adapter the machine has, and desktop duplication is a Windows
+/// API rather than one GPU maker's.
 fn create_device() -> Result<(ID3D11Device, Arc<Mutex<ID3D11DeviceContext>>), BackendError> {
     let mut device = None;
     let mut context = None;
     // SAFETY: creates the documented device and context on the default
-    // hardware adapter, writing only the two out-parameters above.
+    // hardware adapter, reading `FEATURE_LEVELS` and writing only the two
+    // out-parameters above.
     unsafe {
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
             Default::default(),
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,
+            Some(&FEATURE_LEVELS),
             D3D11_SDK_VERSION,
             Some(&mut device),
             None,
             Some(&mut context),
-        )?;
+        )
     }
+    .map_err(|error| -> BackendError {
+        format!(
+            "no Direct3D 11 device at feature level 11_0, which the compositor's \
+             shaders require: {error}"
+        )
+        .into()
+    })?;
     let device = device.expect("D3D11CreateDevice succeeded with a device out-parameter");
     let context = context.expect("D3D11CreateDevice succeeded with a context out-parameter");
     Ok((device, Arc::new(Mutex::new(context))))
