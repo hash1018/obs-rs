@@ -6,8 +6,15 @@
 
 use eframe::egui;
 
-pub(super) const HEIGHT: f32 = 36.0;
+use crate::ui::docking::PANEL_MARGIN;
+
 const BUTTON_SIZE: f32 = 26.0;
+
+/// Tall enough to leave the dock's own margin above and below the buttons.
+///
+/// Derived rather than chosen, so the gap under the buttons keeps matching
+/// the gap beside them when either changes.
+pub(super) const HEIGHT: f32 = BUTTON_SIZE + 2.0 * PANEL_MARGIN;
 const SIDE_MARGIN: i8 = 4;
 
 /// Draws a dock's bottom button strip.
@@ -40,18 +47,20 @@ pub(super) enum ToolIcon {
     MoveDown,
 }
 
+/// Returns the `Response` rather than a bare `clicked()`, so callers keep the
+/// egui idiom and the button's own rectangle stays measurable.
 pub(super) fn button(
     ui: &mut egui::Ui,
     icon: ToolIcon,
     tooltip: impl Into<egui::WidgetText>,
     enabled: bool,
-) -> bool {
+) -> egui::Response {
     let response = ui.add_enabled(
         enabled,
         egui::Button::new("").min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE)),
     );
     paint_icon(ui, &response, icon);
-    response.on_hover_text(tooltip).clicked()
+    response.on_hover_text(tooltip)
 }
 
 fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
@@ -131,5 +140,56 @@ fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
                 stroke,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AGENTS.md requires dock toolbar controls to stay vertically centred.
+    /// Measured rather than eyeballed: the offset that matters is a few
+    /// pixels, which is exactly the size of mistake a screenshot hides.
+    #[test]
+    fn buttons_sit_in_the_middle_of_the_strip() {
+        let context = egui::Context::default();
+        let mut measured = None;
+        let mut output = context.run_ui(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                strip(ui, "toolbar_under_test", |ui| {
+                    let available = ui.max_rect();
+                    let first = button(ui, ToolIcon::Add, "add", true).rect;
+                    let _ = button(ui, ToolIcon::MoveUp, "up", true);
+                    measured = Some((available, first));
+                });
+            });
+        });
+        // Nothing uploads these outside a real renderer, and epaint panics on
+        // a delta that is dropped unapplied.
+        output.textures_delta.clear();
+
+        let (available, used) = measured.expect("the strip should have drawn");
+        assert_eq!(used.height(), BUTTON_SIZE, "button height");
+        // The panel's own separator takes a pixel, so the row gets slightly
+        // less than `HEIGHT`; what matters is that it gets all of what is left.
+        assert!(
+            (HEIGHT - available.height()) <= 1.0,
+            "the row was offered {} of {HEIGHT}",
+            available.height()
+        );
+        assert!(
+            (used.center().y - available.center().y).abs() < 0.5,
+            "buttons centred at {} but the strip's middle is {}",
+            used.center().y,
+            available.center().y,
+        );
+        // The gap under the buttons is what the dock leaves beside them; the
+        // strip sits flush against the dock's bottom edge, so this is the only
+        // thing keeping the two from disagreeing.
+        let gap = (available.height() - used.height()) / 2.0;
+        assert!(
+            (gap - PANEL_MARGIN).abs() <= 1.0,
+            "gap around the buttons is {gap}, dock margin is {PANEL_MARGIN}"
+        );
     }
 }

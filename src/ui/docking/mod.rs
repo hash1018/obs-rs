@@ -11,6 +11,13 @@ use super::{
 
 pub(super) use layout::{DockLayout, DockPanel};
 
+/// How far a dock insets its content from its own edges.
+///
+/// Shared with `panels::toolbar`: the toolbar sits flush against the dock's
+/// bottom edge and centres its buttons inside itself, so it has to know the
+/// gap the other three edges use or the strip reads as misaligned.
+pub(in crate::ui) const PANEL_MARGIN: f32 = 8.0;
+
 pub(super) fn show(
     ui: &mut egui::Ui,
     layout: &mut DockLayout,

@@ -184,7 +184,9 @@ fn show_toolbar(
             ToolIcon::Add,
             i18n.text(TextKey::SourceAdd),
             snapshot.scene_id.is_some(),
-        ) {
+        )
+        .clicked()
+        {
             state.add_dialog_open = true;
         }
         if toolbar::button(
@@ -192,7 +194,9 @@ fn show_toolbar(
             ToolIcon::Remove,
             i18n.text(TextKey::SourceRemove),
             selected.is_some(),
-        ) && let Some(item_id) = selected
+        )
+        .clicked()
+            && let Some(item_id) = selected
         {
             actions.push(source_action(SourceCommand::Delete(item_id)));
             editor.clear_selection();
@@ -204,7 +208,9 @@ fn show_toolbar(
             ToolIcon::MoveUp,
             i18n.text(TextKey::SourceMoveUp),
             index.is_some_and(|index| index > 0),
-        ) && let Some(item_id) = selected
+        )
+        .clicked()
+            && let Some(item_id) = selected
         {
             actions.push(source_action(SourceCommand::MoveUp(item_id)));
         }
@@ -213,7 +219,9 @@ fn show_toolbar(
             ToolIcon::MoveDown,
             i18n.text(TextKey::SourceMoveDown),
             index.is_some_and(|index| index + 1 < snapshot.items.len()),
-        ) && let Some(item_id) = selected
+        )
+        .clicked()
+            && let Some(item_id) = selected
         {
             actions.push(source_action(SourceCommand::MoveDown(item_id)));
         }

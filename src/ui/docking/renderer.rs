@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use eframe::egui;
 
+use super::PANEL_MARGIN;
 use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::snapshots::Snapshots;
@@ -20,7 +21,6 @@ const SPLITTER_SIZE: f32 = 6.0;
 const DROP_ZONE_FRACTION: f32 = 0.25;
 const DRAG_START_DISTANCE: f32 = 4.0;
 const TITLE_BAR_HEIGHT: f32 = 24.0;
-const PANEL_MARGIN: f32 = 8.0;
 const INSERTION_MARKER_SIZE: f32 = 4.0;
 
 #[derive(Clone, Copy)]
@@ -200,7 +200,13 @@ fn show_panel(
         egui::StrokeKind::Inside,
     );
 
-    let content_rect = rect.shrink(PANEL_MARGIN);
+    // Every edge but the bottom: the toolbar is anchored there and provides
+    // its own gap. Insetting the bottom as well left the strip floating a
+    // margin above the dock's edge, which reads as buttons pushed upwards.
+    let content_rect = egui::Rect::from_min_max(
+        rect.min + egui::vec2(PANEL_MARGIN, PANEL_MARGIN),
+        egui::pos2(rect.max.x - PANEL_MARGIN, rect.max.y),
+    );
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .id(egui::Id::new(("dock_panel_content", panel)))

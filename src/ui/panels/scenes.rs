@@ -148,7 +148,7 @@ fn show_toolbar(
         selected.and_then(|selected| snapshot.items.iter().position(|scene| scene.id == selected));
 
     toolbar::strip(ui, "scenes_toolbar", |ui| {
-        if toolbar::button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true) {
+        if toolbar::button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true).clicked() {
             actions.push(scene_action(SceneCommand::Add));
         }
         if toolbar::button(
@@ -156,7 +156,9 @@ fn show_toolbar(
             ToolIcon::Remove,
             i18n.text(TextKey::SceneRemove),
             selected.is_some() && snapshot.items.len() > 1,
-        ) && let Some(scene_id) = selected
+        )
+        .clicked()
+            && let Some(scene_id) = selected
         {
             actions.push(scene_action(SceneCommand::Delete(scene_id)));
         }
@@ -165,7 +167,9 @@ fn show_toolbar(
             ToolIcon::Duplicate,
             i18n.text(TextKey::SceneDuplicate),
             selected.is_some(),
-        ) && let Some(scene_id) = selected
+        )
+        .clicked()
+            && let Some(scene_id) = selected
         {
             actions.push(scene_action(SceneCommand::Duplicate(scene_id)));
         }
@@ -174,7 +178,9 @@ fn show_toolbar(
             ToolIcon::MoveUp,
             i18n.text(TextKey::SceneMoveUp),
             selected_index.is_some_and(|index| index > 0),
-        ) && let Some(scene_id) = selected
+        )
+        .clicked()
+            && let Some(scene_id) = selected
         {
             actions.push(scene_action(SceneCommand::MoveUp(scene_id)));
         }
@@ -183,7 +189,9 @@ fn show_toolbar(
             ToolIcon::MoveDown,
             i18n.text(TextKey::SceneMoveDown),
             selected_index.is_some_and(|index| index + 1 < snapshot.items.len()),
-        ) && let Some(scene_id) = selected
+        )
+        .clicked()
+            && let Some(scene_id) = selected
         {
             actions.push(scene_action(SceneCommand::MoveDown(scene_id)));
         }
