@@ -79,6 +79,49 @@ A drag moves the layer directly and writes the Transform to the project once, wh
 - Persisted user-provided names such as Scene and Source names are data and must not be translated during rendering.
 - Built-in FTL resources are embedded with `include_str!`. Do not add `build.rs` asset copying unless the runtime resource model is intentionally changed.
 
+## Working on media-pp
+
+`media-pp` is not a third-party dependency. It is developed alongside this
+application, and both are worked on together — a capability obs-rs needs is
+added there, and a defect found here is fixed there.
+
+It is taken from the sibling checkout, and stays that way while the two move
+together:
+
+```toml
+[dependencies.media-pp]
+path = "../media-pp/lib"
+```
+
+So when the cause of a problem turns out to be in `media-pp`, fix it in
+`media-pp` rather than working around it here. The compositor once ran at
+60/N fps for N layers, and the cause was a scale graph rebuilt on every
+frame; a workaround on this side would have hidden it and left every caller
+of that library paying for it.
+
+One defect is still open, and `engine::backend::cuda::nv12` works around it
+rather than fixing it: resizing a layer quickly makes the compositor emit,
+about once in six hundred frames, a frame whose last rows were never
+written. The Preview drops those frames, which a Preview can afford and a
+recording cannot — so this needs solving before an encoder branch exists.
+What has been ruled out is in that commit message; the reproduction needs no
+capture and no portal, only a layer whose rectangle changes every frame.
+
+Some things genuinely belong on this side: how a Source is chosen, how a
+Scene is stored, what the Preview draws. The test is whether the behaviour is
+about pipelines and frames, or about this application's own model.
+
+`media-pp` has its own `AGENTS.md` and its own conventions — every `unsafe`
+block documents why it is sound, and that is enforced. Verify a change there
+against the features the change touches, since its lints and tests are
+feature-gated:
+
+```text
+cargo fmt
+cargo clippy -p media-pp --features cuda --all-targets -- -D warnings
+cargo test -p media-pp --features cuda
+```
+
 ## Rust and dependencies
 
 - Keep the `wgpu` eframe renderer. The engine shares eframe's device rather than opening a second one, and the NV12 resolve pass runs on it.
