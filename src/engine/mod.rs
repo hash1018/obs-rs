@@ -12,8 +12,7 @@
 //! `Send + Sync` and internally reference-counted, so the engine shares
 //! eframe's device rather than opening a second one.
 
-mod nv12;
-mod source;
+mod backend;
 
 use std::collections::HashMap;
 use std::sync::{
@@ -27,32 +26,18 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwapOption;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
-use media_pp::{
-    buffer::MediaBuffer,
-    color::Color,
-    elements::{
-        AppSink, CudaDevice, CudaDownload, CudaFrameFormat, CudaVideoCompositor,
-        CudaVideoCompositorHandle, VideoCompositorOptions,
-    },
-    ffmpeg,
-    pipeline::Pipeline,
-    queue::OverflowPolicy,
-};
+use media_pp::elements::{VideoFit, VideoLayer, VideoRect};
 
-use crate::domain::{SceneCanvas, SceneItemId, Transform};
+use crate::domain::{SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
-use crate::snapshots::SourcesSnapshot;
+use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
-use nv12::Nv12Target;
-use source::{OpenSource, layer_for, open_source};
+use backend::{Backend, OpenSource};
 
 /// The compositor's output rate. Independent of the egui repaint rate: egui
 /// redraws when something asks it to, this advances on the compositor's own
 /// clock.
 const TARGET_FPS: u32 = 60;
-
-/// What is behind every layer: the Canvas itself, where no Source covers it.
-const BACKGROUND: Color = Color::BLACK;
 
 /// One composited frame, already resident on the GPU.
 ///
@@ -192,86 +177,25 @@ fn run(
     // Shared rather than moved: both the sink that publishes a frame and the
     // loop that puts the branch to sleep have to ask for a repaint.
     let wake_ui = Arc::new(wake_ui);
-    media_pp::init()?;
-    let [width, height] = size;
-
-    // One per process, not one per pipeline: creating or dropping a device
-    // while another thread is encoding can fault inside the NVIDIA driver.
-    let device = CudaDevice::new()?;
-
-    let target = Nv12Target::new(&render_state.device, width, height);
-    let texture_id = render_state.renderer.write().register_native_texture(
-        &render_state.device,
-        target.output_view(),
-        wgpu::FilterMode::Linear,
-    );
-
-    let (compositor, handle) = CudaVideoCompositor::new(
-        "preview-compositor",
-        &device,
-        VideoCompositorOptions {
-            width,
-            height,
-            frame_rate: ffmpeg::Rational::new(TARGET_FPS as i32, 1),
-            background: BACKGROUND,
-        },
-    )?;
-
-    // The compositor works in CUDA surfaces; this is the one place the frame
-    // returns to system memory. Replacing this download with an import into
-    // the planes above is what removes the round trip entirely.
-    let download = CudaDownload::new(
-        "preview-download",
-        &device,
-        CudaFrameFormat::Nv12,
-        width,
-        height,
-    );
-
-    // The sink runs on the compositor's own source thread, so neither the UI
-    // thread nor this one does the conversion.
-    let wgpu_device = render_state.device.clone();
-    let queue = render_state.queue.clone();
     let Published { frame, active_fps } = published;
-    let idle_frame = Arc::clone(&frame);
-    let idle_fps = Arc::clone(&active_fps);
-    let wake_sink = Arc::clone(&wake_ui);
-    let mut rate = FrameRate::new();
-    let sink = AppSink::new("preview-out", move |buffer| {
-        let MediaBuffer::Video(video) = buffer else {
-            return Ok(());
-        };
-        if !target.draw(&wgpu_device, &queue, &video) {
-            return Ok(());
+    let publish = {
+        let frame = Arc::clone(&frame);
+        let active_fps = Arc::clone(&active_fps);
+        let wake_ui = Arc::clone(&wake_ui);
+        let rate = std::sync::Mutex::new(FrameRate::new());
+        move |texture_id| {
+            frame.store(Some(Arc::new(CompositeFrame { texture_id })));
+            if let Some(measured) = rate.lock().expect("never poisoned").tick() {
+                active_fps.store(measured.to_bits(), Ordering::Relaxed);
+            }
+            wake_ui();
         }
-        frame.store(Some(Arc::new(CompositeFrame { texture_id })));
-        if let Some(measured) = rate.tick() {
-            active_fps.store(measured.to_bits(), Ordering::Relaxed);
-        }
-        wake_sink();
-        Ok(())
-    });
+    };
+    let backend = Backend::start(&render_state, size, TARGET_FPS, publish)?;
 
-    let pipeline = Pipeline::new("preview", compositor, |source, context| {
-        // The Preview must not set the compositor's pace. `CudaDownload`
-        // waits for the GPU to finish before the CPU can read, and a
-        // synchronous chain makes the compositor wait with it — which is what
-        // dragged a 60 fps compositor down to exactly half that. Behind a
-        // queue the download runs on its own thread, and a Preview that
-        // cannot keep up drops frames instead of slowing the output everything
-        // else will be built from.
-        let branch = context
-            .branch()
-            .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
-            .pipe(download)
-            .to(Box::new(sink))?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
     // Nothing has been composited yet, and an empty Scene never will be, so
     // the Preview branch starts asleep and is woken by the first Source.
-    pipeline.pause();
+    backend.pause();
     let mut compositing = false;
 
     let mut open = HashMap::new();
@@ -279,25 +203,13 @@ fn run(
     while !stop.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => {
-                let mut reconciled = apply_command(
-                    &device,
-                    &handle,
-                    project.as_ref(),
-                    &mut open,
-                    &mut scene,
-                    command,
-                );
+                let mut reconciled =
+                    apply_command(&backend, project.as_ref(), &mut open, &mut scene, command);
                 // Whatever else is already waiting, so a gesture's newer
                 // positions are not left a poll behind the pointer.
                 while let Ok(next) = commands.try_recv() {
-                    reconciled |= apply_command(
-                        &device,
-                        &handle,
-                        project.as_ref(),
-                        &mut open,
-                        &mut scene,
-                        next,
-                    );
+                    reconciled |=
+                        apply_command(&backend, project.as_ref(), &mut open, &mut scene, next);
                 }
                 if !reconciled {
                     continue;
@@ -312,14 +224,14 @@ fn run(
                     .any(|state| matches!(state, SourceState::Open(source) if source.showing));
                 if wanted != compositing {
                     if wanted {
-                        pipeline.resume();
+                        backend.resume();
                     } else {
-                        pipeline.pause();
+                        backend.pause();
                         // The texture still holds the Scene that was showing a
                         // moment ago, and leaving it up would attribute another
                         // Scene's picture to this one.
-                        idle_frame.store(None);
-                        idle_fps.store(0, Ordering::Relaxed);
+                        frame.store(None);
+                        active_fps.store(0, Ordering::Relaxed);
                         wake_ui();
                     }
                     compositing = wanted;
@@ -335,15 +247,14 @@ fn run(
             source.pipeline.stop();
         }
     }
-    pipeline.stop();
+    backend.stop();
     Ok(())
 }
 
 /// Applies one change, reporting whether the running Sources may have moved
 /// on — a Scene change can start or stop them, a drag never does.
 fn apply_command(
-    device: &CudaDevice,
-    handle: &CudaVideoCompositorHandle,
+    backend: &Backend,
     project: Option<&ProjectDispatcher>,
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
@@ -352,7 +263,7 @@ fn apply_command(
     match command {
         EngineCommand::Scene(snapshot) => {
             *scene = *snapshot;
-            reconcile(device, handle, project, open, scene);
+            reconcile(backend, project, open, scene);
             true
         }
         EngineCommand::Dragging(item_id, transform) => {
@@ -381,8 +292,7 @@ enum SourceState {
 
 /// Brings the running Sources in line with what the project now holds.
 fn reconcile(
-    device: &CudaDevice,
-    handle: &CudaVideoCompositorHandle,
+    backend: &Backend,
     project: Option<&ProjectDispatcher>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
@@ -398,7 +308,7 @@ fn reconcile(
             }
             Some(SourceState::Failed) => {}
             None => {
-                let state = match open_source(device, handle, item, layer, TARGET_FPS) {
+                let state = match backend.open_source(item, layer, TARGET_FPS) {
                     Ok(source) => {
                         // The portal may hand back a different token than the
                         // one it was given. Keeping the old one would mean
@@ -450,10 +360,35 @@ fn reconcile(
         }
         if let SourceState::Open(source) = state {
             source.pipeline.stop();
-            handle.remove_source(&source.name);
+            backend.remove_source(&source.name);
         }
         false
     });
+}
+
+/// Where a SceneItem's layer sits on the Canvas, and in what order.
+///
+/// The rectangle already carries the Source's own size scaled by the item's
+/// Transform, so the fit is [`VideoFit::Stretch`]: whatever aspect the user
+/// asked for is expressed in that rectangle, and letterboxing inside it would
+/// second-guess them.
+fn layer_for(item: &SceneItemSnapshot, transform: Transform, z_index: i32) -> VideoLayer {
+    let [x, y, width, height] = item.canvas_rect(transform);
+    let mut layer = VideoLayer::new(VideoRect::new(
+        x.round() as i32,
+        y.round() as i32,
+        (width.round() as u32).max(1),
+        (height.round() as u32).max(1),
+    ));
+    layer.z_index = z_index;
+    layer.visible = item.visible;
+    layer.fit = VideoFit::Stretch;
+    // NV12 carries no alpha, so a Color Source's own is the layer's opacity
+    // rather than something the blend could read out of its pixels.
+    if let SourceSettings::Color(settings) = &item.settings {
+        layer.opacity = f32::from(settings.rgba[3]) / 255.0;
+    }
+    layer
 }
 
 /// Counts composited frames over a rolling one-second window.
