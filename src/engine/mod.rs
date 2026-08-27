@@ -1,16 +1,16 @@
 //! The compositing engine: everything that produces Preview pixels.
 //!
-//! It runs on its own thread for the same reason `ProjectManager` does — the
-//! work does not belong on the UI thread — but the pressure here is different.
-//! A 1920x1080 frame is 8 MB, so at 60 fps this moves roughly half a gigabyte
+//! It runs off the UI thread for the same reason `ProjectManager` does — the
+//! work does not belong there — but the pressure here is different. A
+//! 1920x1080 frame is 8 MB, so at 60 fps this moves roughly half a gigabyte
 //! per second into GPU memory. Doing that inside `eframe::App::ui` would pay
 //! for every frame twice: once to build it, once in the dropped input latency.
 //!
 //! What crosses the thread boundary is therefore not pixels but a
 //! [`CompositeFrame`] — an already-uploaded texture the UI only has to name.
-//! The upload itself happens here, through a `wgpu::Queue` clone; `Queue` and
-//! `Device` are `Send + Sync` and internally reference-counted, so the engine
-//! shares eframe's device rather than opening a second one.
+//! The upload uses a `wgpu::Queue` clone; `Queue` and `Device` are
+//! `Send + Sync` and internally reference-counted, so the engine shares
+//! eframe's device rather than opening a second one.
 
 use std::sync::{
     Arc,
@@ -22,24 +22,42 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwapOption;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
+use media_pp::{
+    buffer::MediaBuffer,
+    color::Color,
+    elements::{AppSink, SwVideoCompositor, VideoCompositorOptions},
+    ffmpeg,
+    pipeline::Pipeline,
+};
 
 use crate::domain::SceneCanvas;
 
-/// How often the engine composites. Independent of the egui repaint rate:
-/// egui redraws when something asks it to, this advances on its own clock.
-const TARGET_FPS: f32 = 60.0;
+/// The compositor's output rate. Independent of the egui repaint rate: egui
+/// redraws when something asks it to, this advances on the compositor's own
+/// clock.
+const TARGET_FPS: u32 = 60;
 
-/// egui samples a registered texture directly, and its renderer documents
-/// `Rgba8Unorm` as the only format it accepts for one.
-const FRAME_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// What is behind every layer, and all there is to see before any Source is
+/// connected. Deliberately not black: it has to be distinguishable from the
+/// empty-Viewport fill the Preview paints when there is no frame at all.
+const BACKGROUND: Color = Color::new(16, 40, 56);
+
+/// `SwVideoCompositor` emits BGRA, and this is that byte order named for wgpu,
+/// so frames upload with no repacking or channel swap.
+///
+/// egui's `register_native_texture` documents `Rgba8Unorm`, but it only builds
+/// a bind group from the view, and both formats are
+/// `TextureSampleType::Float { filterable: true }` — layout-compatible by
+/// construction. The sampler returns correct RGBA either way, because the
+/// format is what describes the memory order to the hardware.
+const FRAME_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 
 /// One composited frame, already resident on the GPU.
 ///
 /// The `TextureId` stays valid for the life of the engine: the texture is
-/// created and registered once, and each frame overwrites its contents rather
-/// than producing a new texture. Registering per frame would take the egui
-/// renderer's write lock every frame and stall the very thread this exists to
-/// keep free.
+/// created and registered once, and each frame overwrites its contents.
+/// Registering per frame would take the egui renderer's write lock every
+/// frame and stall the very thread this exists to keep free.
 pub struct CompositeFrame {
     pub texture_id: egui::TextureId,
 }
@@ -56,7 +74,7 @@ impl EngineManager {
     pub fn spawn(
         render_state: RenderState,
         canvas: SceneCanvas,
-        wake_ui: impl Fn() + Send + 'static,
+        wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let size = [canvas.width as u32, canvas.height as u32];
         let frame = Arc::new(ArcSwapOption::empty());
@@ -67,7 +85,13 @@ impl EngineManager {
             let frame = Arc::clone(&frame);
             let active_fps = Arc::clone(&active_fps);
             let stop = Arc::clone(&stop);
-            move || run(render_state, size, &frame, &active_fps, &stop, &wake_ui)
+            move || {
+                if let Err(error) = run(render_state, size, frame, active_fps, &stop, wake_ui) {
+                    // The Preview keeps showing "no frame" rather than the
+                    // application failing to start over a compositor.
+                    eprintln!("engine stopped: {error}");
+                }
+            }
         })?;
 
         Ok(Self {
@@ -90,7 +114,7 @@ impl EngineManager {
     }
 
     pub fn target_fps(&self) -> f32 {
-        TARGET_FPS
+        TARGET_FPS as f32
     }
 }
 
@@ -107,12 +131,14 @@ impl Drop for EngineManager {
 fn run(
     render_state: RenderState,
     size: [u32; 2],
-    frame: &ArcSwapOption<CompositeFrame>,
-    active_fps: &AtomicU32,
+    frame: Arc<ArcSwapOption<CompositeFrame>>,
+    active_fps: Arc<AtomicU32>,
     stop: &AtomicBool,
-    wake_ui: &impl Fn(),
-) {
+    wake_ui: impl Fn() + Send + 'static,
+) -> media_pp::Result<()> {
+    media_pp::init()?;
     let [width, height] = size;
+
     let texture = render_state
         .device
         .create_texture(&wgpu::TextureDescriptor {
@@ -136,105 +162,70 @@ fn run(
         wgpu::FilterMode::Linear,
     );
 
-    let mut pixels = Placeholder::new(width, height);
-    let interval = Duration::from_secs_f32(1.0 / TARGET_FPS);
-    let mut rate = FrameRate::new();
-    let mut next_tick = Instant::now();
+    let (compositor, _handle) = SwVideoCompositor::new(
+        "preview-compositor",
+        VideoCompositorOptions {
+            width,
+            height,
+            frame_rate: ffmpeg::Rational::new(TARGET_FPS as i32, 1),
+            background: BACKGROUND,
+        },
+    )?;
 
-    while !stop.load(Ordering::Acquire) {
-        pixels.advance();
-        render_state.queue.write_texture(
-            texture.as_image_copy(),
-            pixels.bytes(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            texture.size(),
-        );
+    // The sink runs on the compositor's own source thread, so the upload never
+    // touches either the UI thread or this one.
+    let queue = render_state.queue.clone();
+    let mut rate = FrameRate::new();
+    let sink = AppSink::new("preview-out", move |buffer| {
+        let MediaBuffer::Video(video) = buffer else {
+            return Ok(());
+        };
+        upload(&queue, &texture, &video);
         frame.store(Some(Arc::new(CompositeFrame { texture_id })));
         if let Some(measured) = rate.tick() {
             active_fps.store(measured.to_bits(), Ordering::Relaxed);
         }
         wake_ui();
+        Ok(())
+    });
 
-        next_tick += interval;
-        let now = Instant::now();
-        if next_tick > now {
-            thread::park_timeout(next_tick - now);
-        } else {
-            // Fell behind; give up the missed ticks rather than sprinting to
-            // catch up, which would only make the next frame later still.
-            next_tick = now;
-        }
+    let pipeline = Pipeline::new("preview", compositor, |source, context| {
+        let branch = context.branch().to(Box::new(sink))?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    pipeline.run()?;
+
+    while !stop.load(Ordering::Acquire) {
+        thread::park_timeout(Duration::from_millis(100));
     }
+    pipeline.stop();
+    Ok(())
 }
 
-/// Stand-in frame content until a real compositor produces one.
+/// Copies one composited frame into the texture the UI samples.
 ///
-/// Deliberately a full-size repaint every tick rather than a static image: the
-/// point of this stage is to prove the upload path carries a moving picture at
-/// the real frame size and rate, which a texture written once would not.
-struct Placeholder {
-    bytes: Vec<u8>,
-    width: u32,
-    height: u32,
-    tick: u32,
-}
-
-impl Placeholder {
-    fn new(width: u32, height: u32) -> Self {
-        Self {
-            bytes: vec![0; (width as usize) * (height as usize) * 4],
-            width,
-            height,
-            tick: 0,
-        }
+/// FFmpeg pads rows to its own alignment, so the frame's stride is passed
+/// through rather than assumed: `write_texture` re-strides into its staging
+/// buffer, which is why no repacking is needed here.
+fn upload(queue: &wgpu::Queue, texture: &wgpu::Texture, video: &ffmpeg::frame::Video) {
+    let size = texture.size();
+    if video.width() != size.width || video.height() != size.height {
+        // The compositor's output size is fixed at construction, so this can
+        // only mean the two disagree about the Canvas — dropping the frame is
+        // better than uploading a misaligned one.
+        return;
     }
-
-    fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    fn advance(&mut self) {
-        self.tick = self.tick.wrapping_add(1);
-        let phase = self.tick as f32 / TARGET_FPS;
-        let row_bytes = (self.width as usize) * 4;
-
-        // One row is built and then copied down the frame: 1080 memcpys cost
-        // far less than four million per-pixel writes, which matters in debug
-        // builds where this would otherwise dominate the frame.
-        let mut row = vec![0u8; row_bytes];
-        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
-            let across = x as f32 / self.width as f32;
-            pixel.copy_from_slice(&[
-                channel(across + phase * 0.15),
-                channel(across + phase * 0.15 + 0.33),
-                channel(across + phase * 0.15 + 0.66),
-                255,
-            ]);
-        }
-        for line in self.bytes.chunks_exact_mut(row_bytes) {
-            line.copy_from_slice(&row);
-        }
-
-        // A band sweeping down the frame, so a stalled pipeline is obvious at
-        // a glance rather than looking like a slowly shifting gradient.
-        let band_height = self.height / 24;
-        let top = ((phase * 0.25).fract() * self.height as f32) as u32;
-        let bottom = (top + band_height).min(self.height);
-        let band = vec![255u8; row_bytes];
-        for line in top..bottom {
-            let start = (line as usize) * row_bytes;
-            self.bytes[start..start + row_bytes].copy_from_slice(&band);
-        }
-    }
-}
-
-fn channel(position: f32) -> u8 {
-    let wave = (position.fract() * std::f32::consts::TAU).sin();
-    (((wave + 1.0) * 0.5) * 190.0 + 40.0) as u8
+    queue.write_texture(
+        texture.as_image_copy(),
+        video.data(0),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(video.stride(0) as u32),
+            rows_per_image: Some(size.height),
+        },
+        size,
+    );
 }
 
 /// Counts composited frames over a rolling one-second window.
