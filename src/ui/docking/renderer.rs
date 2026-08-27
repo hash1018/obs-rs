@@ -5,6 +5,7 @@ use eframe::egui;
 use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
 use crate::snapshots::Snapshots;
 use crate::ui::{UiAction, panels};
+use panels::scenes::ScenesPanelState;
 
 const SIDE_DEFAULT_SIZE: f32 = 260.0;
 const SIDE_MIN_SIZE: f32 = 180.0;
@@ -47,6 +48,7 @@ enum DropIndicator {
 pub(super) fn show(
     ui: &mut egui::Ui,
     layout: &mut DockLayout,
+    scenes_state: &mut ScenesPanelState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) {
@@ -60,8 +62,9 @@ pub(super) fn show(
             continue;
         }
 
-        let response = region_panel(region, layout)
-            .show(ui, |ui| show_region(ui, layout, region, snapshots, actions));
+        let response = region_panel(region, layout).show(ui, |ui| {
+            show_region(ui, layout, region, scenes_state, snapshots, actions)
+        });
         region_rects.insert(region, response.inner.rect);
         panel_drags.extend(response.inner.panel_drags);
     }
@@ -117,6 +120,7 @@ fn show_region(
     ui: &mut egui::Ui,
     layout: &mut DockLayout,
     region: DockRegionId,
+    scenes_state: &mut ScenesPanelState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) -> RegionOutput {
@@ -138,7 +142,7 @@ fn show_region(
             usable_length * weights[index]
         };
         let pane_rect = rect_along_axis(region, region_rect, axis_cursor, pane_length);
-        let title_response = show_panel(ui, pane_rect, panel, snapshots, actions);
+        let title_response = show_panel(ui, pane_rect, panel, scenes_state, snapshots, actions);
         panel_drags.push((panel, title_response));
         axis_cursor += pane_length;
 
@@ -167,6 +171,7 @@ fn show_panel(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     panel: DockPanel,
+    scenes_state: &mut ScenesPanelState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) -> egui::Response {
@@ -201,7 +206,9 @@ fn show_panel(
     child.separator();
 
     match panel {
-        DockPanel::Scenes => panels::scenes::show(&mut child, &snapshots.scenes, actions),
+        DockPanel::Scenes => {
+            panels::scenes::show(&mut child, scenes_state, &snapshots.scenes, actions);
+        }
         DockPanel::Sources => panels::sources::show(&mut child),
     }
 

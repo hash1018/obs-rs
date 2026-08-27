@@ -110,6 +110,7 @@ fn handle_scene_command(
         SceneCommand::Duplicate(scene_id) => SceneStore::duplicate(transaction, scene_id),
         SceneCommand::MoveUp(scene_id) => SceneStore::move_up(transaction, scene_id),
         SceneCommand::MoveDown(scene_id) => SceneStore::move_down(transaction, scene_id),
+        SceneCommand::Rename(scene_id, name) => SceneStore::rename(transaction, scene_id, &name),
         SceneCommand::Select(scene_id) => SceneStore::select(transaction, scene_id),
     })
 }
@@ -160,6 +161,28 @@ mod tests {
         handle_scene_command(&mut database, SceneCommand::Duplicate(second)).unwrap();
         let snapshot = scene_snapshot(&database).unwrap();
         assert_eq!(snapshot.items.len(), 3);
+
+        handle_scene_command(
+            &mut database,
+            SceneCommand::Rename(second, "Gameplay".into()),
+        )
+        .unwrap();
+        let snapshot = scene_snapshot(&database).unwrap();
+        assert_eq!(snapshot.items[0].name, "Gameplay");
+
+        let conflicting = snapshot
+            .items
+            .iter()
+            .find(|scene| scene.id != second)
+            .unwrap()
+            .id;
+        assert!(
+            handle_scene_command(
+                &mut database,
+                SceneCommand::Rename(conflicting, "Gameplay".into()),
+            )
+            .is_err()
+        );
 
         handle_scene_command(&mut database, SceneCommand::Delete(second)).unwrap();
         let snapshot = scene_snapshot(&database).unwrap();

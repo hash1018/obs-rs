@@ -88,7 +88,7 @@ impl eframe::App for ObsApp {
 
         let ctx = ui.ctx().clone();
         for index in 0..self.ui_actions.len() {
-            let action = self.ui_actions[index];
+            let action = self.ui_actions[index].clone();
             self.handle_ui_action(&ctx, action);
         }
         self.ui_actions.clear();

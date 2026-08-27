@@ -101,6 +101,18 @@ impl SceneStore {
         move_by(transaction, scene_id, 1)
     }
 
+    pub(crate) fn rename(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        name: &str,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scenes SET name = ?1 WHERE id = ?2",
+            params![name, scene_id.0],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn select(
         transaction: &Transaction<'_>,
         scene_id: SceneId,

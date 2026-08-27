@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use crate::domain::SceneId;
 use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::ScenesSnapshot;
 
@@ -8,6 +9,18 @@ use super::super::UiAction;
 const SCENE_ROW_HEIGHT: f32 = 28.0;
 const TOOLBAR_HEIGHT: f32 = 36.0;
 const TOOL_BUTTON_SIZE: f32 = 26.0;
+
+#[derive(Default)]
+pub(in crate::ui) struct ScenesPanelState {
+    rename: Option<RenameState>,
+}
+
+struct RenameState {
+    scene_id: SceneId,
+    name: String,
+    request_focus: bool,
+    error: Option<&'static str>,
+}
 
 #[derive(Clone, Copy)]
 enum ToolIcon {
@@ -20,9 +33,19 @@ enum ToolIcon {
 
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
+    state: &mut ScenesPanelState,
     snapshot: &ScenesSnapshot,
     actions: &mut Vec<UiAction>,
 ) {
+    if state.rename.as_ref().is_some_and(|rename| {
+        !snapshot
+            .items
+            .iter()
+            .any(|scene| scene.id == rename.scene_id)
+    }) {
+        state.rename = None;
+    }
+
     show_toolbar(ui, snapshot, actions);
 
     egui::ScrollArea::vertical()
@@ -32,17 +55,93 @@ pub(in crate::ui) fn show(
             for scene in &snapshot.items {
                 let selected = snapshot.selected_scene_id == Some(scene.id);
                 let row_width = ui.available_width();
-                if ui
-                    .add_sized(
-                        [row_width, SCENE_ROW_HEIGHT],
-                        egui::Button::new(&scene.name).selected(selected),
-                    )
-                    .clicked()
+                if state
+                    .rename
+                    .as_ref()
+                    .is_some_and(|rename| rename.scene_id == scene.id)
                 {
+                    show_rename_editor(ui, state, snapshot, scene.id, row_width, actions);
+                    continue;
+                }
+
+                let response = ui.add_sized(
+                    [row_width, SCENE_ROW_HEIGHT],
+                    egui::Button::new(&scene.name).selected(selected),
+                );
+                if response.clicked() {
                     actions.push(scene_action(SceneCommand::Select(scene.id)));
+                }
+                if response.double_clicked() {
+                    state.rename = Some(RenameState {
+                        scene_id: scene.id,
+                        name: scene.name.clone(),
+                        request_focus: true,
+                        error: None,
+                    });
                 }
             }
         });
+}
+
+fn show_rename_editor(
+    ui: &mut egui::Ui,
+    state: &mut ScenesPanelState,
+    snapshot: &ScenesSnapshot,
+    scene_id: SceneId,
+    row_width: f32,
+    actions: &mut Vec<UiAction>,
+) {
+    let rename = state.rename.as_mut().expect("rename state must exist");
+    let mut response = ui.add_sized(
+        [row_width, SCENE_ROW_HEIGHT],
+        egui::TextEdit::singleline(&mut rename.name)
+            .id_salt(("scene_rename", scene_id.0))
+            .vertical_align(egui::Align::Center)
+            .background_color(rename.error.map_or(ui.visuals().extreme_bg_color, |_| {
+                ui.visuals().error_fg_color.gamma_multiply(0.2)
+            })),
+    );
+    if response.changed() {
+        rename.error = None;
+    }
+    if let Some(error) = rename.error {
+        response = response.on_hover_text(error);
+    }
+    if rename.request_focus {
+        response.request_focus();
+        rename.request_focus = false;
+    }
+
+    let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    let commit = ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let lost_focus = response.lost_focus();
+
+    if cancel {
+        state.rename = None;
+    } else if commit || lost_focus {
+        let name = rename.name.trim();
+        rename.error = if name.is_empty() {
+            Some("Scene name cannot be empty")
+        } else if snapshot
+            .items
+            .iter()
+            .any(|scene| scene.id != scene_id && scene.name == name)
+        {
+            Some("A scene with this name already exists")
+        } else {
+            None
+        };
+
+        if rename.error.is_none() {
+            actions.push(scene_action(SceneCommand::Rename(
+                scene_id,
+                name.to_owned(),
+            )));
+            state.rename = None;
+        } else {
+            response.request_focus();
+        }
+    }
 }
 
 fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<UiAction>) {
