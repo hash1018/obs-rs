@@ -1,10 +1,21 @@
-//! Opening one capture Source and wiring it into the compositor.
+//! Opening one Source and wiring it into the compositor.
 //!
-//! This is the one part of the engine that is genuinely per-platform: which
-//! `media-pp` element captures a display, and what a stored
-//! `DisplayCaptureTarget` means to it, differ by operating system. Everything
-//! around it — reconciling against the snapshot, layer placement, the frame
-//! handoff — does not, and stays out of here.
+//! Which `media-pp` element captures a display, and what a stored
+//! `DisplayCaptureTarget` means to it, differ by operating system, so each
+//! platform gets its own file beside this one. Everything else — layer
+//! placement, the flat-colour input, the compositor registration — does not,
+//! and stays here.
+//!
+//! This is the other half of `crate::capture`, which decides *what the user
+//! can pick*. The two are apart on purpose: a picker has to run before any
+//! pipeline exists and must not drag `media-pp` in with it, while opening
+//! what was picked needs both that crate and a live compositor handle.
+
+#[cfg_attr(target_os = "linux", path = "linux.rs")]
+#[cfg_attr(not(target_os = "linux"), path = "unsupported.rs")]
+mod platform;
+
+use platform::open_display_capture;
 
 use std::error::Error;
 
@@ -165,89 +176,4 @@ fn flat_bgra(width: u32, height: u32, rgba: [u8; 4]) -> media_pp::buffer::MediaB
 /// The name a SceneItem's compositor input is registered under.
 fn input_name(item: &SceneItemSnapshot) -> String {
     format!("scene-item-{}", item.id.0)
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn open_display_capture(
-    device: &CudaDevice,
-    handle: &CudaVideoCompositorHandle,
-    item: &SceneItemSnapshot,
-    layer: VideoLayer,
-    fps: u32,
-) -> Result<OpenSource, OpenError> {
-    use media_pp::elements::{
-        CaptureSourceKind, CudaConverter, CudaVideoCompositorInput, PipeWireScreenCaptureOptions,
-        PipeWireScreenCaptureSource,
-    };
-
-    use crate::domain::{DisplayCaptureTarget, SourceSettings};
-
-    let SourceSettings::DisplayCapture(settings) = &item.settings else {
-        return Err("scene item is not a display capture".into());
-    };
-    let restore_token = match &settings.target {
-        DisplayCaptureTarget::Portal { restore_token } => restore_token.clone(),
-        // An X11 display name means nothing to the portal, which owns the
-        // choice on Wayland. Leaving the token unset makes it prompt, the only
-        // thing it can do with a target it cannot resolve.
-        DisplayCaptureTarget::MonitorName(_) => None,
-    };
-
-    let name = input_name(item);
-    // Blocking, and it can sit here indefinitely: an unrecognised token makes
-    // the portal show its dialog and wait for the user. Sources are opened one
-    // at a time, so the rest wait behind whichever one is asking.
-    // GPU capture: the desktop lands in CUDA surfaces and never reaches system
-    // memory. It negotiates DMA-BUF only and fails rather than falling back,
-    // which is the point — a silent CPU path would undo the whole arrangement.
-    let (source, format, refreshed_token) = PipeWireScreenCaptureSource::open_gpu(
-        name.clone(),
-        PipeWireScreenCaptureOptions {
-            fps,
-            source_kind: CaptureSourceKind::Monitor,
-            include_cursor: false,
-            restore_token: restore_token.clone(),
-        },
-        device,
-    )?;
-    // A compositor may issue a fresh token on every restore. Keeping the old
-    // one then means prompting on every launch, which is the thing persisting
-    // it was for.
-    let refreshed_token = (refreshed_token != restore_token).then_some(refreshed_token);
-
-    // Capture gives BGRA and the compositor works in NV12; nothing between
-    // them converts, so this element is not optional.
-    let converter = CudaConverter::new(
-        format!("{name}-convert"),
-        device,
-        format.width,
-        format.height,
-    )?;
-
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(converter).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    Ok(OpenSource {
-        pipeline,
-        layer,
-        name,
-        refreshed_token,
-        showing: true,
-    })
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(super) fn open_display_capture(
-    _device: &CudaDevice,
-    _handle: &CudaVideoCompositorHandle,
-    _item: &SceneItemSnapshot,
-    _layer: VideoLayer,
-    _fps: u32,
-) -> Result<OpenSource, OpenError> {
-    Err("display capture is not connected on this platform yet".into())
 }
