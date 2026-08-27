@@ -1,13 +1,14 @@
 use eframe::egui;
 
 const PREVIEW_ASPECT_RATIO: f32 = 16.0 / 9.0;
+const PREVIEW_MARGIN: i8 = 18;
 
 pub fn show(ui: &mut egui::Ui) {
     egui::CentralPanel::default()
         .frame(
             egui::Frame::central_panel(ui.style())
                 .fill(ui.visuals().faint_bg_color)
-                .inner_margin(egui::Margin::same(18)),
+                .inner_margin(egui::Margin::same(PREVIEW_MARGIN)),
         )
         .show(ui, |ui| {
             let available = ui.available_size();

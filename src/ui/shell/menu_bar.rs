@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use super::{UiAction, UiState};
+use super::{UiAction, UiState, docking::DockPanel};
 
 pub fn show(ui: &mut egui::Ui, state: &mut UiState, actions: &mut Vec<UiAction>) {
     egui::Panel::top("menu_bar")
@@ -21,6 +21,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut UiState, actions: &mut Vec<UiAction>)
                         ui.close();
                     }
 
+                    ui.menu_button("Docks", |ui| {
+                        dock_option(ui, state, DockPanel::Scenes, "Scenes");
+                        dock_option(ui, state, DockPanel::Sources, "Sources");
+                    });
+
                     ui.menu_button("Theme", |ui| {
                         theme_option(ui, state, actions, egui::ThemePreference::System, "System");
                         theme_option(ui, state, actions, egui::ThemePreference::Light, "Light");
@@ -36,6 +41,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut UiState, actions: &mut Vec<UiAction>)
                 });
             });
         });
+}
+
+fn dock_option(ui: &mut egui::Ui, state: &mut UiState, panel: DockPanel, label: &str) {
+    let mut open = state.dock_layout.is_open(panel);
+    if ui.checkbox(&mut open, label).changed() {
+        state.dock_layout.set_open(panel, open);
+        ui.close();
+    }
 }
 
 fn theme_option(

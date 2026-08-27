@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::snapshots::Snapshots;
 
-use super::{UiAction, UiState};
+use super::{UiAction, UiState, docking};
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -16,6 +16,7 @@ pub fn show(
 ) {
     menu_bar::show(ui, state, actions);
     status_bar::show(ui, &snapshots.status);
+    docking::show(ui, &mut state.dock_layout);
     preview::show(ui);
     menu_bar::show_about(ui, state);
 }
