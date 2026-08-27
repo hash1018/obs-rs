@@ -11,7 +11,7 @@ The following terms are kept distinct so that `Preview` does not ambiguously ref
 | Preview Workspace | The entire central editing area excluding docks | `CentralPanel` in `ui::preview::show` |
 | Preview Viewport | The on-screen 16:9 rectangle that displays the composited output | `viewport_rect` |
 | Scene Canvas | The fixed logical coordinate space in which SceneItems are placed | `SceneCanvas` |
-| Composite Frame | The final frame produced by compositing Sources | Future `CompositeFrame` |
+| Composite Frame | The final frame produced by compositing Sources | `CompositeFrame` |
 | Editor Overlay | UI-only elements such as selection borders and guides | `paint_editor_overlay` |
 | Transform Gizmo | Handles used to move, resize, and rotate an item | `ui::preview::gizmo` |
 | Viewport Transform | Conversion between Canvas coordinates and screen coordinates | `ViewportTransform` |
@@ -91,6 +91,8 @@ capture / colour  →  CudaConverter  →  CudaVideoCompositor  (NV12, on the GP
 ```
 
 The compositor's NV12 output is resolved into one RGBA texture by a small render pass, because egui draws one texture and NV12 is two planes in a colour space that is not RGB. Doing that on the CPU would undo the reason compositing is on the GPU.
+
+The Preview is redrawn at half the compositor's rate. It is a few hundred pixels wide and watched by one person, and halving it took the application from 10% of a twelve-core machine to 2.5% — almost none of which is pixels, since downloading and resolving at 720p instead of 1080p was measured and changed nothing. The cost is per-frame overhead, most of it the whole-UI repaint each drawn frame asks egui for. The compositor keeps its own rate, because that is what a recording will be made of.
 
 The Preview branch is not allowed to set the compositor's pace. It sits behind a dropping queue, so a Preview that cannot keep up drops frames rather than slowing the output every other branch will be built from. It also sleeps entirely when no shown Source is running — an empty Scene, or one whose Sources are all in other Scenes, costs nothing.
 

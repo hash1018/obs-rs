@@ -36,8 +36,19 @@ use backend::{Backend, OpenSource};
 
 /// The compositor's output rate. Independent of the egui repaint rate: egui
 /// redraws when something asks it to, this advances on the compositor's own
-/// clock.
+/// clock. It is what a recording will be made of, so it is not the knob to
+/// turn for a quieter Preview.
 const TARGET_FPS: u32 = 60;
+
+/// How often the Preview is redrawn from those frames.
+///
+/// A Preview is not an output: it is a few hundred pixels wide and watched by
+/// one person. Halving its rate took this application from 10% of a
+/// twelve-core machine to 2.5%, and almost none of that is pixels —
+/// downloading and resolving at 720p instead of 1080p was measured and
+/// changed nothing. The cost is per-frame overhead, most of it the whole-UI
+/// repaint that each drawn frame asks egui for.
+const PREVIEW_FPS: u32 = 30;
 
 /// One composited frame, already resident on the GPU.
 ///
@@ -150,8 +161,9 @@ impl EngineManager {
         (bits != 0).then(|| f32::from_bits(bits))
     }
 
+    /// The rate the Preview aims for, which is what `active_fps` measures.
     pub fn target_fps(&self) -> f32 {
-        TARGET_FPS as f32
+        PREVIEW_FPS as f32
     }
 }
 
@@ -191,7 +203,7 @@ fn run(
             wake_ui();
         }
     };
-    let backend = Backend::start(&render_state, size, TARGET_FPS, publish)?;
+    let backend = Backend::start(&render_state, size, PREVIEW_FPS, publish)?;
 
     // Nothing has been composited yet, and an empty Scene never will be, so
     // the Preview branch starts asleep and is woken by the first Source.
