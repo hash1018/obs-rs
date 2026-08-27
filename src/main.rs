@@ -11,9 +11,15 @@
 // it, because that is where panics and logs show up while developing.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app;
 mod capture;
+mod resource_manager;
+mod snapshots;
+mod ui;
 
 use eframe::egui;
+
+use app::ObsApp;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -28,17 +34,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "obs-rs",
         options,
-        Box::new(|_cc| Ok(Box::new(ObsApp::default()))),
+        Box::new(|cc| Ok(Box::new(ObsApp::new(cc)))),
     )
-}
-
-#[derive(Default)]
-struct ObsApp {}
-
-impl eframe::App for ObsApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Hello, world!");
-        });
-    }
 }
