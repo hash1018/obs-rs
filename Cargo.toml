@@ -57,7 +57,7 @@ x11rb = { version = "0.13.2", features = ["randr"] }
 # Capture backends are per-platform, so each target enables only its own.
 [target.'cfg(target_os = "linux")'.dependencies.media-pp]
 path = "../media-pp/lib"
-features = ["pipewire-screen-capture"]
+features = ["cuda", "pipewire-screen-capture"]
 
 [target.'cfg(target_os = "windows")'.dependencies.media-pp]
 path = "../media-pp/lib"

@@ -11,7 +11,10 @@ use std::error::Error;
 use std::sync::Arc;
 
 use media_pp::{
-    elements::{SwVideoCompositorHandle, SwVideoLayerHandle, VideoFit, VideoLayer, VideoRect},
+    elements::{
+        CudaDevice, CudaVideoCompositorHandle, CudaVideoLayerHandle, VideoFit, VideoLayer,
+        VideoRect,
+    },
     pipeline::Pipeline,
 };
 
@@ -22,7 +25,7 @@ pub(super) type OpenError = Box<dyn Error + Send + Sync>;
 /// A capture Source that is running, and the controls for its layer.
 pub(super) struct OpenSource {
     pub(super) pipeline: Arc<Pipeline>,
-    pub(super) layer: SwVideoLayerHandle,
+    pub(super) layer: CudaVideoLayerHandle,
     pub(super) name: String,
 }
 
@@ -53,14 +56,15 @@ fn input_name(item: &SceneItemSnapshot) -> String {
 
 #[cfg(target_os = "linux")]
 pub(super) fn open_display_capture(
-    handle: &SwVideoCompositorHandle,
+    device: &CudaDevice,
+    handle: &CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
 ) -> Result<OpenSource, OpenError> {
     use media_pp::elements::{
-        CaptureSourceKind, PipeWireScreenCaptureOptions, PipeWireScreenCaptureSource,
-        SwVideoCompositorInput,
+        CaptureSourceKind, CudaConverter, CudaVideoCompositorInput, PipeWireScreenCaptureOptions,
+        PipeWireScreenCaptureSource,
     };
 
     use crate::domain::{DisplayCaptureTarget, SourceSettings};
@@ -80,7 +84,10 @@ pub(super) fn open_display_capture(
     // Blocking, and it can sit here indefinitely: an unrecognised token makes
     // the portal show its dialog and wait for the user. Sources are opened one
     // at a time, so the rest wait behind whichever one is asking.
-    let (source, _format, _refreshed_token) = PipeWireScreenCaptureSource::open(
+    // GPU capture: the desktop lands in CUDA surfaces and never reaches system
+    // memory. It negotiates DMA-BUF only and fails rather than falling back,
+    // which is the point — a silent CPU path would undo the whole arrangement.
+    let (source, format, _refreshed_token) = PipeWireScreenCaptureSource::open_gpu(
         name.clone(),
         PipeWireScreenCaptureOptions {
             fps,
@@ -88,13 +95,21 @@ pub(super) fn open_display_capture(
             include_cursor: false,
             restore_token,
         },
+        device,
     )?;
 
-    let SwVideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is gone")?;
+    // Capture gives BGRA and the compositor works in NV12; nothing between
+    // them converts, so this element is not optional.
+    let converter = CudaConverter::new(
+        format!("{name}-convert"),
+        device,
+        format.width,
+        format.height,
+    )?;
+
+    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().to(sink)?;
+        let branch = context.branch().pipe(converter).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -109,7 +124,8 @@ pub(super) fn open_display_capture(
 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn open_display_capture(
-    _handle: &SwVideoCompositorHandle,
+    _device: &CudaDevice,
+    _handle: &CudaVideoCompositorHandle,
     _item: &SceneItemSnapshot,
     _layer: VideoLayer,
     _fps: u32,

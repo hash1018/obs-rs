@@ -12,6 +12,7 @@
 //! `Send + Sync` and internally reference-counted, so the engine shares
 //! eframe's device rather than opening a second one.
 
+mod nv12;
 mod source;
 
 use std::collections::HashMap;
@@ -29,7 +30,10 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     color::Color,
-    elements::{AppSink, SwVideoCompositor, SwVideoCompositorHandle, VideoCompositorOptions},
+    elements::{
+        AppSink, CudaDevice, CudaDownload, CudaFrameFormat, CudaVideoCompositor,
+        CudaVideoCompositorHandle, VideoCompositorOptions,
+    },
     ffmpeg,
     pipeline::Pipeline,
 };
@@ -37,6 +41,7 @@ use media_pp::{
 use crate::domain::{SceneCanvas, SceneItemId, SourceKind};
 use crate::snapshots::SourcesSnapshot;
 
+use nv12::Nv12Target;
 use source::{OpenSource, layer_for, open_display_capture};
 
 /// The compositor's output rate. Independent of the egui repaint rate: egui
@@ -48,16 +53,6 @@ const TARGET_FPS: u32 = 60;
 /// connected. Deliberately not black: it has to be distinguishable from the
 /// empty-Viewport fill the Preview paints when there is no frame at all.
 const BACKGROUND: Color = Color::new(16, 40, 56);
-
-/// `SwVideoCompositor` emits BGRA, and this is that byte order named for wgpu,
-/// so frames upload with no repacking or channel swap.
-///
-/// egui's `register_native_texture` documents `Rgba8Unorm`, but it only builds
-/// a bind group from the view, and both formats are
-/// `TextureSampleType::Float { filterable: true }` — layout-compatible by
-/// construction. The sampler returns correct RGBA either way, because the
-/// format is what describes the memory order to the hardware.
-const FRAME_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 
 /// One composited frame, already resident on the GPU.
 ///
@@ -164,35 +159,23 @@ fn run(
     scenes: mpsc::Receiver<SourcesSnapshot>,
     stop: &AtomicBool,
     wake_ui: impl Fn() + Send + 'static,
-) -> media_pp::Result<()> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     media_pp::init()?;
     let [width, height] = size;
 
-    let texture = render_state
-        .device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("composite-frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FRAME_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    // One per process, not one per pipeline: creating or dropping a device
+    // while another thread is encoding can fault inside the NVIDIA driver.
+    let device = CudaDevice::new()?;
+    let target = Nv12Target::new(&render_state.device, width, height);
     let texture_id = render_state.renderer.write().register_native_texture(
         &render_state.device,
-        &view,
+        target.output_view(),
         wgpu::FilterMode::Linear,
     );
 
-    let (compositor, handle) = SwVideoCompositor::new(
+    let (compositor, handle) = CudaVideoCompositor::new(
         "preview-compositor",
+        &device,
         VideoCompositorOptions {
             width,
             height,
@@ -201,15 +184,29 @@ fn run(
         },
     )?;
 
-    // The sink runs on the compositor's own source thread, so the upload never
-    // touches either the UI thread or this one.
+    // The compositor works in CUDA surfaces; this is the one place the frame
+    // returns to system memory. Replacing this download with an import into
+    // the planes above is what removes the round trip entirely.
+    let download = CudaDownload::new(
+        "preview-download",
+        &device,
+        CudaFrameFormat::Nv12,
+        width,
+        height,
+    );
+
+    // The sink runs on the compositor's own source thread, so neither the UI
+    // thread nor this one does the conversion.
+    let wgpu_device = render_state.device.clone();
     let queue = render_state.queue.clone();
     let mut rate = FrameRate::new();
     let sink = AppSink::new("preview-out", move |buffer| {
         let MediaBuffer::Video(video) = buffer else {
             return Ok(());
         };
-        upload(&queue, &texture, &video);
+        if !target.draw(&wgpu_device, &queue, &video) {
+            return Ok(());
+        }
         frame.store(Some(Arc::new(CompositeFrame { texture_id })));
         if let Some(measured) = rate.tick() {
             active_fps.store(measured.to_bits(), Ordering::Relaxed);
@@ -219,7 +216,7 @@ fn run(
     });
 
     let pipeline = Pipeline::new("preview", compositor, |source, context| {
-        let branch = context.branch().to(Box::new(sink))?;
+        let branch = context.branch().pipe(download).to(Box::new(sink))?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -235,7 +232,7 @@ fn run(
                 while let Ok(newer) = scenes.try_recv() {
                     latest = newer;
                 }
-                reconcile(&handle, &mut open, &latest);
+                reconcile(&device, &handle, &mut open, &latest);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -262,7 +259,8 @@ enum SourceState {
 
 /// Brings the running Sources in line with what the project now holds.
 fn reconcile(
-    handle: &SwVideoCompositorHandle,
+    device: &CudaDevice,
+    handle: &CudaVideoCompositorHandle,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
 ) {
@@ -280,7 +278,7 @@ fn reconcile(
             }
             Some(SourceState::Failed) => {}
             None => {
-                let state = match open_display_capture(handle, item, layer, TARGET_FPS) {
+                let state = match open_display_capture(device, handle, item, layer, TARGET_FPS) {
                     Ok(source) => SourceState::Open(source),
                     Err(error) => {
                         eprintln!("could not open \"{}\": {error}", item.name);
@@ -302,31 +300,6 @@ fn reconcile(
         }
         false
     });
-}
-
-/// Copies one composited frame into the texture the UI samples.
-///
-/// FFmpeg pads rows to its own alignment, so the frame's stride is passed
-/// through rather than assumed: `write_texture` re-strides into its staging
-/// buffer, which is why no repacking is needed here.
-fn upload(queue: &wgpu::Queue, texture: &wgpu::Texture, video: &ffmpeg::frame::Video) {
-    let size = texture.size();
-    if video.width() != size.width || video.height() != size.height {
-        // The compositor's output size is fixed at construction, so this can
-        // only mean the two disagree about the Canvas — dropping the frame is
-        // better than uploading a misaligned one.
-        return;
-    }
-    queue.write_texture(
-        texture.as_image_copy(),
-        video.data(0),
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(video.stride(0) as u32),
-            rows_per_image: Some(size.height),
-        },
-        size,
-    );
 }
 
 /// Counts composited frames over a rolling one-second window.
