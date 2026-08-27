@@ -1,0 +1,50 @@
+menu-file = 파일
+menu-exit = 종료
+menu-view = 보기
+menu-fullscreen = 전체 화면
+menu-docks = 도커
+menu-theme = 테마
+theme-system = 시스템
+theme-light = 밝게
+theme-dark = 어둡게
+menu-language = 언어
+language-english = 영어
+language-korean = 한국어
+menu-help = 도움말
+menu-about = obs-rs 정보
+about-description = media-pp로 만든 실시간 캡처 및 녹화 프로그램입니다.
+
+dock-scenes = 장면
+dock-sources = 소스
+status-ready = 준비
+
+scene-name-empty = 장면 이름을 입력해야 합니다
+scene-name-duplicate = 같은 이름의 장면이 이미 있습니다
+scene-add = 장면 추가
+scene-remove = 선택한 장면 삭제
+scene-duplicate = 선택한 장면 복제
+scene-move-up = 선택한 장면 위로 이동
+scene-move-down = 선택한 장면 아래로 이동
+
+source-selected-scene = 선택한 장면
+source-empty = { $scene }에 소스가 없습니다
+source-add = 소스 추가
+source-add-title = 소스 추가
+source-type = 소스 종류
+source-kind-color = 색상
+source-kind-display-capture = 디스플레이 캡처
+source-kind-window-capture = 윈도우 캡처
+source-kind-video-capture = 비디오 캡처
+source-kind-image = 이미지
+source-kind-audio-input = 오디오 입력
+source-kind-audio-output = 오디오 출력
+action-add = 추가
+action-cancel = 취소
+
+preview-no-frame = 합성 프레임 없음
+preview-scale-decrease = 미리보기 배율 축소
+preview-scale-increase = 미리보기 배율 확대
+preview-scale-fit = 맞춤
+preview-fit-workspace = 작업 영역에 맞춤
+preview-reset-view = 보기 초기화
+preview-scale-options = 미리보기 배율 옵션

@@ -1,7 +1,9 @@
 use eframe::egui;
 
+use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resource_manager::ResourceManager;
+use crate::settings::{AppSettings, SettingsStore};
 use crate::snapshots::Snapshots;
 use crate::ui::{self, UiAction, UiState};
 
@@ -10,6 +12,9 @@ pub struct ObsApp {
     snapshots: Snapshots,
     project_manager: Option<ProjectManager>,
     resource_manager: Option<ResourceManager>,
+    localization: LocalizationManager,
+    settings: AppSettings,
+    settings_store: SettingsStore,
     ui_actions: Vec<UiAction>,
 }
 
@@ -17,6 +22,16 @@ impl ObsApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ui_state = UiState::default();
         cc.egui_ctx.set_theme(ui_state.theme());
+        install_locale_fonts(&cc.egui_ctx);
+        let settings_store = SettingsStore::for_current_user();
+        let settings = settings_store.load().unwrap_or_else(|error| {
+            eprintln!("could not load app settings: {error}");
+            AppSettings::default()
+        });
+        if let Err(error) = settings_store.save(&settings) {
+            eprintln!("could not save app settings: {error}");
+        }
+        let localization = LocalizationManager::new(settings.locale);
         let resource_repaint_ctx = cc.egui_ctx.clone();
         let project_repaint_ctx = cc.egui_ctx.clone();
 
@@ -29,6 +44,9 @@ impl ObsApp {
                 resource_repaint_ctx.request_repaint();
             })
             .ok(),
+            localization,
+            settings,
+            settings_store,
             ui_actions: Vec::new(),
         }
     }
@@ -70,6 +88,14 @@ impl ObsApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
             }
             UiAction::SetTheme(theme) => ctx.set_theme(theme),
+            UiAction::SetLocale(locale) => {
+                self.localization.set_locale(locale);
+                self.settings.locale = locale;
+                if let Err(error) = self.settings_store.save(&self.settings) {
+                    eprintln!("could not save app settings: {error}");
+                }
+                ctx.request_repaint();
+            }
         }
     }
 }
@@ -86,6 +112,7 @@ impl eframe::App for ObsApp {
             ui,
             &mut self.ui_state,
             &self.snapshots,
+            &self.localization,
             &mut self.ui_actions,
         );
 

@@ -14,9 +14,11 @@
 mod app;
 mod capture;
 mod domain;
+mod i18n;
 mod persistence;
 mod project;
 mod resource_manager;
+mod settings;
 mod snapshots;
 mod ui;
 

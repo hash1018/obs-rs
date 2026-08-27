@@ -1,17 +1,19 @@
 use eframe::egui;
 
+use crate::i18n::{LocalizationManager, TextKey};
+
 use super::state::{PreviewScaleMode, PreviewViewState};
 
 pub(super) const TOOLBAR_HEIGHT: f32 = 26.0;
 pub(super) const TOOLBAR_WIDTH: f32 = 210.0;
 pub(super) const TOOLBAR_GAP: f32 = 6.0;
 
-pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState) {
+pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState, i18n: &LocalizationManager) {
     ui.spacing_mut().item_spacing.x = 4.0;
     ui.horizontal_centered(|ui| {
         if ui
             .add_enabled(state.can_decrease(), egui::Button::new("−"))
-            .on_hover_text("Decrease viewport scale")
+            .on_hover_text(i18n.text(TextKey::PreviewScaleDecrease))
             .clicked()
         {
             state.decrease();
@@ -32,13 +34,13 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState) {
 
         if ui
             .add_enabled(state.can_increase(), egui::Button::new("+"))
-            .on_hover_text("Increase viewport scale")
+            .on_hover_text(i18n.text(TextKey::PreviewScaleIncrease))
             .clicked()
         {
             state.increase();
         }
 
-        let mut fit_text = egui::RichText::new("Fit");
+        let mut fit_text = egui::RichText::new(i18n.text(TextKey::PreviewScaleFit));
         if state.mode() == PreviewScaleMode::FitToWorkspace {
             fit_text = fit_text.strong();
         }
@@ -46,7 +48,7 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState) {
             if ui
                 .selectable_label(
                     state.mode() == PreviewScaleMode::FitToWorkspace,
-                    "Fit to Workspace",
+                    i18n.text(TextKey::PreviewFitWorkspace),
                 )
                 .clicked()
             {
@@ -61,12 +63,12 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState) {
                 }
             }
             ui.separator();
-            if ui.button("Reset View").clicked() {
+            if ui.button(i18n.text(TextKey::PreviewResetView)).clicked() {
                 state.reset();
                 ui.close();
             }
         })
         .response
-        .on_hover_text("Preview viewport scale options");
+        .on_hover_text(i18n.text(TextKey::PreviewScaleOptions));
     });
 }

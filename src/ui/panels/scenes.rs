@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use crate::domain::SceneId;
+use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::ScenesSnapshot;
 
@@ -19,7 +20,7 @@ struct RenameState {
     scene_id: SceneId,
     name: String,
     request_focus: bool,
-    error: Option<&'static str>,
+    error: Option<TextKey>,
 }
 
 #[derive(Clone, Copy)]
@@ -35,6 +36,7 @@ pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     state: &mut ScenesPanelState,
     snapshot: &ScenesSnapshot,
+    i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     if state.rename.as_ref().is_some_and(|rename| {
@@ -46,7 +48,7 @@ pub(in crate::ui) fn show(
         state.rename = None;
     }
 
-    show_toolbar(ui, snapshot, actions);
+    show_toolbar(ui, snapshot, i18n, actions);
 
     egui::ScrollArea::vertical()
         .id_salt("scenes_list")
@@ -60,7 +62,7 @@ pub(in crate::ui) fn show(
                     .as_ref()
                     .is_some_and(|rename| rename.scene_id == scene.id)
                 {
-                    show_rename_editor(ui, state, snapshot, scene.id, row_width, actions);
+                    show_rename_editor(ui, state, snapshot, scene.id, row_width, i18n, actions);
                     continue;
                 }
 
@@ -89,6 +91,7 @@ fn show_rename_editor(
     snapshot: &ScenesSnapshot,
     scene_id: SceneId,
     row_width: f32,
+    i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     let rename = state.rename.as_mut().expect("rename state must exist");
@@ -105,7 +108,7 @@ fn show_rename_editor(
         rename.error = None;
     }
     if let Some(error) = rename.error {
-        response = response.on_hover_text(error);
+        response = response.on_hover_text(i18n.text(error));
     }
     if rename.request_focus {
         response.request_focus();
@@ -121,13 +124,13 @@ fn show_rename_editor(
     } else if commit || lost_focus {
         let name = rename.name.trim();
         rename.error = if name.is_empty() {
-            Some("Scene name cannot be empty")
+            Some(TextKey::SceneNameEmpty)
         } else if snapshot
             .items
             .iter()
             .any(|scene| scene.id != scene_id && scene.name == name)
         {
-            Some("A scene with this name already exists")
+            Some(TextKey::SceneNameDuplicate)
         } else {
             None
         };
@@ -144,7 +147,12 @@ fn show_rename_editor(
     }
 }
 
-fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<UiAction>) {
+fn show_toolbar(
+    ui: &mut egui::Ui,
+    snapshot: &ScenesSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
     let selected = snapshot.selected_scene_id;
     let selected_index =
         selected.and_then(|selected| snapshot.items.iter().position(|scene| scene.id == selected));
@@ -159,13 +167,13 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                if tool_button(ui, ToolIcon::Add, "Add scene", true) {
+                if tool_button(ui, ToolIcon::Add, i18n.text(TextKey::SceneAdd), true) {
                     actions.push(scene_action(SceneCommand::Add));
                 }
                 if tool_button(
                     ui,
                     ToolIcon::Remove,
-                    "Remove selected scene",
+                    i18n.text(TextKey::SceneRemove),
                     selected.is_some() && snapshot.items.len() > 1,
                 ) && let Some(scene_id) = selected
                 {
@@ -174,7 +182,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                 if tool_button(
                     ui,
                     ToolIcon::Duplicate,
-                    "Duplicate selected scene",
+                    i18n.text(TextKey::SceneDuplicate),
                     selected.is_some(),
                 ) && let Some(scene_id) = selected
                 {
@@ -183,7 +191,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                 if tool_button(
                     ui,
                     ToolIcon::MoveUp,
-                    "Move selected scene up",
+                    i18n.text(TextKey::SceneMoveUp),
                     selected_index.is_some_and(|index| index > 0),
                 ) && let Some(scene_id) = selected
                 {
@@ -192,7 +200,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                 if tool_button(
                     ui,
                     ToolIcon::MoveDown,
-                    "Move selected scene down",
+                    i18n.text(TextKey::SceneMoveDown),
                     selected_index.is_some_and(|index| index + 1 < snapshot.items.len()),
                 ) && let Some(scene_id) = selected
                 {
@@ -206,7 +214,12 @@ fn scene_action(command: SceneCommand) -> UiAction {
     UiAction::Project(ProjectCommand::Scene(command))
 }
 
-fn tool_button(ui: &mut egui::Ui, icon: ToolIcon, tooltip: &str, enabled: bool) -> bool {
+fn tool_button(
+    ui: &mut egui::Ui,
+    icon: ToolIcon,
+    tooltip: impl Into<egui::WidgetText>,
+    enabled: bool,
+) -> bool {
     let response = ui.add_enabled(
         enabled,
         egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),

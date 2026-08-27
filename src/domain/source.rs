@@ -37,18 +37,6 @@ impl SourceKind {
             _ => None,
         }
     }
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::DisplayCapture => "Display Capture",
-            Self::WindowCapture => "Window Capture",
-            Self::VideoCapture => "Video Capture",
-            Self::Image => "Image",
-            Self::Color => "Color",
-            Self::AudioInput => "Audio Input",
-            Self::AudioOutput => "Audio Output",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

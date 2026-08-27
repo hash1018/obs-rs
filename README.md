@@ -54,3 +54,23 @@ Scene 선택
 Sources 도커의 위쪽 항목이 앞쪽에 합성된다. Preview에서 Source를 이동하거나 크기를 조절하는 동안에는 UI의 임시 Transform만 바꾸고, 마우스를 놓을 때 최종 Transform을 프로젝트 DB에 한 번 저장한다.
 
 현재는 Compositor와 Composite Frame이 아직 없으므로 Preview Viewport에 빈 프레임을 표시한다. UI는 Source를 Viewport 안에 직접 합성하지 않으며, 선택된 SceneItem의 Canvas 바깥 부분과 Transform Gizmo만 Editor Overlay로 표시한다. 향후 Compositor가 GPU Texture인 Composite Frame을 만들면 Preview UI는 그 Texture와 Editor Overlay를 함께 표시한다.
+
+## 다국어 지원
+
+UI 번역은 Fluent FTL 언어팩을 사용한다. 기본 언어와 fallback은 `en-US`이며 현재 `ko-KR`을 함께 제공한다.
+
+```text
+assets/locales/
+├─ en-US/app.ftl
+└─ ko-KR/app.ftl
+```
+
+UI 코드는 번역 문자열을 직접 갖지 않고 `TextKey`를 통해 `LocalizationManager`에 요청한다. `View → Language`에서 언어를 바꾸면 `UiAction::SetLocale`이 앱에 전달되고 다음 UI 프레임부터 선택한 언어가 적용된다. 번역 키가 선택 언어에 없으면 영어를 사용한다.
+
+선택 언어는 프로젝트 DB가 아닌 사용자 앱 설정에 저장한다. Windows에서는 `%APPDATA%/obs-rs/settings.toml`이며 다음 형식이다.
+
+```toml
+locale = "ko-KR"
+```
+
+한글 글리프는 OS의 CJK 시스템 폰트를 egui fallback으로 등록한다. 배포 패키지가 시스템 폰트에 의존하지 않아야 하는 단계에서는 라이선스를 확인한 전용 폰트 파일을 앱 asset으로 포함한다.

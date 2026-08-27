@@ -6,6 +6,7 @@ mod viewport_transform;
 use eframe::egui;
 
 use crate::domain::{ColorSourceSettings, SourceSettings, Transform};
+use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
@@ -21,6 +22,7 @@ pub(super) fn show(
     view_state: &mut PreviewViewState,
     editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     egui::CentralPanel::default()
@@ -51,7 +53,7 @@ pub(super) fn show(
 
             handle_pointer(ui, &response, viewport, editor, snapshot, actions);
             paint_editor_overflow(ui, workspace_rect, viewport, editor, snapshot);
-            paint_composite_frame_placeholder(ui, viewport);
+            paint_composite_frame_placeholder(ui, viewport, i18n);
             paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
 
             let toolbar_rect = egui::Rect::from_min_size(
@@ -68,7 +70,7 @@ pub(super) fn show(
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
             toolbar_ui.set_clip_rect(toolbar_rect);
-            toolbar::show(&mut toolbar_ui, view_state);
+            toolbar::show(&mut toolbar_ui, view_state, i18n);
         });
 }
 
@@ -179,7 +181,11 @@ fn begin_drag(
     }
 }
 
-fn paint_composite_frame_placeholder(ui: &egui::Ui, viewport: ViewportTransform) {
+fn paint_composite_frame_placeholder(
+    ui: &egui::Ui,
+    viewport: ViewportTransform,
+    i18n: &LocalizationManager,
+) {
     let painter = ui.painter().with_clip_rect(viewport.viewport());
     painter.rect_filled(viewport.viewport(), 0.0, egui::Color32::BLACK);
     painter.rect_stroke(
@@ -191,7 +197,7 @@ fn paint_composite_frame_placeholder(ui: &egui::Ui, viewport: ViewportTransform)
     painter.text(
         viewport.viewport().center(),
         egui::Align2::CENTER_CENTER,
-        "No composite frame",
+        i18n.text(TextKey::PreviewNoFrame),
         egui::FontId::proportional(14.0),
         egui::Color32::from_gray(132),
     );

@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use crate::domain::{SceneId, SourceKind};
+use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 use crate::ui::UiAction;
@@ -24,6 +25,7 @@ pub(in crate::ui) fn show(
     state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     if state.scene_id != snapshot.scene_id {
@@ -39,12 +41,15 @@ pub(in crate::ui) fn show(
     }
     state.known_item_count = snapshot.items.len();
 
-    show_toolbar(ui, state, snapshot);
+    show_toolbar(ui, state, snapshot, i18n);
 
     if snapshot.items.is_empty() {
-        let scene_name = snapshot.scene_name.as_deref().unwrap_or("selected scene");
+        let fallback_name = i18n.text(TextKey::SourceSelectedScene);
+        let scene_name = snapshot.scene_name.as_deref().unwrap_or(&fallback_name);
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("scene", scene_name);
         ui.centered_and_justified(|ui| {
-            ui.weak(format!("No sources in {scene_name}"));
+            ui.weak(i18n.text_with(TextKey::SourceEmpty, &args));
         });
     } else {
         egui::ScrollArea::vertical()
@@ -52,20 +57,25 @@ pub(in crate::ui) fn show(
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for item in &snapshot.items {
-                    show_source_row(ui, editor, item);
+                    show_source_row(ui, editor, item, i18n);
                 }
             });
     }
 
-    show_add_dialog(ui.ctx(), state, snapshot, actions);
+    show_add_dialog(ui.ctx(), state, snapshot, i18n, actions);
 }
 
-fn show_source_row(ui: &mut egui::Ui, editor: &mut SceneEditorState, item: &SceneItemSnapshot) {
+fn show_source_row(
+    ui: &mut egui::Ui,
+    editor: &mut SceneEditorState,
+    item: &SceneItemSnapshot,
+    i18n: &LocalizationManager,
+) {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), SOURCE_ROW_HEIGHT),
         egui::Sense::click(),
     );
-    let response = response.on_hover_text(item.kind.display_name());
+    let response = response.on_hover_text(i18n.text(source_kind_key(item.kind)));
     let selected = editor.selected_item_id() == Some(item.id);
     if selected {
         ui.painter()
@@ -97,7 +107,24 @@ fn show_source_row(ui: &mut egui::Ui, editor: &mut SceneEditorState, item: &Scen
     }
 }
 
-fn show_toolbar(ui: &mut egui::Ui, state: &mut SourcesPanelState, snapshot: &SourcesSnapshot) {
+fn source_kind_key(kind: SourceKind) -> TextKey {
+    match kind {
+        SourceKind::DisplayCapture => TextKey::SourceKindDisplayCapture,
+        SourceKind::WindowCapture => TextKey::SourceKindWindowCapture,
+        SourceKind::VideoCapture => TextKey::SourceKindVideoCapture,
+        SourceKind::Image => TextKey::SourceKindImage,
+        SourceKind::Color => TextKey::SourceKindColor,
+        SourceKind::AudioInput => TextKey::SourceKindAudioInput,
+        SourceKind::AudioOutput => TextKey::SourceKindAudioOutput,
+    }
+}
+
+fn show_toolbar(
+    ui: &mut egui::Ui,
+    state: &mut SourcesPanelState,
+    snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
+) {
     egui::Panel::bottom("sources_toolbar")
         .exact_size(TOOLBAR_HEIGHT)
         .resizable(false)
@@ -128,7 +155,10 @@ fn show_toolbar(ui: &mut egui::Ui, state: &mut SourcesPanelState, snapshot: &Sou
                     ],
                     stroke,
                 );
-                if response.on_hover_text("Add source").clicked() {
+                if response
+                    .on_hover_text(i18n.text(TextKey::SourceAdd))
+                    .clicked()
+                {
                     state.add_dialog_open = true;
                 }
             });
@@ -139,6 +169,7 @@ fn show_add_dialog(
     ctx: &egui::Context,
     state: &mut SourcesPanelState,
     snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     if !state.add_dialog_open {
@@ -148,7 +179,7 @@ fn show_add_dialog(
     let mut open = true;
     let mut add_color = false;
     let mut cancel = false;
-    egui::Window::new("Add Source")
+    egui::Window::new(i18n.text(TextKey::SourceAddTitle))
         .id(egui::Id::new("add_source_dialog"))
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .collapsible(false)
@@ -156,20 +187,20 @@ fn show_add_dialog(
         .open(&mut open)
         .show(ctx, |ui| {
             ui.set_min_width(280.0);
-            ui.label("Source type");
+            ui.label(i18n.text(TextKey::SourceType));
             ui.separator();
             if ui
-                .selectable_label(true, SourceKind::Color.display_name())
+                .selectable_label(true, i18n.text(TextKey::SourceKindColor))
                 .double_clicked()
             {
                 add_color = true;
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button("Add").clicked() {
+                if ui.button(i18n.text(TextKey::ActionAdd)).clicked() {
                     add_color = true;
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(i18n.text(TextKey::ActionCancel)).clicked() {
                     cancel = true;
                 }
             });

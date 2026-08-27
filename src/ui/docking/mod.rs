@@ -3,10 +3,8 @@ mod renderer;
 
 use eframe::egui;
 
-use crate::snapshots::Snapshots;
-
 use super::{
-    UiAction,
+    UiAction, UiResources,
     editor::SceneEditorState,
     panels::{scenes::ScenesPanelState, sources::SourcesPanelState},
 };
@@ -19,7 +17,7 @@ pub(super) fn show(
     scenes_state: &mut ScenesPanelState,
     sources_state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
-    snapshots: &Snapshots,
+    resources: &UiResources<'_>,
     actions: &mut Vec<UiAction>,
 ) {
     renderer::show(
@@ -28,7 +26,7 @@ pub(super) fn show(
         scenes_state,
         sources_state,
         editor,
-        snapshots,
+        resources,
         actions,
     );
 }

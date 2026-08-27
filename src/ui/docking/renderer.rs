@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use eframe::egui;
 
 use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
+use crate::i18n::{LocalizationManager, TextKey};
 use crate::snapshots::Snapshots;
 use crate::ui::editor::SceneEditorState;
-use crate::ui::{UiAction, panels};
+use crate::ui::{UiAction, UiResources, panels};
 use panels::scenes::ScenesPanelState;
 use panels::sources::SourcesPanelState;
 
@@ -46,6 +47,7 @@ struct DockContent<'a> {
     sources_state: &'a mut SourcesPanelState,
     editor: &'a mut SceneEditorState,
     snapshots: &'a Snapshots,
+    i18n: &'a LocalizationManager,
     actions: &'a mut Vec<UiAction>,
 }
 
@@ -61,7 +63,7 @@ pub(super) fn show(
     scenes_state: &mut ScenesPanelState,
     sources_state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
-    snapshots: &Snapshots,
+    resources: &UiResources<'_>,
     actions: &mut Vec<UiAction>,
 ) {
     let workspace = ui.available_rect_before_wrap();
@@ -72,7 +74,8 @@ pub(super) fn show(
         scenes_state,
         sources_state,
         editor,
-        snapshots,
+        snapshots: resources.snapshots,
+        i18n: resources.i18n,
         actions,
     };
 
@@ -213,7 +216,10 @@ fn show_panel(
     child.painter().text(
         title_rect.left_center(),
         egui::Align2::LEFT_CENTER,
-        panel.title(),
+        content.i18n.text(match panel {
+            DockPanel::Scenes => TextKey::DockScenes,
+            DockPanel::Sources => TextKey::DockSources,
+        }),
         egui::TextStyle::Heading.resolve(child.style()),
         child.visuals().strong_text_color(),
     );
@@ -225,6 +231,7 @@ fn show_panel(
                 &mut child,
                 content.scenes_state,
                 &content.snapshots.scenes,
+                content.i18n,
                 content.actions,
             );
         }
@@ -234,6 +241,7 @@ fn show_panel(
                 content.sources_state,
                 content.editor,
                 &content.snapshots.sources,
+                content.i18n,
                 content.actions,
             );
         }

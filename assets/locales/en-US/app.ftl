@@ -1,0 +1,50 @@
+menu-file = File
+menu-exit = Exit
+menu-view = View
+menu-fullscreen = Fullscreen
+menu-docks = Docks
+menu-theme = Theme
+theme-system = System
+theme-light = Light
+theme-dark = Dark
+menu-language = Language
+language-english = English
+language-korean = Korean
+menu-help = Help
+menu-about = About obs-rs
+about-description = Live capture and recording, built with media-pp.
+
+dock-scenes = Scenes
+dock-sources = Sources
+status-ready = Ready
+
+scene-name-empty = Scene name cannot be empty
+scene-name-duplicate = A scene with this name already exists
+scene-add = Add scene
+scene-remove = Remove selected scene
+scene-duplicate = Duplicate selected scene
+scene-move-up = Move selected scene up
+scene-move-down = Move selected scene down
+
+source-selected-scene = selected scene
+source-empty = No sources in { $scene }
+source-add = Add source
+source-add-title = Add Source
+source-type = Source type
+source-kind-color = Color
+source-kind-display-capture = Display Capture
+source-kind-window-capture = Window Capture
+source-kind-video-capture = Video Capture
+source-kind-image = Image
+source-kind-audio-input = Audio Input
+source-kind-audio-output = Audio Output
+action-add = Add
+action-cancel = Cancel
+
+preview-no-frame = No composite frame
+preview-scale-decrease = Decrease viewport scale
+preview-scale-increase = Increase viewport scale
+preview-scale-fit = Fit
+preview-fit-workspace = Fit to Workspace
+preview-reset-view = Reset View
+preview-scale-options = Preview viewport scale options

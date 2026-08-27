@@ -65,13 +65,6 @@ impl DockState {
 }
 
 impl DockPanel {
-    pub(super) fn title(self) -> &'static str {
-        match self {
-            Self::Scenes => "Scenes",
-            Self::Sources => "Sources",
-        }
-    }
-
     pub(super) fn min_size(self) -> egui::Vec2 {
         match self {
             Self::Scenes | Self::Sources => egui::vec2(180.0, 120.0),

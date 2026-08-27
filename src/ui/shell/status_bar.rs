@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use eframe::egui;
 
+use crate::i18n::{LocalizationManager, TextKey};
 use crate::snapshots::StatusSnapshot;
 
-pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot) {
+pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
     egui::Panel::bottom("status_bar")
         .exact_size(26.0)
         .frame(
@@ -14,7 +15,7 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot) {
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label("Ready");
+                ui.label(i18n.text(TextKey::StatusReady));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.monospace(format_fps(status.active_fps, status.target_fps));
                     ui.separator();

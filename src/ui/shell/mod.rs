@@ -3,34 +3,33 @@ mod status_bar;
 
 use eframe::egui;
 
-use crate::snapshots::Snapshots;
-
-use super::{UiAction, UiState, docking};
+use super::{UiAction, UiResources, UiState, docking};
 
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
-    snapshots: &Snapshots,
+    resources: &UiResources<'_>,
     actions: &mut Vec<UiAction>,
 ) {
-    state.editor.sync(&snapshots.sources);
-    menu_bar::show(ui, state, actions);
-    status_bar::show(ui, &snapshots.status);
+    state.editor.sync(&resources.snapshots.sources);
+    menu_bar::show(ui, state, resources.i18n, actions);
+    status_bar::show(ui, &resources.snapshots.status, resources.i18n);
     docking::show(
         ui,
         &mut state.dock_layout,
         &mut state.scenes,
         &mut state.sources,
         &mut state.editor,
-        snapshots,
+        resources,
         actions,
     );
     super::preview::show(
         ui,
         &mut state.preview,
         &mut state.editor,
-        &snapshots.sources,
+        &resources.snapshots.sources,
+        resources.i18n,
         actions,
     );
-    menu_bar::show_about(ui, state);
+    menu_bar::show_about(ui, state, resources.i18n);
 }
