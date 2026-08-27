@@ -1,0 +1,118 @@
+//! Opening one capture Source and wiring it into the compositor.
+//!
+//! This is the one part of the engine that is genuinely per-platform: which
+//! `media-pp` element captures a display, and what a stored
+//! `DisplayCaptureTarget` means to it, differ by operating system. Everything
+//! around it — reconciling against the snapshot, layer placement, the frame
+//! handoff — does not, and stays out of here.
+
+use std::error::Error;
+
+use std::sync::Arc;
+
+use media_pp::{
+    elements::{SwVideoCompositorHandle, SwVideoLayerHandle, VideoFit, VideoLayer, VideoRect},
+    pipeline::Pipeline,
+};
+
+use crate::snapshots::SceneItemSnapshot;
+
+pub(super) type OpenError = Box<dyn Error + Send + Sync>;
+
+/// A capture Source that is running, and the controls for its layer.
+pub(super) struct OpenSource {
+    pub(super) pipeline: Arc<Pipeline>,
+    pub(super) layer: SwVideoLayerHandle,
+    pub(super) name: String,
+}
+
+/// Where a SceneItem's layer sits on the Canvas, and in what order.
+///
+/// The rectangle already carries the Source's own size scaled by the item's
+/// Transform, so the fit is [`VideoFit::Stretch`]: whatever aspect the user
+/// asked for is expressed in that rectangle, and letterboxing inside it would
+/// second-guess them.
+pub(super) fn layer_for(item: &SceneItemSnapshot, z_index: i32) -> VideoLayer {
+    let [x, y, width, height] = item.canvas_rect(item.transform);
+    let mut layer = VideoLayer::new(VideoRect::new(
+        x.round() as i32,
+        y.round() as i32,
+        (width.round() as u32).max(1),
+        (height.round() as u32).max(1),
+    ));
+    layer.z_index = z_index;
+    layer.visible = item.visible;
+    layer.fit = VideoFit::Stretch;
+    layer
+}
+
+/// The name a SceneItem's compositor input is registered under.
+fn input_name(item: &SceneItemSnapshot) -> String {
+    format!("scene-item-{}", item.id.0)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn open_display_capture(
+    handle: &SwVideoCompositorHandle,
+    item: &SceneItemSnapshot,
+    layer: VideoLayer,
+    fps: u32,
+) -> Result<OpenSource, OpenError> {
+    use media_pp::elements::{
+        CaptureSourceKind, PipeWireScreenCaptureOptions, PipeWireScreenCaptureSource,
+        SwVideoCompositorInput,
+    };
+
+    use crate::domain::{DisplayCaptureTarget, SourceSettings};
+
+    let SourceSettings::DisplayCapture(settings) = &item.settings else {
+        return Err("scene item is not a display capture".into());
+    };
+    let restore_token = match &settings.target {
+        DisplayCaptureTarget::Portal { restore_token } => restore_token.clone(),
+        // An X11 display name means nothing to the portal, which owns the
+        // choice on Wayland. Leaving the token unset makes it prompt, the only
+        // thing it can do with a target it cannot resolve.
+        DisplayCaptureTarget::MonitorName(_) => None,
+    };
+
+    let name = input_name(item);
+    // Blocking, and it can sit here indefinitely: an unrecognised token makes
+    // the portal show its dialog and wait for the user. Sources are opened one
+    // at a time, so the rest wait behind whichever one is asking.
+    let (source, _format, _refreshed_token) = PipeWireScreenCaptureSource::open(
+        name.clone(),
+        PipeWireScreenCaptureOptions {
+            fps,
+            source_kind: CaptureSourceKind::Monitor,
+            include_cursor: false,
+            restore_token,
+        },
+    )?;
+
+    let SwVideoCompositorInput { sink, layer } = handle
+        .add_source(name.clone(), layer)?
+        .ok_or("the compositor is gone")?;
+    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+        let branch = context.branch().to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    pipeline.run()?;
+
+    Ok(OpenSource {
+        pipeline,
+        layer,
+        name,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn open_display_capture(
+    _handle: &SwVideoCompositorHandle,
+    _item: &SceneItemSnapshot,
+    _layer: VideoLayer,
+    _fps: u32,
+) -> Result<OpenSource, OpenError> {
+    Err("display capture is not connected on this platform yet".into())
+}

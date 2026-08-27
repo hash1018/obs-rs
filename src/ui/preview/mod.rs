@@ -360,18 +360,8 @@ fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
 }
 
 fn item_canvas_rect(item: &SceneItemSnapshot, transform: Transform) -> egui::Rect {
-    let uncropped = egui::vec2(item.source_size[0], item.source_size[1]);
-    let cropped = egui::vec2(
-        (uncropped.x - item.crop.left - item.crop.right).max(1.0),
-        (uncropped.y - item.crop.top - item.crop.bottom).max(1.0),
-    );
-    let size = egui::vec2(
-        cropped.x * transform.scale[0].max(0.001),
-        cropped.y * transform.scale[1].max(0.001),
-    );
-    let anchor = egui::vec2(transform.anchor[0], transform.anchor[1]);
-    let position = egui::pos2(transform.position[0], transform.position[1]);
-    egui::Rect::from_min_size(position - size * anchor, size)
+    let [x, y, width, height] = item.canvas_rect(transform);
+    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height))
 }
 
 fn transform_from_rect(

@@ -12,9 +12,13 @@
 //! `Send + Sync` and internally reference-counted, so the engine shares
 //! eframe's device rather than opening a second one.
 
+mod source;
+
+use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU32, Ordering},
+    mpsc::{self, RecvTimeoutError, Sender},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -25,12 +29,15 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     color::Color,
-    elements::{AppSink, SwVideoCompositor, VideoCompositorOptions},
+    elements::{AppSink, SwVideoCompositor, SwVideoCompositorHandle, VideoCompositorOptions},
     ffmpeg,
     pipeline::Pipeline,
 };
 
-use crate::domain::SceneCanvas;
+use crate::domain::{SceneCanvas, SceneItemId, SourceKind};
+use crate::snapshots::SourcesSnapshot;
+
+use source::{OpenSource, layer_for, open_display_capture};
 
 /// The compositor's output rate. Independent of the egui repaint rate: egui
 /// redraws when something asks it to, this advances on the compositor's own
@@ -66,6 +73,7 @@ pub struct EngineManager {
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     /// `f32` bits, so the UI can read the rate without a lock.
     active_fps: Arc<AtomicU32>,
+    scenes: Sender<SourcesSnapshot>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -80,13 +88,22 @@ impl EngineManager {
         let frame = Arc::new(ArcSwapOption::empty());
         let active_fps = Arc::new(AtomicU32::new(0));
         let stop = Arc::new(AtomicBool::new(false));
+        let (scenes, scene_rx) = mpsc::channel();
 
         let worker = thread::Builder::new().name("engine".to_owned()).spawn({
             let frame = Arc::clone(&frame);
             let active_fps = Arc::clone(&active_fps);
             let stop = Arc::clone(&stop);
             move || {
-                if let Err(error) = run(render_state, size, frame, active_fps, &stop, wake_ui) {
+                if let Err(error) = run(
+                    render_state,
+                    size,
+                    frame,
+                    active_fps,
+                    scene_rx,
+                    &stop,
+                    wake_ui,
+                ) {
                     // The Preview keeps showing "no frame" rather than the
                     // application failing to start over a compositor.
                     eprintln!("engine stopped: {error}");
@@ -97,9 +114,20 @@ impl EngineManager {
         Ok(Self {
             frame,
             active_fps,
+            scenes,
             stop,
             worker: Some(worker),
         })
+    }
+
+    /// Tells the engine what the selected Scene now contains.
+    ///
+    /// Sources are reconciled against the project snapshot rather than driven
+    /// by the actions that changed it: a restart replays no actions but must
+    /// still open everything the project holds, and selecting a Scene replaces
+    /// the whole set at once.
+    pub fn apply(&self, sources: &SourcesSnapshot) {
+        let _ = self.scenes.send(sources.clone());
     }
 
     /// The most recent composited frame, or `None` before the first one.
@@ -133,6 +161,7 @@ fn run(
     size: [u32; 2],
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     active_fps: Arc<AtomicU32>,
+    scenes: mpsc::Receiver<SourcesSnapshot>,
     stop: &AtomicBool,
     wake_ui: impl Fn() + Send + 'static,
 ) -> media_pp::Result<()> {
@@ -162,7 +191,7 @@ fn run(
         wgpu::FilterMode::Linear,
     );
 
-    let (compositor, _handle) = SwVideoCompositor::new(
+    let (compositor, handle) = SwVideoCompositor::new(
         "preview-compositor",
         VideoCompositorOptions {
             width,
@@ -196,11 +225,83 @@ fn run(
     })?;
     pipeline.run()?;
 
+    let mut open = HashMap::new();
     while !stop.load(Ordering::Acquire) {
-        thread::park_timeout(Duration::from_millis(100));
+        match scenes.recv_timeout(Duration::from_millis(100)) {
+            Ok(snapshot) => {
+                // Only the newest snapshot describes the project now; the ones
+                // behind it were already superseded before this woke up.
+                let mut latest = snapshot;
+                while let Ok(newer) = scenes.try_recv() {
+                    latest = newer;
+                }
+                reconcile(&handle, &mut open, &latest);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    for (_, state) in open.drain() {
+        if let SourceState::Open(source) = state {
+            source.pipeline.stop();
+        }
     }
     pipeline.stop();
     Ok(())
+}
+
+enum SourceState {
+    Open(OpenSource),
+    /// Opening failed once and will not be retried.
+    ///
+    /// A retry loop here would reopen the portal dialog on every snapshot,
+    /// which is a stream of modal windows rather than an error message.
+    Failed,
+}
+
+/// Brings the running Sources in line with what the project now holds.
+fn reconcile(
+    handle: &SwVideoCompositorHandle,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    snapshot: &SourcesSnapshot,
+) {
+    let count = snapshot.items.len();
+    for (index, item) in snapshot.items.iter().enumerate() {
+        if item.kind != SourceKind::DisplayCapture {
+            continue;
+        }
+        // The snapshot is ordered front-most first, and the compositor draws
+        // larger z later, so the two run opposite ways.
+        let layer = layer_for(item, (count - index) as i32);
+        match open.get(&item.id) {
+            Some(SourceState::Open(source)) => {
+                let _ = source.layer.set_layer(layer);
+            }
+            Some(SourceState::Failed) => {}
+            None => {
+                let state = match open_display_capture(handle, item, layer, TARGET_FPS) {
+                    Ok(source) => SourceState::Open(source),
+                    Err(error) => {
+                        eprintln!("could not open \"{}\": {error}", item.name);
+                        SourceState::Failed
+                    }
+                };
+                open.insert(item.id, state);
+            }
+        }
+    }
+
+    open.retain(|id, state| {
+        if snapshot.items.iter().any(|item| item.id == *id) {
+            return true;
+        }
+        if let SourceState::Open(source) = state {
+            source.pipeline.stop();
+            handle.remove_source(&source.name);
+        }
+        false
+    });
 }
 
 /// Copies one composited frame into the texture the UI samples.

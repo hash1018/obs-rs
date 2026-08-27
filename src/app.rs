@@ -86,6 +86,9 @@ impl ObsApp {
                 ProjectUpdate::Snapshot { scenes, sources } => {
                     self.snapshots.scenes = scenes;
                     self.snapshots.sources = sources;
+                    if let Some(engine) = &self.engine {
+                        engine.apply(&self.snapshots.sources);
+                    }
                 }
                 ProjectUpdate::Error(error) => eprintln!("project database error: {error}"),
             }
