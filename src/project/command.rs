@@ -17,6 +17,8 @@ pub enum SourceCommand {
     MoveUp(SceneItemId),
     MoveDown(SceneItemId),
     SetLocked(SceneItemId, bool),
+    /// Replaces the portal token a Display Capture reopens with.
+    SetRestoreToken(SceneItemId, Option<String>),
     SetTransform(SceneItemId, Transform),
     SetVisible(SceneItemId, bool),
 }

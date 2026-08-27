@@ -28,6 +28,9 @@ pub(super) struct OpenSource {
     pub(super) pipeline: Arc<Pipeline>,
     pub(super) layer: CudaVideoLayerHandle,
     pub(super) name: String,
+    /// The token the portal handed back, when it differs from the one it was
+    /// given. `None` means the stored token is still current.
+    pub(super) refreshed_token: Option<Option<String>>,
 }
 
 /// Where a SceneItem's layer sits on the Canvas, and in what order.
@@ -92,16 +95,20 @@ pub(super) fn open_display_capture(
     // GPU capture: the desktop lands in CUDA surfaces and never reaches system
     // memory. It negotiates DMA-BUF only and fails rather than falling back,
     // which is the point — a silent CPU path would undo the whole arrangement.
-    let (source, format, _refreshed_token) = PipeWireScreenCaptureSource::open_gpu(
+    let (source, format, refreshed_token) = PipeWireScreenCaptureSource::open_gpu(
         name.clone(),
         PipeWireScreenCaptureOptions {
             fps,
             source_kind: CaptureSourceKind::Monitor,
             include_cursor: false,
-            restore_token,
+            restore_token: restore_token.clone(),
         },
         device,
     )?;
+    // A compositor may issue a fresh token on every restore. Keeping the old
+    // one then means prompting on every launch, which is the thing persisting
+    // it was for.
+    let refreshed_token = (refreshed_token != restore_token).then_some(refreshed_token);
 
     // Capture gives BGRA and the compositor works in NV12; nothing between
     // them converts, so this element is not optional.
@@ -124,6 +131,7 @@ pub(super) fn open_display_capture(
         pipeline,
         layer,
         name,
+        refreshed_token,
     })
 }
 

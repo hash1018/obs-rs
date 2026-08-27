@@ -40,6 +40,7 @@ use media_pp::{
 };
 
 use crate::domain::{SceneCanvas, SceneItemId, SourceKind, Transform};
+use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::SourcesSnapshot;
 
 use nv12::Nv12Target;
@@ -71,6 +72,12 @@ enum EngineCommand {
     Dragging(SceneItemId, Transform),
 }
 
+/// The two slots the engine writes and the UI reads, which travel together.
+struct Published {
+    frame: Arc<ArcSwapOption<CompositeFrame>>,
+    active_fps: Arc<AtomicU32>,
+}
+
 pub struct EngineManager {
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     /// `f32` bits, so the UI can read the rate without a lock.
@@ -84,6 +91,7 @@ impl EngineManager {
     pub fn spawn(
         render_state: RenderState,
         canvas: SceneCanvas,
+        project: Option<ProjectDispatcher>,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let size = [canvas.width as u32, canvas.height as u32];
@@ -97,11 +105,12 @@ impl EngineManager {
             let active_fps = Arc::clone(&active_fps);
             let stop = Arc::clone(&stop);
             move || {
+                let published = Published { frame, active_fps };
                 if let Err(error) = run(
                     render_state,
                     size,
-                    frame,
-                    active_fps,
+                    project,
+                    published,
                     command_rx,
                     &stop,
                     wake_ui,
@@ -174,8 +183,8 @@ impl Drop for EngineManager {
 fn run(
     render_state: RenderState,
     size: [u32; 2],
-    frame: Arc<ArcSwapOption<CompositeFrame>>,
-    active_fps: Arc<AtomicU32>,
+    project: Option<ProjectDispatcher>,
+    published: Published,
     commands: mpsc::Receiver<EngineCommand>,
     stop: &AtomicBool,
     wake_ui: impl Fn() + Send + Sync + 'static,
@@ -223,8 +232,9 @@ fn run(
     // thread nor this one does the conversion.
     let wgpu_device = render_state.device.clone();
     let queue = render_state.queue.clone();
-    let published = Arc::clone(&frame);
-    let reported_fps = Arc::clone(&active_fps);
+    let Published { frame, active_fps } = published;
+    let idle_frame = Arc::clone(&frame);
+    let idle_fps = Arc::clone(&active_fps);
     let wake_sink = Arc::clone(&wake_ui);
     let mut rate = FrameRate::new();
     let sink = AppSink::new("preview-out", move |buffer| {
@@ -269,12 +279,25 @@ fn run(
     while !stop.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => {
-                let mut reconciled =
-                    apply_command(&device, &handle, &mut open, &mut scene, command);
+                let mut reconciled = apply_command(
+                    &device,
+                    &handle,
+                    project.as_ref(),
+                    &mut open,
+                    &mut scene,
+                    command,
+                );
                 // Whatever else is already waiting, so a gesture's newer
                 // positions are not left a poll behind the pointer.
                 while let Ok(next) = commands.try_recv() {
-                    reconciled |= apply_command(&device, &handle, &mut open, &mut scene, next);
+                    reconciled |= apply_command(
+                        &device,
+                        &handle,
+                        project.as_ref(),
+                        &mut open,
+                        &mut scene,
+                        next,
+                    );
                 }
                 if !reconciled {
                     continue;
@@ -295,8 +318,8 @@ fn run(
                         // The texture still holds the Scene that was showing a
                         // moment ago, and leaving it up would attribute another
                         // Scene's picture to this one.
-                        published.store(None);
-                        reported_fps.store(0, Ordering::Relaxed);
+                        idle_frame.store(None);
+                        idle_fps.store(0, Ordering::Relaxed);
                         wake_ui();
                     }
                     compositing = wanted;
@@ -321,6 +344,7 @@ fn run(
 fn apply_command(
     device: &CudaDevice,
     handle: &CudaVideoCompositorHandle,
+    project: Option<&ProjectDispatcher>,
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
     command: EngineCommand,
@@ -328,7 +352,7 @@ fn apply_command(
     match command {
         EngineCommand::Scene(snapshot) => {
             *scene = *snapshot;
-            reconcile(device, handle, open, scene);
+            reconcile(device, handle, project, open, scene);
             true
         }
         EngineCommand::Dragging(item_id, transform) => {
@@ -359,6 +383,7 @@ enum SourceState {
 fn reconcile(
     device: &CudaDevice,
     handle: &CudaVideoCompositorHandle,
+    project: Option<&ProjectDispatcher>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
 ) {
@@ -377,7 +402,20 @@ fn reconcile(
             Some(SourceState::Failed) => {}
             None => {
                 let state = match open_display_capture(device, handle, item, layer, TARGET_FPS) {
-                    Ok(source) => SourceState::Open(source),
+                    Ok(source) => {
+                        // The portal may hand back a different token than the
+                        // one it was given. Keeping the old one would mean
+                        // prompting on every launch, which is the thing
+                        // persisting it was for.
+                        if let (Some(project), Some(token)) =
+                            (project, source.refreshed_token.clone())
+                        {
+                            project.dispatch(ProjectCommand::Source(
+                                SourceCommand::SetRestoreToken(item.id, token),
+                            ));
+                        }
+                        SourceState::Open(source)
+                    }
                     Err(error) => {
                         eprintln!("could not open \"{}\": {error}", item.name);
                         SourceState::Failed

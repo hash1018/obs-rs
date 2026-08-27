@@ -20,6 +20,22 @@ pub enum ProjectUpdate {
     Error(String),
 }
 
+/// Lets something other than the UI change the project.
+///
+/// The engine needs one: opening a capture Source can hand back a fresher
+/// restore token than the one it was given, and that belongs in the database
+/// rather than in the memory of the run that received it.
+#[derive(Clone)]
+pub struct ProjectDispatcher {
+    command_tx: Sender<ManagerMessage>,
+}
+
+impl ProjectDispatcher {
+    pub fn dispatch(&self, command: ProjectCommand) {
+        let _ = self.command_tx.send(ManagerMessage::Execute(command));
+    }
+}
+
 pub struct ProjectManager {
     command_tx: Sender<ManagerMessage>,
     update_rx: Receiver<ProjectUpdate>,
@@ -43,7 +59,13 @@ impl ProjectManager {
     }
 
     pub fn dispatch(&self, command: ProjectCommand) {
-        let _ = self.command_tx.send(ManagerMessage::Execute(command));
+        self.dispatcher().dispatch(command);
+    }
+
+    pub fn dispatcher(&self) -> ProjectDispatcher {
+        ProjectDispatcher {
+            command_tx: self.command_tx.clone(),
+        }
     }
 
     pub fn latest(&self) -> Option<ProjectUpdate> {
@@ -120,6 +142,9 @@ fn handle_source_command(
         SourceCommand::MoveUp(scene_item_id) => SourceStore::move_up(transaction, scene_item_id),
         SourceCommand::MoveDown(scene_item_id) => {
             SourceStore::move_down(transaction, scene_item_id)
+        }
+        SourceCommand::SetRestoreToken(scene_item_id, token) => {
+            SourceStore::set_restore_token(transaction, scene_item_id, token.as_deref())
         }
         SourceCommand::SetLocked(scene_item_id, locked) => {
             SourceStore::set_locked(transaction, scene_item_id, locked)
@@ -541,6 +566,75 @@ mod tests {
                 .map(|item| item.name)
                 .collect::<Vec<_>>(),
             ["Color Source", "Color Source 3"]
+        );
+    }
+
+    #[test]
+    fn a_refreshed_portal_token_replaces_the_stored_one() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddDisplayCapture {
+                scene_id,
+                settings: crate::domain::DisplayCaptureSettings {
+                    target: crate::domain::DisplayCaptureTarget::Portal {
+                        restore_token: Some("first".into()),
+                    },
+                    size_hint: None,
+                },
+            },
+        )
+        .unwrap();
+        // A monitor target has no token and the schema forbids giving it one,
+        // so the update has to leave it alone rather than fail the whole
+        // transaction that carried it.
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddDisplayCapture {
+                scene_id,
+                settings: crate::domain::DisplayCaptureSettings {
+                    target: crate::domain::DisplayCaptureTarget::MonitorName("DP-1".into()),
+                    size_hint: None,
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        let monitor = sources.items[0].id;
+        let portal = sources.items[1].id;
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetRestoreToken(portal, Some("second".into())),
+        )
+        .unwrap();
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetRestoreToken(monitor, Some("nonsense".into())),
+        )
+        .unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(
+            sources.items[1].settings,
+            crate::domain::SourceSettings::DisplayCapture(crate::domain::DisplayCaptureSettings {
+                target: crate::domain::DisplayCaptureTarget::Portal {
+                    restore_token: Some("second".into())
+                },
+                size_hint: None,
+            })
+        );
+        assert_eq!(
+            sources.items[0].settings,
+            crate::domain::SourceSettings::DisplayCapture(crate::domain::DisplayCaptureSettings {
+                target: crate::domain::DisplayCaptureTarget::MonitorName("DP-1".into()),
+                size_hint: None,
+            })
         );
     }
 

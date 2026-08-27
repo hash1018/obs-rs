@@ -46,11 +46,17 @@ impl ObsApp {
         #[cfg(target_os = "linux")]
         let picker_repaint_ctx = cc.egui_ctx.clone();
 
+        // Built before the struct so the engine can be handed a dispatcher:
+        // opening a capture Source can produce a fresher restore token, and
+        // that belongs in the project rather than in this run's memory.
+        let project_manager =
+            ProjectManager::spawn(move || project_repaint_ctx.request_repaint()).ok();
+        let project_dispatcher = project_manager.as_ref().map(ProjectManager::dispatcher);
+
         Self {
             ui_state,
             snapshots: Snapshots::default(),
-            project_manager: ProjectManager::spawn(move || project_repaint_ctx.request_repaint())
-                .ok(),
+            project_manager,
             resource_manager: ResourceManager::spawn(move || {
                 resource_repaint_ctx.request_repaint();
             })
@@ -59,9 +65,12 @@ impl ObsApp {
             // onto, so the preview stays empty rather than the app refusing
             // to start.
             engine: cc.wgpu_render_state.clone().and_then(|render_state| {
-                EngineManager::spawn(render_state, SceneCanvas::DEFAULT, move || {
-                    engine_repaint_ctx.request_repaint();
-                })
+                EngineManager::spawn(
+                    render_state,
+                    SceneCanvas::DEFAULT,
+                    project_dispatcher,
+                    move || engine_repaint_ctx.request_repaint(),
+                )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))
                 .ok()
             }),

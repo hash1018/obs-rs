@@ -218,6 +218,28 @@ impl SourceStore {
         Ok(())
     }
 
+    /// Records the token a portal handed back when the Source was opened.
+    ///
+    /// Scoped to portal targets: a monitor name is resolved against the live
+    /// display layout and has no token, so writing one there would be a row
+    /// the schema's own CHECK constraint rejects.
+    pub(crate) fn set_restore_token(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        restore_token: Option<&str>,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE display_capture_settings
+                SET restore_token = ?1
+              WHERE target_kind = 'portal'
+                AND source_id = (
+                    SELECT source_id FROM scene_items WHERE id = ?2
+                )",
+            params![restore_token, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_visible(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
