@@ -20,6 +20,10 @@ eframe = { version = "0.36.1", default-features = false, features = [
 # name wgpu types, and its default features are what select the per-platform
 # backends (DX12/Vulkan/Metal).
 wgpu = "30"
+# The engine thread publishes each composited frame into a slot the UI thread
+# reads while drawing. A lock would put the UI behind whoever is uploading;
+# this hands over a pointer instead.
+arc-swap = "1"
 fluent-bundle = "0.16.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

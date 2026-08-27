@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use crate::domain::SceneCanvas;
+use crate::engine::EngineManager;
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectCommand, ProjectManager, ProjectUpdate};
 use crate::resource_manager::ResourceManager;
@@ -15,6 +17,7 @@ pub struct ObsApp {
     snapshots: Snapshots,
     project_manager: Option<ProjectManager>,
     resource_manager: Option<ResourceManager>,
+    engine: Option<EngineManager>,
     #[cfg(target_os = "linux")]
     system_display_picker: Option<SystemDisplayPicker>,
     localization: LocalizationManager,
@@ -37,6 +40,7 @@ impl ObsApp {
             eprintln!("could not save app settings: {error}");
         }
         let localization = LocalizationManager::new(settings.locale);
+        let engine_repaint_ctx = cc.egui_ctx.clone();
         let resource_repaint_ctx = cc.egui_ctx.clone();
         let project_repaint_ctx = cc.egui_ctx.clone();
         #[cfg(target_os = "linux")]
@@ -51,6 +55,16 @@ impl ObsApp {
                 resource_repaint_ctx.request_repaint();
             })
             .ok(),
+            // Without the wgpu render state there is no device to composite
+            // onto, so the preview stays empty rather than the app refusing
+            // to start.
+            engine: cc.wgpu_render_state.clone().and_then(|render_state| {
+                EngineManager::spawn(render_state, SceneCanvas::DEFAULT, move || {
+                    engine_repaint_ctx.request_repaint();
+                })
+                .inspect_err(|error| eprintln!("could not start the engine: {error}"))
+                .ok()
+            }),
             #[cfg(target_os = "linux")]
             system_display_picker: SystemDisplayPicker::spawn(move || {
                 picker_repaint_ctx.request_repaint();
@@ -76,6 +90,14 @@ impl ObsApp {
                 ProjectUpdate::Error(error) => eprintln!("project database error: {error}"),
             }
         }
+    }
+
+    fn poll_engine(&mut self) {
+        let Some(engine) = &self.engine else {
+            return;
+        };
+        self.snapshots.status.active_fps = engine.active_fps();
+        self.snapshots.status.target_fps = Some(engine.target_fps());
     }
 
     fn poll_resource_usage(&mut self) {
@@ -143,6 +165,7 @@ impl ObsApp {
 impl eframe::App for ObsApp {
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_project();
+        self.poll_engine();
         self.poll_resource_usage();
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();
@@ -150,11 +173,15 @@ impl eframe::App for ObsApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.ui_actions.clear();
+        // Held for the whole draw so the texture cannot be swapped out from
+        // under the painter mid-frame.
+        let composite_frame = self.engine.as_ref().and_then(EngineManager::frame);
         ui::show(
             ui,
             &mut self.ui_state,
             &self.snapshots,
             &self.localization,
+            composite_frame.as_deref(),
             &mut self.ui_actions,
         );
 

@@ -6,6 +6,7 @@ mod viewport_transform;
 use eframe::egui;
 
 use crate::domain::{SourceSettings, Transform};
+use crate::engine::CompositeFrame;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
@@ -54,7 +55,7 @@ pub(super) fn show(
 
             handle_pointer(ui, &response, viewport, editor, snapshot, actions);
             paint_editor_overflow(ui, workspace_rect, viewport, editor, snapshot);
-            paint_composite_frame_placeholder(ui, viewport, i18n);
+            paint_composite_frame(ui, viewport, resources.composite_frame, i18n);
             paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
 
             let toolbar_rect = egui::Rect::from_min_size(
@@ -194,25 +195,40 @@ fn begin_drag(
     }
 }
 
-fn paint_composite_frame_placeholder(
+/// Draws the Composite Frame, or says there is none yet.
+///
+/// The frame fills the Viewport exactly: both are the Scene Canvas, one in
+/// canvas pixels and one on screen, so this is the single place where the
+/// engine's output and the editor's coordinate space meet.
+fn paint_composite_frame(
     ui: &egui::Ui,
     viewport: ViewportTransform,
+    frame: Option<&CompositeFrame>,
     i18n: &LocalizationManager,
 ) {
     let painter = ui.painter().with_clip_rect(viewport.viewport());
     painter.rect_filled(viewport.viewport(), 0.0, egui::Color32::BLACK);
+    if let Some(frame) = frame {
+        painter.image(
+            frame.texture_id,
+            viewport.viewport(),
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        painter.text(
+            viewport.viewport().center(),
+            egui::Align2::CENTER_CENTER,
+            i18n.text(TextKey::PreviewNoFrame),
+            egui::FontId::proportional(14.0),
+            egui::Color32::from_gray(132),
+        );
+    }
     painter.rect_stroke(
         viewport.viewport(),
         0.0,
         egui::Stroke::new(1.0, egui::Color32::from_gray(64)),
         egui::StrokeKind::Inside,
-    );
-    painter.text(
-        viewport.viewport().center(),
-        egui::Align2::CENTER_CENTER,
-        i18n.text(TextKey::PreviewNoFrame),
-        egui::FontId::proportional(14.0),
-        egui::Color32::from_gray(132),
     );
 }
 

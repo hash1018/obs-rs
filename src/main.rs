@@ -14,6 +14,7 @@
 mod app;
 mod capture;
 mod domain;
+mod engine;
 mod i18n;
 mod persistence;
 mod project;
