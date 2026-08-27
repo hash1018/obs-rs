@@ -42,7 +42,9 @@ impl SourceStore {
                 color_source_settings.alpha,
                 display_capture_settings.target_kind,
                 display_capture_settings.monitor_name,
-                display_capture_settings.restore_token
+                display_capture_settings.restore_token,
+                display_capture_settings.width,
+                display_capture_settings.height
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -87,6 +89,10 @@ impl SourceStore {
                                     rusqlite::types::Type::Text,
                                 )
                             })?,
+                            size_hint: match (row.get(27)?, row.get(28)?) {
+                                (Some(width), Some(height)) => Some([width, height]),
+                                _ => None,
+                            },
                         })
                     }
                     _ => SourceSettings::None,
@@ -152,11 +158,11 @@ impl SourceStore {
     pub(crate) fn add_display_capture(
         transaction: &Transaction<'_>,
         scene_id: SceneId,
-        target: &DisplayCaptureTarget,
+        settings: &DisplayCaptureSettings,
     ) -> PersistenceResult<SceneItemId> {
         let name = unique_source_name(transaction, "Display Capture")?;
         let source_id = create(transaction, &name, SourceKind::DisplayCapture)?;
-        let (kind, monitor_name, restore_token) = match target {
+        let (kind, monitor_name, restore_token) = match &settings.target {
             DisplayCaptureTarget::MonitorName(monitor_name) => {
                 ("monitor", Some(monitor_name.as_str()), None)
             }
@@ -164,11 +170,21 @@ impl SourceStore {
                 ("portal", None, restore_token.as_deref())
             }
         };
+        let [width, height] = settings
+            .size_hint
+            .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
         transaction.execute(
             "INSERT INTO display_capture_settings
-                (source_id, target_kind, monitor_name, restore_token)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![source_id.0, kind, monitor_name, restore_token],
+                (source_id, target_kind, monitor_name, restore_token, width, height)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                source_id.0,
+                kind,
+                monitor_name,
+                restore_token,
+                width,
+                height
+            ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
     }

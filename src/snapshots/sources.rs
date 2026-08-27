@@ -28,6 +28,8 @@ pub struct SceneItemSnapshot {
     pub name: String,
     pub kind: SourceKind,
     pub settings: SourceSettings,
+    /// The Source's own size in Canvas units, before `transform` scales it.
+    pub source_size: [f32; 2],
     pub visible: bool,
     pub locked: bool,
     pub transform: Transform,

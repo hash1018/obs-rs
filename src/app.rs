@@ -94,16 +94,10 @@ impl ObsApp {
             return;
         };
         match picker.latest() {
-            Some(SystemDisplayPickerUpdate::Selected {
-                scene_id,
-                restore_token,
-            }) => {
+            Some(SystemDisplayPickerUpdate::Selected { scene_id, settings }) => {
                 if let Some(manager) = &self.project_manager {
                     manager.dispatch(ProjectCommand::Source(
-                        crate::project::SourceCommand::AddDisplayCapture {
-                            scene_id,
-                            target: crate::domain::DisplayCaptureTarget::Portal { restore_token },
-                        },
+                        crate::project::SourceCommand::AddDisplayCapture { scene_id, settings },
                     ));
                 }
             }

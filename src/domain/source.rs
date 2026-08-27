@@ -1,3 +1,5 @@
+use super::SceneCanvas;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceId(pub i64);
 
@@ -68,6 +70,16 @@ pub enum DisplayCaptureTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayCaptureSettings {
     pub target: DisplayCaptureTarget,
+    /// The display's pixel size as the picker reported it, or `None` when it
+    /// reported none.
+    ///
+    /// A hint, not a fact. The display layout can change between runs, and a
+    /// compositor may scale a Wayland stream to a size the portal never named,
+    /// so this is not authoritative and is never resolved against. It exists so
+    /// a new SceneItem starts at the display's own shape instead of standing in
+    /// at Canvas size; the capture layer replaces it with the stream's
+    /// negotiated size once the Source actually opens.
+    pub size_hint: Option<[u32; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +87,28 @@ pub enum SourceSettings {
     Color(ColorSourceSettings),
     DisplayCapture(DisplayCaptureSettings),
     None,
+}
+
+impl SourceSettings {
+    /// The Source's own size in Canvas units, before the SceneItem's own
+    /// Transform scales it.
+    ///
+    /// A Color Source carries its size directly. A capture source has none
+    /// until the capture layer opens it and reports one, so until then it
+    /// stands in at Canvas size rather than having no size at all: an item
+    /// with no rectangle cannot be selected, moved, or resized, and the editor
+    /// has to work before any frame exists.
+    pub fn source_size(&self, canvas: SceneCanvas) -> [f32; 2] {
+        match self {
+            Self::Color(settings) => settings.size,
+            Self::DisplayCapture(settings) => settings
+                .size_hint
+                .map_or([canvas.width, canvas.height], |[width, height]| {
+                    [width as f32, height as f32]
+                }),
+            Self::None => [canvas.width, canvas.height],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -110,8 +110,8 @@ fn handle_source_command(
             SourceStore::add_color(transaction, scene_id)?;
             Ok(())
         }
-        SourceCommand::AddDisplayCapture { scene_id, target } => {
-            SourceStore::add_display_capture(transaction, scene_id, &target)?;
+        SourceCommand::AddDisplayCapture { scene_id, settings } => {
+            SourceStore::add_display_capture(transaction, scene_id, &settings)?;
             Ok(())
         }
         SourceCommand::Delete(scene_item_id) => {
@@ -160,6 +160,7 @@ fn sources_snapshot(
     let Some(scene_id) = scenes.selected_scene_id else {
         return Ok(SourcesSnapshot::default());
     };
+    let canvas = crate::domain::SceneCanvas::DEFAULT;
     let scene_name = scenes
         .items
         .iter()
@@ -190,6 +191,7 @@ fn sources_snapshot(
                 id,
                 name,
                 kind,
+                source_size: settings.source_size(canvas),
                 settings,
                 visible,
                 locked,
@@ -200,7 +202,7 @@ fn sources_snapshot(
         .collect();
 
     Ok(SourcesSnapshot {
-        canvas: crate::domain::SceneCanvas::DEFAULT,
+        canvas,
         scene_id: Some(scene_id),
         scene_name,
         items,
@@ -289,7 +291,12 @@ mod tests {
                 SourceStore::add_display_capture(
                     transaction,
                     first_scene,
-                    &crate::domain::DisplayCaptureTarget::MonitorName(r"\\.\DISPLAY1".into()),
+                    &crate::domain::DisplayCaptureSettings {
+                        target: crate::domain::DisplayCaptureTarget::MonitorName(
+                            r"\\.\DISPLAY1".into(),
+                        ),
+                        size_hint: None,
+                    },
                 )?;
                 Ok(())
             })
@@ -354,7 +361,12 @@ mod tests {
             &mut database,
             SourceCommand::AddDisplayCapture {
                 scene_id,
-                target: crate::domain::DisplayCaptureTarget::MonitorName(r"\\.\DISPLAY2".into()),
+                settings: crate::domain::DisplayCaptureSettings {
+                    target: crate::domain::DisplayCaptureTarget::MonitorName(
+                        r"\\.\DISPLAY2".into(),
+                    ),
+                    size_hint: Some([3440, 1440]),
+                },
             },
         )
         .unwrap();
@@ -362,11 +374,15 @@ mod tests {
         let (_, sources) = project_snapshot(&database).unwrap();
         assert_eq!(sources.items.len(), 1);
         assert_eq!(sources.items[0].name, "Display Capture");
+        // The picker reported an ultrawide, so the item starts at that shape
+        // rather than being squared off to the 16:9 Canvas.
+        assert_eq!(sources.items[0].source_size, [3440.0, 1440.0]);
         assert!(matches!(
             &sources.items[0].settings,
             crate::domain::SourceSettings::DisplayCapture(settings)
                 if settings.target
                     == crate::domain::DisplayCaptureTarget::MonitorName(r"\\.\DISPLAY2".into())
+                    && settings.size_hint == Some([3440, 1440])
         ));
     }
 
@@ -382,8 +398,11 @@ mod tests {
             &mut database,
             SourceCommand::AddDisplayCapture {
                 scene_id,
-                target: crate::domain::DisplayCaptureTarget::Portal {
-                    restore_token: Some("token-1".into()),
+                settings: crate::domain::DisplayCaptureSettings {
+                    target: crate::domain::DisplayCaptureTarget::Portal {
+                        restore_token: Some("token-1".into()),
+                    },
+                    size_hint: None,
                 },
             },
         )
@@ -394,8 +413,11 @@ mod tests {
             &mut database,
             SourceCommand::AddDisplayCapture {
                 scene_id,
-                target: crate::domain::DisplayCaptureTarget::Portal {
-                    restore_token: None,
+                settings: crate::domain::DisplayCaptureSettings {
+                    target: crate::domain::DisplayCaptureTarget::Portal {
+                        restore_token: None,
+                    },
+                    size_hint: None,
                 },
             },
         )

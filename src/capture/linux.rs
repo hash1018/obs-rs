@@ -28,7 +28,7 @@ use x11rb::{
 };
 
 use super::{MonitorRect, MonitorTarget, SourcePicker, WindowTarget};
-use crate::domain::SceneId;
+use crate::domain::{DisplayCaptureSettings, DisplayCaptureTarget, SceneId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PickerBackend {
@@ -245,9 +245,7 @@ fn process_name(pid: u32) -> Option<String> {
 pub(crate) enum SystemDisplayPickerUpdate {
     Selected {
         scene_id: SceneId,
-        /// The portal's restore token, or `None` when the compositor declined
-        /// to issue one. See [`crate::domain::DisplayCaptureTarget::Portal`].
-        restore_token: Option<String>,
+        settings: DisplayCaptureSettings,
     },
     Cancelled,
     Error(String),
@@ -325,10 +323,7 @@ impl Drop for SystemDisplayPicker {
 
 async fn pick_system_display(scene_id: SceneId) -> SystemDisplayPickerUpdate {
     match try_pick_system_display().await {
-        Ok(restore_token) => SystemDisplayPickerUpdate::Selected {
-            scene_id,
-            restore_token,
-        },
+        Ok(settings) => SystemDisplayPickerUpdate::Selected { scene_id, settings },
         Err(ashpd::Error::Response(ResponseError::Cancelled)) => {
             SystemDisplayPickerUpdate::Cancelled
         }
@@ -347,7 +342,7 @@ async fn pick_system_display(scene_id: SceneId) -> SystemDisplayPickerUpdate {
 /// The compositor may decline to issue one. That returns `Ok(None)` rather
 /// than an error, because the selection is still valid for right now — it is
 /// only the *next* run that has to prompt again.
-async fn try_pick_system_display() -> ashpd::Result<Option<String>> {
+async fn try_pick_system_display() -> ashpd::Result<DisplayCaptureSettings> {
     let portal = Screencast::new().await?;
     let session = portal.create_session(Default::default()).await?;
     portal
@@ -364,9 +359,14 @@ async fn try_pick_system_display() -> ashpd::Result<Option<String>> {
         .start(&session, None, Default::default())
         .await?
         .response()?;
-    if response.streams().is_empty() {
-        return Err(ashpd::Error::NoResponse);
-    }
+    let stream = response.streams().first().ok_or(ashpd::Error::NoResponse)?;
+    // The portal reports a size for monitor streams. It is only a hint — the
+    // compositor may scale the stream to something it never named — but it is
+    // what lets the new SceneItem start at the display's own shape.
+    let size_hint = stream.size().and_then(|(width, height)| {
+        Some([u32::try_from(width).ok()?, u32::try_from(height).ok()?])
+            .filter(|[width, height]| *width > 0 && *height > 0)
+    });
     let restore_token = response.restore_token().map(ToOwned::to_owned);
 
     // This session existed only to run the picker; nothing reads its stream.
@@ -374,7 +374,10 @@ async fn try_pick_system_display() -> ashpd::Result<Option<String>> {
     // holding this one open would pin a PipeWire node no one consumes.
     let _ = session.close().await;
 
-    Ok(restore_token)
+    Ok(DisplayCaptureSettings {
+        target: DisplayCaptureTarget::Portal { restore_token },
+        size_hint,
+    })
 }
 
 #[cfg(test)]

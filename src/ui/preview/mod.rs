@@ -5,7 +5,7 @@ mod viewport_transform;
 
 use eframe::egui;
 
-use crate::domain::{ColorSourceSettings, SourceSettings, Transform};
+use crate::domain::{SourceSettings, Transform};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
@@ -105,7 +105,6 @@ fn handle_pointer(
     if response.dragged()
         && let Some(drag) = editor.drag
         && let Some(item) = snapshot.items.iter().find(|item| item.id == drag.item_id)
-        && let Some(settings) = color_settings(item)
     {
         // TransformDrag::original is captured once at the beginning, so this must
         // use the total gesture delta rather than the previous frame's delta.
@@ -120,11 +119,10 @@ fn handle_pointer(
                 ..drag.original
             },
             TransformDragMode::Resize(handle) => {
-                let original_rect = item_canvas_rect(item, drag.original, settings);
+                let original_rect = item_canvas_rect(item, drag.original);
                 transform_from_rect(
                     gizmo::resize_rect(original_rect, handle, delta),
                     drag.original,
-                    settings,
                     item,
                 )
             }
@@ -227,18 +225,9 @@ fn paint_editor_overflow(
     let Some(item) = selected_item(editor, snapshot).filter(|item| item.visible) else {
         return;
     };
-    let Some(settings) = color_settings(item) else {
-        return;
-    };
     let transform = editor.effective_transform(item.id, item.transform);
-    let source_rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform, settings));
-    let color = egui::Color32::from_rgba_unmultiplied(
-        settings.rgba[0],
-        settings.rgba[1],
-        settings.rgba[2],
-        settings.rgba[3],
-    )
-    .gamma_multiply(0.65);
+    let source_rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform));
+    let color = overflow_fill(ui, item);
 
     for overflow_rect in workspace_overflow_rects(workspace, viewport.viewport()) {
         if overflow_rect.is_positive() {
@@ -259,11 +248,8 @@ fn paint_editor_overlay(
     let Some(item) = selected_item(editor, snapshot) else {
         return;
     };
-    let Some(settings) = color_settings(item) else {
-        return;
-    };
     let transform = editor.effective_transform(item.id, item.transform);
-    let rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform, settings));
+    let rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform));
     let painter = ui.painter().with_clip_rect(workspace);
     gizmo::paint(&painter, ui.visuals().selection.bg_fill, rect);
 }
@@ -275,9 +261,8 @@ fn selected_handle_at<'a>(
     snapshot: &'a SourcesSnapshot,
 ) -> Option<(super::editor::ResizeHandle, &'a SceneItemSnapshot)> {
     let item = selected_item(editor, snapshot)?;
-    let settings = color_settings(item)?;
     let transform = editor.effective_transform(item.id, item.transform);
-    let rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform, settings));
+    let rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform));
     gizmo::hit_test(rect, pointer).map(|handle| (handle, item))
 }
 
@@ -312,13 +297,11 @@ fn item_contains_pointer(
     viewport: ViewportTransform,
     editor: &SceneEditorState,
 ) -> bool {
+    let transform = editor.effective_transform(item.id, item.transform);
     item.visible
-        && color_settings(item).is_some_and(|settings| {
-            let transform = editor.effective_transform(item.id, item.transform);
-            viewport
-                .canvas_rect_to_screen(item_canvas_rect(item, transform, settings))
-                .contains(pointer)
-        })
+        && viewport
+            .canvas_rect_to_screen(item_canvas_rect(item, transform))
+            .contains(pointer)
 }
 
 fn workspace_overflow_rects(workspace: egui::Rect, viewport: egui::Rect) -> [egui::Rect; 4] {
@@ -339,19 +322,28 @@ fn workspace_overflow_rects(workspace: egui::Rect, viewport: egui::Rect) -> [egu
     ]
 }
 
-fn color_settings(item: &SceneItemSnapshot) -> Option<ColorSourceSettings> {
+/// What a SceneItem's off-Canvas overflow is drawn with in the Workspace margin.
+///
+/// A Color Source is its own colour. Nothing else has pixels yet, so it gets a
+/// neutral placeholder: the margin is editor-only and never reaches output, and
+/// showing the item's extent there is what keeps it draggable off-Canvas.
+fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
     match &item.settings {
-        SourceSettings::Color(settings) => Some(*settings),
-        SourceSettings::DisplayCapture(_) | SourceSettings::None => None,
+        SourceSettings::Color(settings) => egui::Color32::from_rgba_unmultiplied(
+            settings.rgba[0],
+            settings.rgba[1],
+            settings.rgba[2],
+            settings.rgba[3],
+        ),
+        SourceSettings::DisplayCapture(_) | SourceSettings::None => {
+            ui.visuals().widgets.inactive.bg_fill
+        }
     }
+    .gamma_multiply(0.65)
 }
 
-fn item_canvas_rect(
-    item: &SceneItemSnapshot,
-    transform: Transform,
-    settings: ColorSourceSettings,
-) -> egui::Rect {
-    let uncropped = egui::vec2(settings.size[0], settings.size[1]);
+fn item_canvas_rect(item: &SceneItemSnapshot, transform: Transform) -> egui::Rect {
+    let uncropped = egui::vec2(item.source_size[0], item.source_size[1]);
     let cropped = egui::vec2(
         (uncropped.x - item.crop.left - item.crop.right).max(1.0),
         (uncropped.y - item.crop.top - item.crop.bottom).max(1.0),
@@ -368,11 +360,10 @@ fn item_canvas_rect(
 fn transform_from_rect(
     rect: egui::Rect,
     original: Transform,
-    settings: ColorSourceSettings,
     item: &SceneItemSnapshot,
 ) -> Transform {
-    let source_width = (settings.size[0] - item.crop.left - item.crop.right).max(1.0);
-    let source_height = (settings.size[1] - item.crop.top - item.crop.bottom).max(1.0);
+    let source_width = (item.source_size[0] - item.crop.left - item.crop.right).max(1.0);
+    let source_height = (item.source_size[1] - item.crop.top - item.crop.bottom).max(1.0);
     let anchor = egui::vec2(original.anchor[0], original.anchor[1]);
     let position = rect.min + rect.size() * anchor;
     Transform {
@@ -385,7 +376,10 @@ fn transform_from_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceKind};
+    use crate::domain::{
+        ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, SceneCanvas,
+        SceneItemId, SourceKind,
+    };
 
     fn color_item() -> SceneItemSnapshot {
         SceneItemSnapshot {
@@ -396,6 +390,7 @@ mod tests {
                 size: [1920.0, 1080.0],
                 rgba: [0, 0, 0, 255],
             }),
+            source_size: [1920.0, 1080.0],
             visible: true,
             locked: false,
             transform: Transform {
@@ -409,8 +404,7 @@ mod tests {
     #[test]
     fn default_color_source_fills_canvas_and_viewport() {
         let item = color_item();
-        let settings = color_settings(&item).unwrap();
-        let canvas_rect = item_canvas_rect(&item, item.transform, settings);
+        let canvas_rect = item_canvas_rect(&item, item.transform);
         assert_eq!(
             canvas_rect,
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0))
@@ -420,6 +414,61 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(960.0, 540.0));
         let viewport = ViewportTransform::new(viewport_rect, SceneCanvas::DEFAULT);
         assert_eq!(viewport.canvas_rect_to_screen(canvas_rect), viewport_rect);
+    }
+
+    fn display_capture_item() -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            id: SceneItemId(2),
+            name: "Display Capture".into(),
+            kind: SourceKind::DisplayCapture,
+            settings: SourceSettings::DisplayCapture(DisplayCaptureSettings {
+                target: DisplayCaptureTarget::MonitorName("DP-1".into()),
+                size_hint: None,
+            }),
+            // What `SourceSettings::source_size` stands in with when no picker
+            // reported a size.
+            source_size: [1920.0, 1080.0],
+            visible: true,
+            locked: false,
+            transform: Transform {
+                position: [960.0, 540.0],
+                ..Transform::default()
+            },
+            crop: Crop::default(),
+        }
+    }
+
+    #[test]
+    fn a_source_without_pixels_is_still_selectable_and_draggable() {
+        // The editor works on the SceneItem's rectangle, not on the Source's
+        // content, so a Source that cannot yet produce a frame must behave in
+        // Preview exactly like one that can.
+        let snapshot = SourcesSnapshot {
+            canvas: SceneCanvas::DEFAULT,
+            scene_id: None,
+            scene_name: None,
+            items: vec![display_capture_item()],
+        };
+        let viewport = ViewportTransform::new(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0)),
+            SceneCanvas::DEFAULT,
+        );
+        let mut editor = SceneEditorState::default();
+
+        begin_drag(egui::pos2(480.0, 270.0), viewport, &mut editor, &snapshot);
+
+        assert_eq!(editor.selected_item_id(), Some(SceneItemId(2)));
+        assert!(matches!(
+            editor.drag.map(|drag| drag.mode),
+            Some(TransformDragMode::Move)
+        ));
+
+        // And its corner handles are hit-testable, which is what makes it
+        // resizable rather than only movable.
+        assert!(
+            selected_handle_at(egui::pos2(0.0, 0.0), viewport, &editor, &snapshot).is_some(),
+            "the top-left resize handle should be reachable"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::capture::{MonitorTarget, SourcePicker};
-use crate::domain::{DisplayCaptureTarget, SceneId, SourceKind};
+use crate::domain::{DisplayCaptureSettings, DisplayCaptureTarget, SceneId, SourceKind};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
@@ -391,14 +391,24 @@ fn show_display_dialog(
     } else if cancel {
         open = false;
     } else if add {
-        if let (Some(scene_id), Some(monitor_name)) =
-            (snapshot.scene_id, state.selected_monitor_name.take())
-        {
+        let selected = state
+            .selected_monitor_name
+            .take()
+            .and_then(|name| {
+                state
+                    .display_targets
+                    .iter()
+                    .find(|target| target.name == name)
+            })
+            .map(|target| DisplayCaptureSettings {
+                target: DisplayCaptureTarget::MonitorName(target.name.clone()),
+                // The dialog just showed the user this size; storing it is what
+                // makes the new item appear at the display's own shape.
+                size_hint: Some([target.rect.width, target.rect.height]),
+            });
+        if let (Some(scene_id), Some(settings)) = (snapshot.scene_id, selected) {
             actions.push(UiAction::Project(ProjectCommand::Source(
-                SourceCommand::AddDisplayCapture {
-                    scene_id,
-                    target: DisplayCaptureTarget::MonitorName(monitor_name),
-                },
+                SourceCommand::AddDisplayCapture { scene_id, settings },
             )));
             state.select_new_item = true;
         }

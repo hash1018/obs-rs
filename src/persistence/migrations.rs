@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -140,6 +140,25 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 5;",
         )?;
     }
+    if current_version < 6 {
+        // Every picker already knows the display's size and shows it to the
+        // user; only the stored source did not. Without it a SceneItem stands
+        // in at Canvas size, so an ultrawide display starts at the wrong aspect
+        // ratio and visibly changes shape the moment capture opens.
+        //
+        // Nullable because a picker may report no size, and because rows
+        // written before this migration have none. Both fall back to Canvas
+        // size, which is what they already did.
+        transaction.execute_batch(
+            "ALTER TABLE display_capture_settings
+                ADD COLUMN width INTEGER CHECK (width IS NULL OR width > 0);
+
+            ALTER TABLE display_capture_settings
+                ADD COLUMN height INTEGER CHECK (height IS NULL OR height > 0);
+
+            PRAGMA user_version = 6;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -268,6 +287,43 @@ mod tests {
                     "INSERT INTO display_capture_settings
                         (source_id, target_kind, monitor_name)
                      VALUES (1, 'portal', 'DP-1')",
+                    [],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn version_five_rows_keep_working_without_a_size() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sources (id, name, kind)
+                 VALUES (1, 'Display Capture', 'display_capture');
+                 INSERT INTO display_capture_settings
+                    (source_id, target_kind, monitor_name)
+                 VALUES (1, 'monitor', 'DP-1');",
+            )
+            .unwrap();
+
+        // A row written before the size columns existed reads back as "no
+        // hint", which is what makes it fall back to Canvas size.
+        let size: (Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT width, height FROM display_capture_settings WHERE source_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(size, (None, None));
+
+        // A zero or negative size is not a missing size, so the column rejects
+        // it rather than letting it become a degenerate rectangle.
+        assert!(
+            connection
+                .execute(
+                    "UPDATE display_capture_settings SET width = 0 WHERE source_id = 1",
                     [],
                 )
                 .is_err()
