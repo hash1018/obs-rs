@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::domain::{
     Crop, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings, Transform,
 };
@@ -9,6 +11,13 @@ pub struct SourcesSnapshot {
     pub scene_name: Option<String>,
     /// Front-most item first, matching the order shown in the Sources dock.
     pub items: Vec<SceneItemSnapshot>,
+    /// Every SceneItem in the project, not only the selected Scene's.
+    ///
+    /// The engine keeps a Source open when its item merely leaves the visible
+    /// Scene, so returning to that Scene costs nothing; it has to close one
+    /// whose item is gone for good. The selected Scene alone cannot tell those
+    /// two apart.
+    pub live_items: HashSet<SceneItemId>,
 }
 
 impl Default for SourcesSnapshot {
@@ -18,6 +27,7 @@ impl Default for SourcesSnapshot {
             scene_id: None,
             scene_name: None,
             items: Vec::new(),
+            live_items: HashSet::new(),
         }
     }
 }

@@ -192,8 +192,12 @@ fn sources_snapshot(
     database: &ProjectDatabase,
     scenes: &ScenesSnapshot,
 ) -> PersistenceResult<SourcesSnapshot> {
+    let live_items = SourceStore::live_item_ids(database.connection())?;
     let Some(scene_id) = scenes.selected_scene_id else {
-        return Ok(SourcesSnapshot::default());
+        return Ok(SourcesSnapshot {
+            live_items,
+            ..SourcesSnapshot::default()
+        });
     };
     let canvas = crate::domain::SceneCanvas::DEFAULT;
     let scene_name = scenes
@@ -241,6 +245,7 @@ fn sources_snapshot(
         scene_id: Some(scene_id),
         scene_name,
         items,
+        live_items,
     })
 }
 
@@ -636,6 +641,38 @@ mod tests {
                 size_hint: None,
             })
         );
+    }
+
+    #[test]
+    fn the_snapshot_names_every_item_not_just_the_shown_scene() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let first_scene = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(first_scene)).unwrap();
+        let hidden = project_snapshot(&database).unwrap().1.items[0].id;
+
+        handle_scene_command(&mut database, SceneCommand::Add).unwrap();
+        let second_scene = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(second_scene)).unwrap();
+
+        // The engine keeps a Source open while its item is merely out of view
+        // and closes one that is gone, so the snapshot has to distinguish
+        // "not in this Scene" from "not in the project".
+        let (_, sources) = project_snapshot(&database).unwrap();
+        let shown = sources.items[0].id;
+        assert!(!sources.items.iter().any(|item| item.id == hidden));
+        assert!(sources.live_items.contains(&hidden));
+        assert!(sources.live_items.contains(&shown));
+
+        handle_source_command(&mut database, SourceCommand::Delete(hidden)).unwrap();
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert!(!sources.live_items.contains(&hidden));
+        assert!(sources.live_items.contains(&shown));
     }
 
     #[test]

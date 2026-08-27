@@ -309,7 +309,7 @@ fn run(
                 // Switching to such a Scene should cost nothing.
                 let wanted = open
                     .values()
-                    .any(|state| matches!(state, SourceState::Open(_)));
+                    .any(|state| matches!(state, SourceState::Open(source) if source.showing));
                 if wanted != compositing {
                     if wanted {
                         pipeline.resume();
@@ -426,8 +426,29 @@ fn reconcile(
         }
     }
 
+    // A Source whose item merely left the Scene is kept, stopped: coming back
+    // to that Scene is then a resume rather than another portal round trip,
+    // and a stopped capture costs nothing while it waits.
+    for (id, state) in open.iter_mut() {
+        let SourceState::Open(source) = state else {
+            continue;
+        };
+        let showing = snapshot.items.iter().any(|item| item.id == *id);
+        if showing == source.showing {
+            continue;
+        }
+        if showing {
+            source.pipeline.resume();
+        } else {
+            source.pipeline.pause();
+            let _ = source.layer.set_visible(false);
+        }
+        source.showing = showing;
+    }
+
+    // Only an item the project no longer holds anywhere is closed for good.
     open.retain(|id, state| {
-        if snapshot.items.iter().any(|item| item.id == *id) {
+        if snapshot.live_items.contains(id) {
             return true;
         }
         if let SourceState::Open(source) = state {

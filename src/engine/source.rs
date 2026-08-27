@@ -31,6 +31,10 @@ pub(super) struct OpenSource {
     /// The token the portal handed back, when it differs from the one it was
     /// given. `None` means the stored token is still current.
     pub(super) refreshed_token: Option<Option<String>>,
+    /// Whether the Source is in the Scene being shown. A Source whose item
+    /// left the Scene stays open but stops running, so coming back to that
+    /// Scene costs a resume rather than a portal round trip.
+    pub(super) showing: bool,
 }
 
 /// Where a SceneItem's layer sits on the Canvas, and in what order.
@@ -132,6 +136,7 @@ pub(super) fn open_display_capture(
         layer,
         name,
         refreshed_token,
+        showing: true,
     })
 }
 

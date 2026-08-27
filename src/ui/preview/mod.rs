@@ -457,6 +457,7 @@ mod tests {
             canvas: SceneCanvas::DEFAULT,
             scene_id: None,
             scene_name: None,
+            live_items: Default::default(),
             items: vec![display_capture_item()],
         };
         let viewport = ViewportTransform::new(
@@ -488,6 +489,7 @@ mod tests {
             canvas: SceneCanvas::DEFAULT,
             scene_id: None,
             scene_name: None,
+            live_items: Default::default(),
             items: vec![item],
         };
         let viewport = ViewportTransform::new(

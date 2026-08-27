@@ -130,6 +130,16 @@ impl SourceStore {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Every SceneItem the project holds, across all Scenes.
+    pub(crate) fn live_item_ids(
+        connection: &Connection,
+    ) -> PersistenceResult<std::collections::HashSet<SceneItemId>> {
+        let mut statement = connection.prepare("SELECT id FROM scene_items")?;
+        Ok(statement
+            .query_map([], |row| row.get::<_, i64>(0).map(SceneItemId))?
+            .collect::<Result<_, _>>()?)
+    }
+
     pub(crate) fn add_color(
         transaction: &Transaction<'_>,
         scene_id: SceneId,
