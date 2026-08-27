@@ -24,10 +24,12 @@
 //! Add a file here, point the `cfg_attr` below at it, and provide:
 //!
 //! - `Backend::start` — build the compositor and the branch that publishes
-//!   frames, register one texture with egui, and call `on_frame` with its id
-//!   after each frame lands in it. The texture is registered once and
-//!   overwritten; registering per frame takes the egui renderer's write lock
-//!   on every frame.
+//!   frames, and register one texture with egui. Call `on_frame` for *every*
+//!   frame the compositor produced, passing the texture id only for the ones
+//!   actually drawn into it: the rate of calls is the compositor's, which is
+//!   what a recording would be made of, while the Preview is redrawn less
+//!   often than that. The texture is registered once and overwritten;
+//!   registering per frame takes the egui renderer's write lock every frame.
 //! - `Backend::{pause, resume, stop}` — the Preview branch sleeps whenever no
 //!   shown Source is running, so these are called often and must be cheap.
 //! - `Backend::open_source` — start one SceneItem's Source and register its

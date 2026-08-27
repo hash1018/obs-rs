@@ -155,15 +155,19 @@ impl EngineManager {
         self.frame.load_full()
     }
 
-    /// Measured output rate, or `None` until a full window has been observed.
+    /// The compositor's measured output rate, or `None` until a full window
+    /// has been observed.
+    ///
+    /// Counts every composited frame, not the ones the Preview drew: this is
+    /// the rate an output would be recorded at, and the Preview deliberately
+    /// redraws less often than it.
     pub fn active_fps(&self) -> Option<f32> {
         let bits = self.active_fps.load(Ordering::Relaxed);
         (bits != 0).then(|| f32::from_bits(bits))
     }
 
-    /// The rate the Preview aims for, which is what `active_fps` measures.
     pub fn target_fps(&self) -> f32 {
-        PREVIEW_FPS as f32
+        TARGET_FPS as f32
     }
 }
 
@@ -196,11 +200,15 @@ fn run(
         let wake_ui = Arc::clone(&wake_ui);
         let rate = std::sync::Mutex::new(FrameRate::new());
         move |texture_id| {
-            frame.store(Some(Arc::new(CompositeFrame { texture_id })));
+            if let Some(texture_id) = texture_id {
+                frame.store(Some(Arc::new(CompositeFrame { texture_id })));
+            }
             if let Some(measured) = rate.lock().expect("never poisoned").tick() {
                 active_fps.store(measured.to_bits(), Ordering::Relaxed);
             }
-            wake_ui();
+            if texture_id.is_some() {
+                wake_ui();
+            }
         }
     };
     let backend = Backend::start(&render_state, size, PREVIEW_FPS, publish)?;

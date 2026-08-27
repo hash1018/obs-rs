@@ -40,7 +40,7 @@ impl Backend {
         render_state: &RenderState,
         size: [u32; 2],
         fps: u32,
-        on_frame: impl Fn(egui::TextureId) + Send + Sync + 'static,
+        on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
     ) -> Result<Self, BackendError> {
         media_pp::init()?;
         let [width, height] = size;
@@ -91,15 +91,15 @@ impl Backend {
             // Dropped here rather than upstream: the download is the cheapest
             // part of this branch, while the upload, the resolve pass, and the
             // full egui repaint each drawn frame asks for are not.
-            if let Some(last) = last_drawn
-                && last.elapsed() < interval
-            {
-                return Ok(());
-            }
-            if target.draw(&wgpu_device, &queue, &video) {
+            let due = last_drawn.is_none_or(|last| last.elapsed() >= interval);
+            let drawn = due && target.draw(&wgpu_device, &queue, &video);
+            if drawn {
                 last_drawn = Some(Instant::now());
-                on_frame(texture_id);
             }
+            // Every composited frame, drawn or not: this is the compositor's
+            // rate, and it is the one that says whether an output could be
+            // made at the rate it is configured for.
+            on_frame(drawn.then_some(texture_id));
             Ok(())
         });
 
