@@ -158,7 +158,7 @@ fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<
                 .inner_margin(egui::Margin::symmetric(4, 5)),
         )
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_centered(|ui| {
                 if tool_button(ui, ToolIcon::Add, "Add scene", true) {
                     actions.push(scene_action(SceneCommand::Add));
                 }

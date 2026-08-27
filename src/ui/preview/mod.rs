@@ -1,4 +1,6 @@
 mod gizmo;
+mod state;
+mod toolbar;
 mod viewport_transform;
 
 use eframe::egui;
@@ -12,10 +14,11 @@ use super::editor::{SceneEditorState, TransformDrag, TransformDragMode};
 use viewport_transform::{ViewportTransform, fit_aspect_ratio};
 
 const PREVIEW_MARGIN: i8 = 18;
-const DEFAULT_VIEWPORT_WORKSPACE_FRACTION: f32 = 0.76;
+pub(super) use state::PreviewViewState;
 
 pub(super) fn show(
     ui: &mut egui::Ui,
+    view_state: &mut PreviewViewState,
     editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
     actions: &mut Vec<UiAction>,
@@ -27,27 +30,45 @@ pub(super) fn show(
                 .inner_margin(egui::Margin::same(PREVIEW_MARGIN)),
         )
         .show(ui, |ui| {
-            let workspace_rect = ui.max_rect();
-            let available = ui.available_size();
-            let viewport_bounds = available * DEFAULT_VIEWPORT_WORKSPACE_FRACTION;
+            let available_rect = ui.available_rect_before_wrap();
+            let workspace_rect = egui::Rect::from_min_max(
+                available_rect.min,
+                egui::pos2(
+                    available_rect.right(),
+                    available_rect.bottom() - toolbar::TOOLBAR_HEIGHT - toolbar::TOOLBAR_GAP,
+                ),
+            );
+            let viewport_bounds = workspace_rect.size() * view_state.scale();
             let viewport_size = fit_aspect_ratio(viewport_bounds, snapshot.canvas.aspect_ratio());
+            let viewport_rect =
+                egui::Rect::from_center_size(workspace_rect.center(), viewport_size);
+            let viewport = ViewportTransform::new(viewport_rect, snapshot.canvas);
+            let response = ui.interact(
+                workspace_rect,
+                egui::Id::new("preview_workspace_interaction"),
+                egui::Sense::click_and_drag(),
+            );
 
-            ui.vertical_centered(|ui| {
-                ui.add_space(((available.y - viewport_size.y) * 0.5).max(0.0));
-                let (viewport_rect, _) =
-                    ui.allocate_exact_size(viewport_size, egui::Sense::hover());
-                let viewport = ViewportTransform::new(viewport_rect, snapshot.canvas);
-                let response = ui.interact(
-                    workspace_rect,
-                    egui::Id::new("preview_workspace_interaction"),
-                    egui::Sense::click_and_drag(),
-                );
+            handle_pointer(ui, &response, viewport, editor, snapshot, actions);
+            paint_editor_overflow(ui, workspace_rect, viewport, editor, snapshot);
+            paint_composite_frame_placeholder(ui, viewport);
+            paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
 
-                handle_pointer(ui, &response, viewport, editor, snapshot, actions);
-                paint_editor_overflow(ui, workspace_rect, viewport, editor, snapshot);
-                paint_composite_frame_placeholder(ui, viewport);
-                paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
-            });
+            let toolbar_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    viewport_rect.left(),
+                    viewport_rect.bottom() + toolbar::TOOLBAR_GAP,
+                ),
+                egui::vec2(toolbar::TOOLBAR_WIDTH, toolbar::TOOLBAR_HEIGHT),
+            );
+            let mut toolbar_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("preview_toolbar")
+                    .max_rect(toolbar_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            toolbar_ui.set_clip_rect(toolbar_rect);
+            toolbar::show(&mut toolbar_ui, view_state);
         });
 }
 

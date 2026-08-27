@@ -107,29 +107,31 @@ fn show_toolbar(ui: &mut egui::Ui, state: &mut SourcesPanelState, snapshot: &Sou
                 .inner_margin(egui::Margin::symmetric(4, 5)),
         )
         .show(ui, |ui| {
-            let response = ui.add_enabled(
-                snapshot.scene_id.is_some(),
-                egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
-            );
-            let center = response.rect.center();
-            let stroke = ui.style().interact(&response).fg_stroke;
-            ui.painter().line_segment(
-                [
-                    center + egui::vec2(-5.0, 0.0),
-                    center + egui::vec2(5.0, 0.0),
-                ],
-                stroke,
-            );
-            ui.painter().line_segment(
-                [
-                    center + egui::vec2(0.0, -5.0),
-                    center + egui::vec2(0.0, 5.0),
-                ],
-                stroke,
-            );
-            if response.on_hover_text("Add source").clicked() {
-                state.add_dialog_open = true;
-            }
+            ui.horizontal_centered(|ui| {
+                let response = ui.add_enabled(
+                    snapshot.scene_id.is_some(),
+                    egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
+                );
+                let center = response.rect.center();
+                let stroke = ui.style().interact(&response).fg_stroke;
+                ui.painter().line_segment(
+                    [
+                        center + egui::vec2(-5.0, 0.0),
+                        center + egui::vec2(5.0, 0.0),
+                    ],
+                    stroke,
+                );
+                ui.painter().line_segment(
+                    [
+                        center + egui::vec2(0.0, -5.0),
+                        center + egui::vec2(0.0, 5.0),
+                    ],
+                    stroke,
+                );
+                if response.on_hover_text("Add source").clicked() {
+                    state.add_dialog_open = true;
+                }
+            });
         });
 }
 

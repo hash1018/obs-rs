@@ -25,6 +25,12 @@ pub fn show(
         snapshots,
         actions,
     );
-    super::preview::show(ui, &mut state.editor, &snapshots.sources, actions);
+    super::preview::show(
+        ui,
+        &mut state.preview,
+        &mut state.editor,
+        &snapshots.sources,
+        actions,
+    );
     menu_bar::show_about(ui, state);
 }

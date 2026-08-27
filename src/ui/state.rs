@@ -4,6 +4,7 @@ use super::docking::DockLayout;
 use super::editor::SceneEditorState;
 use super::panels::scenes::ScenesPanelState;
 use super::panels::sources::SourcesPanelState;
+use super::preview::PreviewViewState;
 
 pub struct UiState {
     pub(super) about_open: bool,
@@ -12,6 +13,7 @@ pub struct UiState {
     pub(super) scenes: ScenesPanelState,
     pub(super) editor: SceneEditorState,
     pub(super) sources: SourcesPanelState,
+    pub(super) preview: PreviewViewState,
     pub(super) theme: egui::ThemePreference,
 }
 
@@ -30,6 +32,7 @@ impl Default for UiState {
             scenes: ScenesPanelState::default(),
             editor: SceneEditorState::default(),
             sources: SourcesPanelState::default(),
+            preview: PreviewViewState::default(),
             theme: egui::ThemePreference::Dark,
         }
     }

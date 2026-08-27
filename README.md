@@ -34,7 +34,7 @@ PreviewWorkspace
 
 현재 Scene Canvas는 `1920×1080`이다. 창이나 도커 크기가 바뀌면 Preview Viewport만 다시 맞춰지고 SceneItem의 Canvas 좌표는 바뀌지 않는다. Preview Workspace의 여백과 Editor Overlay는 방송·녹화 출력에 포함되지 않는다.
 
-Preview Viewport는 기본적으로 Workspace 가용 크기의 76% 안에서 Canvas 종횡비를 유지해 배치한다. 이 배율은 화면 표시만 바꾸며 SceneItem의 Canvas 좌표나 출력 해상도에는 영향을 주지 않는다.
+Preview Viewport는 기본적으로 Workspace 가용 크기의 75% 안에서 Canvas 종횡비를 유지해 배치한다. PreviewToolbar의 `−`, 백분율 입력, `+`, `Fit`으로 40–100% 범위에서 조절할 수 있으며 Fit 메뉴는 Workspace 맞춤, 50/75/100%, Reset View 프리셋을 제공한다. 이 배율은 화면 표시만 바꾸며 SceneItem의 Canvas 좌표나 출력 해상도에는 영향을 주지 않는다.
 
 SceneItem이 Canvas 밖으로 나가면 Canvas와 겹치는 부분만 Composite Frame에 들어간다. 선택된 SceneItem의 Canvas 바깥 부분은 편집을 계속할 수 있도록 Preview Workspace 여백에 흐리게 표시하지만 실제 출력에는 포함하지 않는다.
 
