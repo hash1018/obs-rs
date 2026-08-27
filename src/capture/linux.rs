@@ -8,16 +8,14 @@ use std::{
     collections::HashSet,
     env, fs, io,
     path::PathBuf,
-    sync::mpsc::{self, Receiver},
-    thread::{self, JoinHandle},
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
 };
 
 use ashpd::desktop::{
     PersistMode, ResponseError,
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
 };
-use tokio::sync::{mpsc as tokio_mpsc, watch};
-
 use x11rb::{
     connection::Connection,
     protocol::{
@@ -251,52 +249,32 @@ pub(crate) enum SystemDisplayPickerUpdate {
     Error(String),
 }
 
-/// Runs the asynchronous desktop portal away from the UI thread.
+/// Runs the desktop portal's dialog away from the UI thread.
 pub(crate) struct SystemDisplayPicker {
-    requests: Option<tokio_mpsc::UnboundedSender<SceneId>>,
+    requests: Option<Sender<SceneId>>,
     updates: Receiver<SystemDisplayPickerUpdate>,
-    stop: watch::Sender<bool>,
-    worker: Option<JoinHandle<()>>,
 }
 
 impl SystemDisplayPicker {
     pub(crate) fn spawn(wake_ui: impl Fn() + Send + 'static) -> io::Result<Self> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(io::Error::other)?;
-        let (request_sender, mut requests) = tokio_mpsc::unbounded_channel();
+        let (request_sender, requests) = mpsc::channel::<SceneId>();
         let (update_sender, updates) = mpsc::channel();
-        let (stop, mut worker_stop) = watch::channel(false);
-        let worker = thread::Builder::new()
+        // The handle is dropped rather than kept: see `Drop`.
+        thread::Builder::new()
             .name("system-display-picker".to_owned())
             .spawn(move || {
-                runtime.block_on(async move {
-                    loop {
-                        let scene_id = tokio::select! {
-                            _ = worker_stop.changed() => break,
-                            request = requests.recv() => {
-                                let Some(scene_id) = request else { break };
-                                scene_id
-                            }
-                        };
-                        let update = tokio::select! {
-                            _ = worker_stop.changed() => break,
-                            update = pick_system_display(scene_id) => update,
-                        };
-                        if update_sender.send(update).is_err() {
-                            break;
-                        }
-                        wake_ui();
+                for scene_id in requests {
+                    let update = pollster::block_on(pick_system_display(scene_id));
+                    if update_sender.send(update).is_err() {
+                        break;
                     }
-                });
+                    wake_ui();
+                }
             })?;
 
         Ok(Self {
             requests: Some(request_sender),
             updates,
-            stop,
-            worker: Some(worker),
         })
     }
 
@@ -313,11 +291,12 @@ impl SystemDisplayPicker {
 
 impl Drop for SystemDisplayPicker {
     fn drop(&mut self) {
-        let _ = self.stop.send(true);
+        // Dropping the sender ends the worker's loop once it finishes whatever
+        // it is doing. It is deliberately not joined: the portal call it may be
+        // inside does not return until the user answers a dialog, and waiting
+        // for that would hang shutdown behind a window they have already
+        // walked away from.
         self.requests.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
     }
 }
 
