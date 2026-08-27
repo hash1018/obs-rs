@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::capture::{MonitorTarget, SourcePicker};
-use crate::domain::{SceneId, SourceKind};
+use crate::domain::{DisplayCaptureTarget, SceneId, SourceKind};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
@@ -397,7 +397,7 @@ fn show_display_dialog(
             actions.push(UiAction::Project(ProjectCommand::Source(
                 SourceCommand::AddDisplayCapture {
                     scene_id,
-                    monitor_name,
+                    target: DisplayCaptureTarget::MonitorName(monitor_name),
                 },
             )));
             state.select_new_item = true;

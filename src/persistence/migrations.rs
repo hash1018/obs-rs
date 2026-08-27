@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -96,6 +96,50 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 4;",
         )?;
     }
+    if current_version < 5 {
+        // A Wayland selection has no display name to store. Version 4 stuffed
+        // the portal's stream id into `monitor_name` as a placeholder, but a
+        // stream id belongs to the session that produced it and means nothing
+        // to a later one — the portal's restore token is the only value that
+        // reproduces a selection. Splitting the two apart needs `monitor_name`
+        // to become nullable, which SQLite only does by rebuilding the table.
+        //
+        // Placeholder rows carry no token and cannot be given one, so they
+        // become portal targets that prompt again on first capture.
+        transaction.execute_batch(
+            "CREATE TABLE display_capture_settings_new (
+                source_id     INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                target_kind   TEXT NOT NULL CHECK (target_kind IN ('monitor', 'portal')),
+                monitor_name  TEXT,
+                restore_token TEXT,
+                CHECK (
+                    (target_kind = 'monitor'
+                        AND monitor_name IS NOT NULL
+                        AND restore_token IS NULL)
+                 OR (target_kind = 'portal' AND monitor_name IS NULL)
+                )
+            );
+
+            INSERT INTO display_capture_settings_new
+                (source_id, target_kind, monitor_name)
+            SELECT
+                source_id,
+                CASE WHEN monitor_name LIKE 'portal: %'
+                       OR monitor_name LIKE 'portal-node: %'
+                     THEN 'portal' ELSE 'monitor' END,
+                CASE WHEN monitor_name LIKE 'portal: %'
+                       OR monitor_name LIKE 'portal-node: %'
+                     THEN NULL ELSE monitor_name END
+            FROM display_capture_settings;
+
+            DROP TABLE display_capture_settings;
+
+            ALTER TABLE display_capture_settings_new
+            RENAME TO display_capture_settings;
+
+            PRAGMA user_version = 5;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -147,5 +191,86 @@ mod tests {
         assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(scene_name, "Existing Scene");
         assert!(source_tables_exist);
+    }
+
+    #[test]
+    fn version_four_display_capture_rows_split_into_named_and_portal_targets() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sources (
+                    id            INTEGER PRIMARY KEY,
+                    name          TEXT NOT NULL UNIQUE,
+                    kind          TEXT NOT NULL,
+                    settings_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE display_capture_settings (
+                    source_id    INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                    monitor_name TEXT NOT NULL
+                );
+                INSERT INTO sources (id, name, kind) VALUES
+                    (1, 'Display Capture', 'display_capture'),
+                    (2, 'Display Capture 2', 'display_capture'),
+                    (3, 'Display Capture 3', 'display_capture');
+                INSERT INTO display_capture_settings (source_id, monitor_name) VALUES
+                    (1, 'DP-1'),
+                    (2, 'portal: 42'),
+                    (3, 'portal-node: 7');
+                PRAGMA user_version = 4;",
+            )
+            .unwrap();
+
+        run(&mut connection).unwrap();
+
+        let mut statement = connection
+            .prepare(
+                "SELECT target_kind, monitor_name, restore_token
+                 FROM display_capture_settings
+                 ORDER BY source_id",
+            )
+            .unwrap();
+        let rows: Vec<(String, Option<String>, Option<String>)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        // A real display name survives untouched; both placeholder spellings
+        // become portal targets that have to prompt again, since a stream id
+        // was never something a later session could reopen.
+        assert_eq!(
+            rows,
+            vec![
+                ("monitor".to_owned(), Some("DP-1".to_owned()), None),
+                ("portal".to_owned(), None, None),
+                ("portal".to_owned(), None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn display_capture_target_kind_and_columns_must_agree() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO sources (id, name, kind)
+                 VALUES (1, 'Display Capture', 'display_capture')",
+                [],
+            )
+            .unwrap();
+
+        // A portal row carrying a display name is the version-4 mistake the
+        // rebuild exists to prevent, so the schema itself has to reject it.
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO display_capture_settings
+                        (source_id, target_kind, monitor_name)
+                     VALUES (1, 'portal', 'DP-1')",
+                    [],
+                )
+                .is_err()
+        );
     }
 }

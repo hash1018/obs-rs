@@ -96,13 +96,13 @@ impl ObsApp {
         match picker.latest() {
             Some(SystemDisplayPickerUpdate::Selected {
                 scene_id,
-                portal_target,
+                restore_token,
             }) => {
                 if let Some(manager) = &self.project_manager {
                     manager.dispatch(ProjectCommand::Source(
                         crate::project::SourceCommand::AddDisplayCapture {
                             scene_id,
-                            monitor_name: portal_target,
+                            target: crate::domain::DisplayCaptureTarget::Portal { restore_token },
                         },
                     ));
                 }

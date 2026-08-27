@@ -245,7 +245,9 @@ fn process_name(pid: u32) -> Option<String> {
 pub(crate) enum SystemDisplayPickerUpdate {
     Selected {
         scene_id: SceneId,
-        portal_target: String,
+        /// The portal's restore token, or `None` when the compositor declined
+        /// to issue one. See [`crate::domain::DisplayCaptureTarget::Portal`].
+        restore_token: Option<String>,
     },
     Cancelled,
     Error(String),
@@ -323,9 +325,9 @@ impl Drop for SystemDisplayPicker {
 
 async fn pick_system_display(scene_id: SceneId) -> SystemDisplayPickerUpdate {
     match try_pick_system_display().await {
-        Ok(portal_target) => SystemDisplayPickerUpdate::Selected {
+        Ok(restore_token) => SystemDisplayPickerUpdate::Selected {
             scene_id,
-            portal_target,
+            restore_token,
         },
         Err(ashpd::Error::Response(ResponseError::Cancelled)) => {
             SystemDisplayPickerUpdate::Cancelled
@@ -334,7 +336,18 @@ async fn pick_system_display(scene_id: SceneId) -> SystemDisplayPickerUpdate {
     }
 }
 
-async fn try_pick_system_display() -> ashpd::Result<String> {
+/// Runs the portal's picker and returns the token that reproduces the choice.
+///
+/// Wayland gives a client no way to name a display, so the selection itself
+/// cannot be stored: the stream and its node id belong to this session and
+/// mean nothing to a later one. The restore token is the only value that
+/// outlives the session, which is why persisting it is the whole point of
+/// this function rather than an optimization.
+///
+/// The compositor may decline to issue one. That returns `Ok(None)` rather
+/// than an error, because the selection is still valid for right now — it is
+/// only the *next* run that has to prompt again.
+async fn try_pick_system_display() -> ashpd::Result<Option<String>> {
     let portal = Screencast::new().await?;
     let session = portal.create_session(Default::default()).await?;
     portal
@@ -344,21 +357,24 @@ async fn try_pick_system_display() -> ashpd::Result<String> {
                 .set_cursor_mode(CursorMode::Hidden)
                 .set_sources(Some(SourceType::Monitor.into()))
                 .set_multiple(false)
-                .set_persist_mode(PersistMode::DoNot),
+                .set_persist_mode(PersistMode::ExplicitlyRevoked),
         )
         .await?;
     let response = portal
         .start(&session, None, Default::default())
         .await?
         .response()?;
-    let stream = response.streams().first().ok_or(ashpd::Error::NoResponse)?;
+    if response.streams().is_empty() {
+        return Err(ashpd::Error::NoResponse);
+    }
+    let restore_token = response.restore_token().map(ToOwned::to_owned);
 
-    // Runtime capture is not connected yet. Keep the portal namespace explicit
-    // so this transitional locator can never be mistaken for an XRandR name.
-    Ok(stream.id().map_or_else(
-        || format!("portal-node: {}", stream.pipe_wire_node_id()),
-        |id| format!("portal: {id}"),
-    ))
+    // This session existed only to run the picker; nothing reads its stream.
+    // The capture layer opens its own session from `restore_token` later, so
+    // holding this one open would pin a PipeWire node no one consumes.
+    let _ = session.close().await;
+
+    Ok(restore_token)
 }
 
 #[cfg(test)]

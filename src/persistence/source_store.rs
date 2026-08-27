@@ -1,8 +1,8 @@
 use rusqlite::{Connection, Transaction, params};
 
 use crate::domain::{
-    ColorSourceSettings, Crop, DisplayCaptureSettings, SceneCanvas, SceneId, SceneItem,
-    SceneItemId, Source, SourceId, SourceKind, SourceSettings, Transform,
+    ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, SceneCanvas, SceneId,
+    SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings, Transform,
 };
 
 use super::PersistenceResult;
@@ -40,7 +40,9 @@ impl SourceStore {
                 color_source_settings.green,
                 color_source_settings.blue,
                 color_source_settings.alpha,
-                display_capture_settings.monitor_name
+                display_capture_settings.target_kind,
+                display_capture_settings.monitor_name,
+                display_capture_settings.restore_token
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -73,7 +75,18 @@ impl SourceStore {
                     }),
                     SourceKind::DisplayCapture => {
                         SourceSettings::DisplayCapture(DisplayCaptureSettings {
-                            monitor_name: row.get(24)?,
+                            target: display_capture_target(
+                                &row.get::<_, String>(24)?,
+                                row.get(25)?,
+                                row.get(26)?,
+                            )
+                            .ok_or_else(|| {
+                                rusqlite::Error::InvalidColumnType(
+                                    24,
+                                    "target_kind".into(),
+                                    rusqlite::types::Type::Text,
+                                )
+                            })?,
                         })
                     }
                     _ => SourceSettings::None,
@@ -139,14 +152,23 @@ impl SourceStore {
     pub(crate) fn add_display_capture(
         transaction: &Transaction<'_>,
         scene_id: SceneId,
-        monitor_name: &str,
+        target: &DisplayCaptureTarget,
     ) -> PersistenceResult<SceneItemId> {
         let name = unique_source_name(transaction, "Display Capture")?;
         let source_id = create(transaction, &name, SourceKind::DisplayCapture)?;
+        let (kind, monitor_name, restore_token) = match target {
+            DisplayCaptureTarget::MonitorName(monitor_name) => {
+                ("monitor", Some(monitor_name.as_str()), None)
+            }
+            DisplayCaptureTarget::Portal { restore_token } => {
+                ("portal", None, restore_token.as_deref())
+            }
+        };
         transaction.execute(
-            "INSERT INTO display_capture_settings (source_id, monitor_name)
-             VALUES (?1, ?2)",
-            params![source_id.0, monitor_name],
+            "INSERT INTO display_capture_settings
+                (source_id, target_kind, monitor_name, restore_token)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![source_id.0, kind, monitor_name, restore_token],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
     }
@@ -199,6 +221,21 @@ impl SourceStore {
             [source_id],
         )?;
         Ok(())
+    }
+}
+
+/// Rebuilds the target a Display Capture row stores. The schema's own CHECK
+/// constraint already rejects the combinations this cannot map, so `None` here
+/// means a row written by something other than [`SourceStore`].
+fn display_capture_target(
+    kind: &str,
+    monitor_name: Option<String>,
+    restore_token: Option<String>,
+) -> Option<DisplayCaptureTarget> {
+    match kind {
+        "monitor" => monitor_name.map(DisplayCaptureTarget::MonitorName),
+        "portal" => Some(DisplayCaptureTarget::Portal { restore_token }),
+        _ => None,
     }
 }
 

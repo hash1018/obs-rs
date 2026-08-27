@@ -45,9 +45,29 @@ pub struct ColorSourceSettings {
     pub rgba: [u8; 4],
 }
 
+/// Which display a Display Capture source captures.
+///
+/// The two forms are not interchangeable and neither platform can produce the
+/// other. Windows and X11 hand out a stable display name, and the capture layer
+/// resolves it against whatever display layout is live at the time. Wayland
+/// never names a display at all: `xdg-desktop-portal` owns the picker, and the
+/// only thing that reproduces an earlier selection is the opaque restore token
+/// it issues.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisplayCaptureTarget {
+    /// A stable display name such as `\\.\DISPLAY1` or `DP-1`.
+    MonitorName(String),
+    /// A selection made in the desktop portal's own picker.
+    ///
+    /// `restore_token` is `None` when the compositor declined to persist the
+    /// selection. That is not an error: starting capture then shows the picker
+    /// again instead of restoring silently, which is the portal's design.
+    Portal { restore_token: Option<String> },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayCaptureSettings {
-    pub monitor_name: String,
+    pub target: DisplayCaptureTarget,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -110,11 +110,8 @@ fn handle_source_command(
             SourceStore::add_color(transaction, scene_id)?;
             Ok(())
         }
-        SourceCommand::AddDisplayCapture {
-            scene_id,
-            monitor_name,
-        } => {
-            SourceStore::add_display_capture(transaction, scene_id, &monitor_name)?;
+        SourceCommand::AddDisplayCapture { scene_id, target } => {
+            SourceStore::add_display_capture(transaction, scene_id, &target)?;
             Ok(())
         }
         SourceCommand::Delete(scene_item_id) => {
@@ -289,7 +286,11 @@ mod tests {
             .unwrap();
         database
             .transaction(|transaction| {
-                SourceStore::add_display_capture(transaction, first_scene, r"\\.\DISPLAY1")?;
+                SourceStore::add_display_capture(
+                    transaction,
+                    first_scene,
+                    &crate::domain::DisplayCaptureTarget::MonitorName(r"\\.\DISPLAY1".into()),
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -353,7 +354,7 @@ mod tests {
             &mut database,
             SourceCommand::AddDisplayCapture {
                 scene_id,
-                monitor_name: r"\\.\DISPLAY2".into(),
+                target: crate::domain::DisplayCaptureTarget::MonitorName(r"\\.\DISPLAY2".into()),
             },
         )
         .unwrap();
@@ -364,8 +365,62 @@ mod tests {
         assert!(matches!(
             &sources.items[0].settings,
             crate::domain::SourceSettings::DisplayCapture(settings)
-                if settings.monitor_name == r"\\.\DISPLAY2"
+                if settings.target
+                    == crate::domain::DisplayCaptureTarget::MonitorName(r"\\.\DISPLAY2".into())
         ));
+    }
+
+    #[test]
+    fn portal_display_capture_persists_its_restore_token() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddDisplayCapture {
+                scene_id,
+                target: crate::domain::DisplayCaptureTarget::Portal {
+                    restore_token: Some("token-1".into()),
+                },
+            },
+        )
+        .unwrap();
+        // A compositor that declines to persist the selection still produces a
+        // usable source; it just has to prompt again next time.
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddDisplayCapture {
+                scene_id,
+                target: crate::domain::DisplayCaptureTarget::Portal {
+                    restore_token: None,
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        let targets: Vec<_> = sources
+            .items
+            .iter()
+            .map(|item| match &item.settings {
+                crate::domain::SourceSettings::DisplayCapture(settings) => settings.target.clone(),
+                other => panic!("expected a display capture, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                crate::domain::DisplayCaptureTarget::Portal {
+                    restore_token: None
+                },
+                crate::domain::DisplayCaptureTarget::Portal {
+                    restore_token: Some("token-1".into())
+                },
+            ]
+        );
     }
 
     #[test]

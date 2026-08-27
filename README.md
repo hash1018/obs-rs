@@ -58,7 +58,16 @@ The Compositor and Composite Frame are not implemented yet, so the Preview Viewp
 ## Current source support
 
 - Color Source is persisted and can be moved and resized in the editor.
-- Display Capture can enumerate monitors on Windows and Linux/X11, persist the selected monitor name, and create a SceneItem. On Wayland, source creation opens the system-owned `xdg-desktop-portal` picker and persists its opaque stream target. Runtime capture is not connected on either platform, so it does not produce Preview pixels.
+- Display Capture can enumerate monitors on Windows and Linux/X11, persist the selected monitor name, and create a SceneItem. On Wayland, source creation opens the system-owned `xdg-desktop-portal` picker and persists the restore token it issues. Runtime capture is not connected on either platform, so it does not produce Preview pixels.
+
+A Display Capture source stores one of two targets, and neither platform can produce the other:
+
+| Platform | Stored target | Reproduced by |
+|---|---|---|
+| Windows, Linux/X11 | Monitor name (`\\.\DISPLAY1`, `DP-1`) | Resolving the name against the live display layout |
+| Wayland | `xdg-desktop-portal` restore token | Reopening a portal session with the token |
+
+Wayland never names a display: the portal owns the picker and returns only what the user chose. A stream id belongs to the session that produced it, so the restore token is the only value that reproduces a selection in a later run. The compositor may decline to issue one, which is not an error — capture then shows the picker again instead of restoring silently.
 
 Monitor geometry is intentionally not persisted. The runtime capture layer will resolve the saved monitor name against the current display layout; on Windows it will open `DxgiCaptureSource` in GPU mode. GPU mode is an application invariant rather than a user setting and does not currently support cursor inclusion.
 

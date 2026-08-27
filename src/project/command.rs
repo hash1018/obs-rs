@@ -1,4 +1,4 @@
-use crate::domain::{SceneId, SceneItemId, Transform};
+use crate::domain::{DisplayCaptureTarget, SceneId, SceneItemId, Transform};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProjectCommand {
@@ -11,7 +11,7 @@ pub enum SourceCommand {
     AddColor(SceneId),
     AddDisplayCapture {
         scene_id: SceneId,
-        monitor_name: String,
+        target: DisplayCaptureTarget,
     },
     Delete(SceneItemId),
     SetTransform(SceneItemId, Transform),
