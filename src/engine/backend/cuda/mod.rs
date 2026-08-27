@@ -282,10 +282,28 @@ fn open_display_capture(
         },
         device,
     )?;
-    // A compositor may issue a fresh token on every restore. Keeping the old
-    // one then means prompting on every launch, which is the thing persisting
-    // it was for.
-    let refreshed_token = (refreshed_token != restore_token).then_some(refreshed_token);
+    // A compositor may issue a fresh token on every restore, and keeping the
+    // old one then means prompting on every launch — the thing persisting it
+    // was for. But declining to issue a new one is not the same as revoking
+    // the old, so `None` here must never replace a token that worked: that
+    // would throw away the only thing that can reopen this display.
+    let refreshed_token = refreshed_token
+        .filter(|token| Some(token) != restore_token.as_ref())
+        .map(|token| {
+            eprintln!("\"{}\": the portal issued a new restore token", item.name);
+            Some(token)
+        });
+    eprintln!(
+        "\"{}\": opened {}x{} (token {})",
+        item.name,
+        format.width,
+        format.height,
+        if restore_token.is_some() {
+            "restored"
+        } else {
+            "picked"
+        }
+    );
 
     // Capture gives BGRA and the compositor works in NV12; nothing between
     // them converts, so this element is not optional.
