@@ -12,7 +12,9 @@ This file defines repository-specific guidance for coding agents working on `obs
 - `src/ui` contains immediate-mode presentation and editor interaction. UI code may emit actions but must not access SQLite or perform engine work directly.
 - `src/project` owns project commands and the project worker. Scene and Source mutations flow through `ProjectCommand`.
 - `src/persistence` owns SQLite access, stores, and migrations. Schema changes require a migration and persistence tests.
+- `src/capture` decides what the user can pick: enumerating targets, or handing that job to a system-owned picker. It must not depend on `media-pp` — a picker runs before any pipeline exists.
 - `src/engine` owns the compositor, capture Sources, and the frame handed to the Preview. It runs on its own thread and reconciles against the project snapshot; it never reads SQLite directly and changes the project only through `ProjectDispatcher`.
+- `src/paths` answers where this user's files live. It is the only platform knowledge with no subject of its own; everything else platform-specific belongs beside what it implements.
 - `src/resources` samples this process's CPU and GPU usage independently from the UI.
 - `src/snapshots` contains read-only data presented to the UI.
 - `src/domain` contains project concepts and must not depend on UI or localization details.
@@ -20,6 +22,15 @@ This file defines repository-specific guidance for coding agents working on `obs
 - `src/settings.rs` owns application preferences such as locale. Application preferences are not project database records.
 
 When additional read-only UI inputs are required, extend `UiResources` instead of growing every `show` function's parameter list. Keep panel-specific mutable state in its dedicated UI state type.
+
+## Adding a platform
+
+Capture is deliberately split in two, and both halves need writing:
+
+- `src/capture/<os>.rs` — what the user can pick. Enumerate targets, or return `SourcePicker::SystemDialog` where the system owns that choice. No `media-pp` here.
+- `src/engine/source/<os>.rs` — how a stored target is opened, which needs `media-pp` and a live compositor handle. Selected by `#[cfg_attr(path)]` in `engine/source/mod.rs`; `unsupported.rs` is what a platform gets until it has one.
+
+Keep a platform's code beside the thing it implements rather than gathering it into one tree by virtue of being platform-specific. `src/paths` is the exception, and only because it implements nothing else.
 
 ## UI action flow
 
