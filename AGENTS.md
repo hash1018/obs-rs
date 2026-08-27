@@ -12,6 +12,7 @@ This file defines repository-specific guidance for coding agents working on `obs
 - `src/ui` contains immediate-mode presentation and editor interaction. UI code may emit actions but must not access SQLite or perform engine work directly.
 - `src/project` owns project commands and the project worker. Scene and Source mutations flow through `ProjectCommand`.
 - `src/persistence` owns SQLite access, stores, and migrations. Schema changes require a migration and persistence tests.
+- `src/engine` owns the compositor, capture Sources, and the frame handed to the Preview. It runs on its own thread and reconciles against the project snapshot; it never reads SQLite directly and changes the project only through `ProjectDispatcher`.
 - `src/resource_manager` samples process resource usage independently from the UI.
 - `src/snapshots` contains read-only data presented to the UI.
 - `src/domain` contains project concepts and must not depend on UI or localization details.
@@ -42,10 +43,12 @@ Use the terminology defined in `README.md` consistently:
 - Preview Workspace: the complete central editor area.
 - Preview Viewport: the rectangle that displays the final Composite Frame.
 - Scene Canvas: the fixed logical output coordinate space, currently 1920×1080.
-- Composite Frame: the future compositor output texture.
+- Composite Frame: the compositor's output, resolved into one texture the Preview samples.
 - Editor Overlay and Transform Gizmo: editor-only visuals that never enter output.
 
-Do not fake Source compositing inside Preview Viewport. Until a real Composite Frame exists, keep the Viewport empty and render only explicitly editor-only overflow and gizmos. Window and dock resizing may change Viewport mapping but must not mutate SceneItem Canvas coordinates.
+Do not composite Sources in UI code. The Viewport draws the Composite Frame the engine produced, and above it only editor-only overflow and gizmos. Window and dock resizing may change Viewport mapping but must not mutate SceneItem Canvas coordinates.
+
+A drag moves the layer directly and writes the Transform to the project once, when the pointer is released. Do not route per-frame gesture values through `ProjectCommand`: a drag is one edit, not sixty.
 
 ## Docking and panels
 
@@ -65,7 +68,8 @@ Do not fake Source compositing inside Preview Viewport. Until a real Composite F
 
 ## Rust and dependencies
 
-- Keep the `wgpu` eframe renderer; future `media-pp` GPU texture interop depends on it.
+- Keep the `wgpu` eframe renderer. The engine shares eframe's device rather than opening a second one, and the NV12 resolve pass runs on it.
+- Compositing belongs on the GPU. `media-pp`'s CPU compositor is single-threaded and cannot hold the output rate for more than one layer.
 - Prefer standard library facilities and existing dependencies when they are sufficient.
 - Keep new dependencies narrowly scoped and compatible with the repository toolchain.
 - Follow existing module visibility conventions (`pub(super)` and `pub(in crate::ui)`) rather than widening visibility unnecessarily.
@@ -73,6 +77,8 @@ Do not fake Source compositing inside Preview Viewport. Until a real Composite F
 ## Verification
 
 Run these checks after code changes:
+
+`media-pp` is taken by path from the sibling checkout, and building needs FFmpeg 8.0+ development headers plus PipeWire development files on Linux.
 
 ```text
 cargo fmt
