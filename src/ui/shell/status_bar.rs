@@ -3,7 +3,7 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::i18n::{LocalizationManager, TextKey};
-use crate::resource_manager::{GpuScope, GpuUsage};
+use crate::resources::{GpuScope, GpuUsage};
 use crate::snapshots::StatusSnapshot;
 
 pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {

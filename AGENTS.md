@@ -13,7 +13,7 @@ This file defines repository-specific guidance for coding agents working on `obs
 - `src/project` owns project commands and the project worker. Scene and Source mutations flow through `ProjectCommand`.
 - `src/persistence` owns SQLite access, stores, and migrations. Schema changes require a migration and persistence tests.
 - `src/engine` owns the compositor, capture Sources, and the frame handed to the Preview. It runs on its own thread and reconciles against the project snapshot; it never reads SQLite directly and changes the project only through `ProjectDispatcher`.
-- `src/resource_manager` samples process resource usage independently from the UI.
+- `src/resources` samples this process's CPU and GPU usage independently from the UI.
 - `src/snapshots` contains read-only data presented to the UI.
 - `src/domain` contains project concepts and must not depend on UI or localization details.
 - `src/i18n` owns locales, translation keys, Fluent bundles, and UI font fallback configuration.

@@ -4,7 +4,7 @@ use crate::domain::SceneCanvas;
 use crate::engine::EngineManager;
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectCommand, ProjectManager, ProjectUpdate};
-use crate::resource_manager::ResourceManager;
+use crate::resources::ResourceManager;
 use crate::settings::{AppSettings, SettingsStore};
 use crate::snapshots::Snapshots;
 use crate::ui::{self, UiAction, UiState};
@@ -16,7 +16,7 @@ pub struct ObsApp {
     ui_state: UiState,
     snapshots: Snapshots,
     project_manager: Option<ProjectManager>,
-    resource_manager: Option<ResourceManager>,
+    resources: Option<ResourceManager>,
     engine: Option<EngineManager>,
     #[cfg(target_os = "linux")]
     system_display_picker: Option<SystemDisplayPicker>,
@@ -57,7 +57,7 @@ impl ObsApp {
             ui_state,
             snapshots: Snapshots::default(),
             project_manager,
-            resource_manager: ResourceManager::spawn(move || {
+            resources: ResourceManager::spawn(move || {
                 resource_repaint_ctx.request_repaint();
             })
             .ok(),
@@ -113,7 +113,7 @@ impl ObsApp {
     }
 
     fn poll_resource_usage(&mut self) {
-        let Some(manager) = &self.resource_manager else {
+        let Some(manager) = &self.resources else {
             return;
         };
         if let Some(usage) = manager.latest() {

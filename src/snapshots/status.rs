@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::resource_manager::GpuUsage;
+use crate::resources::GpuUsage;
 
 #[derive(Default)]
 pub struct StatusSnapshot {

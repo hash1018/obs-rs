@@ -19,7 +19,7 @@ mod i18n;
 mod paths;
 mod persistence;
 mod project;
-mod resource_manager;
+mod resources;
 mod settings;
 mod snapshots;
 mod ui;
