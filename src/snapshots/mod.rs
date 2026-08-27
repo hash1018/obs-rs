@@ -1,5 +1,7 @@
+mod scenes;
 mod status;
 
+pub use scenes::{SceneSnapshot, ScenesSnapshot};
 pub use status::StatusSnapshot;
 
 /// Read-only application state consumed while drawing one UI frame.
@@ -8,5 +10,6 @@ pub use status::StatusSnapshot;
 /// UI function's parameter list.
 #[derive(Default)]
 pub struct Snapshots {
+    pub scenes: ScenesSnapshot,
     pub status: StatusSnapshot,
 }

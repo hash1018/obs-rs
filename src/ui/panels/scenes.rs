@@ -1,5 +1,10 @@
 use eframe::egui;
 
+use crate::scene::SceneAction;
+use crate::snapshots::ScenesSnapshot;
+
+use super::super::UiAction;
+
 const SCENE_ROW_HEIGHT: f32 = 28.0;
 const TOOLBAR_HEIGHT: f32 = 36.0;
 const TOOL_BUTTON_SIZE: f32 = 26.0;
@@ -13,22 +18,38 @@ enum ToolIcon {
     MoveDown,
 }
 
-pub(in crate::ui) fn show(ui: &mut egui::Ui) {
-    show_toolbar(ui);
+pub(in crate::ui) fn show(
+    ui: &mut egui::Ui,
+    snapshot: &ScenesSnapshot,
+    actions: &mut Vec<UiAction>,
+) {
+    show_toolbar(ui, snapshot, actions);
 
     egui::ScrollArea::vertical()
         .id_salt("scenes_list")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let row_width = ui.available_width();
-            let _ = ui.add_sized(
-                [row_width, SCENE_ROW_HEIGHT],
-                egui::Button::new("Scene 1").selected(true),
-            );
+            for scene in &snapshot.items {
+                let selected = snapshot.selected_scene_id == Some(scene.id);
+                let row_width = ui.available_width();
+                if ui
+                    .add_sized(
+                        [row_width, SCENE_ROW_HEIGHT],
+                        egui::Button::new(&scene.name).selected(selected),
+                    )
+                    .clicked()
+                {
+                    actions.push(UiAction::Scene(SceneAction::Select(scene.id)));
+                }
+            }
         });
 }
 
-fn show_toolbar(ui: &mut egui::Ui) {
+fn show_toolbar(ui: &mut egui::Ui, snapshot: &ScenesSnapshot, actions: &mut Vec<UiAction>) {
+    let selected = snapshot.selected_scene_id;
+    let selected_index =
+        selected.and_then(|selected| snapshot.items.iter().position(|scene| scene.id == selected));
+
     egui::Panel::bottom("scenes_toolbar")
         .exact_size(TOOLBAR_HEIGHT)
         .resizable(false)
@@ -39,19 +60,56 @@ fn show_toolbar(ui: &mut egui::Ui) {
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                tool_button(ui, ToolIcon::Add, "Add scene");
-                tool_button(ui, ToolIcon::Remove, "Remove selected scene");
-                tool_button(ui, ToolIcon::Duplicate, "Duplicate selected scene");
-                tool_button(ui, ToolIcon::MoveUp, "Move selected scene up");
-                tool_button(ui, ToolIcon::MoveDown, "Move selected scene down");
+                if tool_button(ui, ToolIcon::Add, "Add scene", true) {
+                    actions.push(UiAction::Scene(SceneAction::Add));
+                }
+                if tool_button(
+                    ui,
+                    ToolIcon::Remove,
+                    "Remove selected scene",
+                    selected.is_some() && snapshot.items.len() > 1,
+                ) && let Some(scene_id) = selected
+                {
+                    actions.push(UiAction::Scene(SceneAction::Delete(scene_id)));
+                }
+                if tool_button(
+                    ui,
+                    ToolIcon::Duplicate,
+                    "Duplicate selected scene",
+                    selected.is_some(),
+                ) && let Some(scene_id) = selected
+                {
+                    actions.push(UiAction::Scene(SceneAction::Duplicate(scene_id)));
+                }
+                if tool_button(
+                    ui,
+                    ToolIcon::MoveUp,
+                    "Move selected scene up",
+                    selected_index.is_some_and(|index| index > 0),
+                ) && let Some(scene_id) = selected
+                {
+                    actions.push(UiAction::Scene(SceneAction::MoveUp(scene_id)));
+                }
+                if tool_button(
+                    ui,
+                    ToolIcon::MoveDown,
+                    "Move selected scene down",
+                    selected_index.is_some_and(|index| index + 1 < snapshot.items.len()),
+                ) && let Some(scene_id) = selected
+                {
+                    actions.push(UiAction::Scene(SceneAction::MoveDown(scene_id)));
+                }
             });
         });
 }
 
-fn tool_button(ui: &mut egui::Ui, icon: ToolIcon, tooltip: &str) {
-    let response = ui.add_sized([TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE], egui::Button::new(""));
+fn tool_button(ui: &mut egui::Ui, icon: ToolIcon, tooltip: &str, enabled: bool) -> bool {
+    let response = ui.add_enabled(
+        enabled,
+        egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
+    );
     paint_icon(ui, &response, icon);
-    let _ = response.on_hover_text(tooltip);
+    response.on_hover_text(tooltip).clicked()
 }
 
 fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {

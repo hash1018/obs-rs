@@ -16,7 +16,7 @@ pub fn show(
 ) {
     menu_bar::show(ui, state, actions);
     status_bar::show(ui, &snapshots.status);
-    docking::show(ui, &mut state.dock_layout);
+    docking::show(ui, &mut state.dock_layout, snapshots, actions);
     preview::show(ui);
     menu_bar::show_about(ui, state);
 }

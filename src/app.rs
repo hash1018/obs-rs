@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resource_manager::ResourceManager;
 use crate::snapshots::Snapshots;
 use crate::ui::{self, UiAction, UiState};
@@ -7,6 +8,7 @@ use crate::ui::{self, UiAction, UiState};
 pub struct ObsApp {
     ui_state: UiState,
     snapshots: Snapshots,
+    project_manager: Option<ProjectManager>,
     resource_manager: Option<ResourceManager>,
     ui_actions: Vec<UiAction>,
 }
@@ -15,13 +17,31 @@ impl ObsApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ui_state = UiState::default();
         cc.egui_ctx.set_theme(ui_state.theme());
-        let repaint_ctx = cc.egui_ctx.clone();
+        let resource_repaint_ctx = cc.egui_ctx.clone();
+        let project_repaint_ctx = cc.egui_ctx.clone();
 
         Self {
             ui_state,
             snapshots: Snapshots::default(),
-            resource_manager: ResourceManager::spawn(move || repaint_ctx.request_repaint()).ok(),
+            project_manager: ProjectManager::spawn(move || project_repaint_ctx.request_repaint())
+                .ok(),
+            resource_manager: ResourceManager::spawn(move || {
+                resource_repaint_ctx.request_repaint();
+            })
+            .ok(),
             ui_actions: Vec::new(),
+        }
+    }
+
+    fn poll_project(&mut self) {
+        let Some(manager) = &self.project_manager else {
+            return;
+        };
+        if let Some(update) = manager.latest() {
+            match update {
+                ProjectUpdate::Scenes(scenes) => self.snapshots.scenes = scenes,
+                ProjectUpdate::Error(error) => eprintln!("project database error: {error}"),
+            }
         }
     }
 
@@ -38,6 +58,11 @@ impl ObsApp {
     fn handle_ui_action(&mut self, ctx: &egui::Context, action: UiAction) {
         match action {
             UiAction::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            UiAction::Scene(action) => {
+                if let Some(manager) = &self.project_manager {
+                    manager.dispatch(action);
+                }
+            }
             UiAction::SetFullscreen(fullscreen) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
             }
@@ -48,6 +73,7 @@ impl ObsApp {
 
 impl eframe::App for ObsApp {
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_project();
         self.poll_resource_usage();
     }
 
