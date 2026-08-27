@@ -17,6 +17,9 @@ about-description = media-pp로 만든 실시간 캡처 및 녹화 프로그램�
 dock-scenes = 장면
 dock-sources = 소스
 status-ready = 준비
+status-gpu-process = obs-rs가 사용 중인 GPU
+status-gpu-device = GPU 전체 사용률, * 표시. 이 드라이버는 프로세스별 GPU 카운터를 제공하지 않아 다른 프로그램의 사용량이 함께 포함됩니다.
+status-gpu-unavailable = 이 드라이버에서는 GPU 사용률을 얻을 수 없습니다
 
 scene-name-empty = 장면 이름을 입력해야 합니다
 scene-name-duplicate = 같은 이름의 장면이 이미 있습니다

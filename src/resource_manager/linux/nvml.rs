@@ -18,6 +18,15 @@ type DeviceGetCount = unsafe extern "C" fn(*mut u32) -> i32;
 type DeviceGetHandleByIndex = unsafe extern "C" fn(u32, *mut NvmlDevice) -> i32;
 type DeviceGetProcessUtilization =
     unsafe extern "C" fn(NvmlDevice, *mut ProcessUtilizationSample, *mut u32, u64) -> i32;
+type DeviceGetUtilizationRates = unsafe extern "C" fn(NvmlDevice, *mut Utilization) -> i32;
+
+/// Whole-adapter utilization, the counterpart of [`ProcessUtilizationSample`].
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Utilization {
+    gpu: u32,
+    memory: u32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -39,8 +48,20 @@ pub(super) struct NvmlSampler {
     _library: Library,
     shutdown: Shutdown,
     get_process_utilization: DeviceGetProcessUtilization,
+    /// Optional because its absence only costs the device-wide fallback, while
+    /// the symbols above are what make this sampler exist at all.
+    get_utilization_rates: Option<DeviceGetUtilizationRates>,
     devices: Vec<Device>,
     own_pid: u32,
+    /// Whether this process has ever turned up in a per-process sample.
+    ///
+    /// A driver that returns samples is not thereby tracking *us*. GeForce
+    /// parts answer a poll now and then with other processes' entries and
+    /// never ours, which reads identically to "obs-rs used no GPU" — and
+    /// would make the status bar alternate between a real device figure and a
+    /// false 0%. Seeing our own pid once is the evidence that the per-process
+    /// counter covers this process; until then it does not.
+    own_pid_seen: bool,
 }
 
 impl NvmlSampler {
@@ -64,6 +85,10 @@ impl NvmlSampler {
         // SAFETY: same stable ABI and retained-library reasoning as above.
         let get_process_utilization = unsafe {
             load::<DeviceGetProcessUtilization>(&library, b"nvmlDeviceGetProcessUtilization\0")?
+        };
+        // SAFETY: same stable ABI and retained-library reasoning as above.
+        let get_utilization_rates = unsafe {
+            load::<DeviceGetUtilizationRates>(&library, b"nvmlDeviceGetUtilizationRates\0")
         };
 
         // SAFETY: NVML was loaded successfully and takes no arguments here.
@@ -100,27 +125,55 @@ impl NvmlSampler {
             _library: library,
             shutdown,
             get_process_utilization,
+            get_utilization_rates,
             devices,
             own_pid: std::process::id(),
+            own_pid_seen: false,
         })
     }
 
-    pub(super) fn sample(&mut self) -> Option<f32> {
-        let mut sampled_device = false;
+    /// This process's own utilization, or `None` while nothing shows that
+    /// the driver tracks this process at all.
+    ///
+    /// The distinction is the whole point. An empty result is not "this
+    /// process used no GPU": NVIDIA's GeForce parts report `NOT_FOUND` for
+    /// nearly every poll, so treating that as zero would pin the reading at
+    /// 0% and hide that no per-process counter covers us. Returning `None` is
+    /// what lets the caller fall through to a coarser source.
+    pub(super) fn sample_process(&mut self) -> Option<f32> {
         let mut busiest = 0;
         for device in &mut self.devices {
             let Some(samples) = query_samples(self.get_process_utilization, device) else {
                 continue;
             };
-            sampled_device = true;
             for sample in samples {
                 if sample.pid != self.own_pid {
                     continue;
                 }
+                self.own_pid_seen = true;
                 busiest = busiest.max(sample_utilization(sample));
             }
         }
-        sampled_device.then_some(busiest as f32)
+        // Once this process is known to be tracked, a poll without it is a
+        // real zero. Before that, it is only the absence of evidence.
+        self.own_pid_seen.then_some(busiest as f32)
+    }
+
+    /// Whole-adapter utilization, for drivers with no working per-process
+    /// counter. Reports the busiest adapter rather than averaging them.
+    pub(super) fn sample_device(&mut self) -> Option<f32> {
+        let get_utilization_rates = self.get_utilization_rates?;
+        self.devices
+            .iter()
+            .filter_map(|device| {
+                let mut rates = Utilization::default();
+                // SAFETY: `device.handle` came from NVML and `rates` is a live
+                // output of the ABI-declared type.
+                let status = unsafe { get_utilization_rates(device.handle, &mut rates) };
+                (status == NVML_SUCCESS && rates.gpu <= 100).then_some(rates.gpu)
+            })
+            .max()
+            .map(|percent| percent as f32)
     }
 }
 
@@ -168,6 +221,14 @@ fn query_samples(
             device.last_seen_timestamp,
         )
     };
+    // The same code the size query treats as "nothing to report" has to mean
+    // the same thing here. The size query hands back a buffer capacity rather
+    // than a sample count, so a driver with no per-process data reaches this
+    // call and answers `NOT_FOUND` — reading that as a device failure is what
+    // made the whole sampler give up.
+    if status == NVML_ERROR_NOT_FOUND {
+        return Some(Vec::new());
+    }
     if status != NVML_SUCCESS {
         return None;
     }
@@ -216,13 +277,23 @@ mod tests {
     }
 
     #[test]
-    fn installed_nvml_returns_a_process_percentage() {
+    fn installed_nvml_reports_usable_percentages() {
         let Some(mut sampler) = NvmlSampler::new() else {
             return;
         };
-        let percent = sampler
-            .sample()
-            .expect("an initialized NVML sampler should query a device");
-        assert!((0.0..=100.0).contains(&percent), "{percent}");
+
+        // Per-process sampling is genuinely absent on some drivers, so `None`
+        // is a valid answer here and asserting `Some` made this test fail or
+        // pass depending on what else was using the GPU at the time.
+        if let Some(percent) = sampler.sample_process() {
+            assert!((0.0..=100.0).contains(&percent), "process {percent}");
+        }
+
+        // The device-wide reading is what has to work wherever NVML loaded at
+        // all; it is the fallback the status bar depends on.
+        let device = sampler
+            .sample_device()
+            .expect("an initialized NVML sampler should report adapter utilization");
+        assert!((0.0..=100.0).contains(&device), "device {device}");
     }
 }

@@ -17,6 +17,9 @@ about-description = Live capture and recording, built with media-pp.
 dock-scenes = Scenes
 dock-sources = Sources
 status-ready = Ready
+status-gpu-process = GPU used by obs-rs
+status-gpu-device = Whole-GPU usage, marked *. This driver reports no per-process GPU counter, so this includes every other application.
+status-gpu-unavailable = No GPU counter is available on this driver
 
 scene-name-empty = Scene name cannot be empty
 scene-name-duplicate = A scene with this name already exists

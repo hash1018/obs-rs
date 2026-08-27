@@ -18,6 +18,9 @@ pub enum TextKey {
     DockScenes,
     DockSources,
     StatusReady,
+    StatusGpuProcess,
+    StatusGpuDevice,
+    StatusGpuUnavailable,
     SceneNameEmpty,
     SceneNameDuplicate,
     SceneAdd,
@@ -111,6 +114,9 @@ impl TextKey {
             Self::PreviewFitWorkspace => "preview-fit-workspace",
             Self::PreviewResetView => "preview-reset-view",
             Self::PreviewScaleOptions => "preview-scale-options",
+            Self::StatusGpuProcess => "status-gpu-process",
+            Self::StatusGpuDevice => "status-gpu-device",
+            Self::StatusGpuUnavailable => "status-gpu-unavailable",
         }
     }
 }

@@ -15,7 +15,7 @@ use windows::{
     core::w,
 };
 
-use super::ResourceUsage;
+use super::{GpuScope, GpuUsage, ResourceUsage};
 
 pub struct ProcessResourceSampler {
     cpu: CpuSampler,
@@ -33,7 +33,16 @@ impl ProcessResourceSampler {
     pub fn sample(&mut self) -> ResourceUsage {
         ResourceUsage {
             cpu_percent: self.cpu.sample(),
-            gpu_percent: self.gpu.as_mut().and_then(GpuSampler::sample),
+            // PDH's GPU engine counters are already scoped to this
+            // process, so Windows never needs the device-wide fallback.
+            gpu: self
+                .gpu
+                .as_mut()
+                .and_then(GpuSampler::sample)
+                .map(|percent| GpuUsage {
+                    percent,
+                    scope: GpuScope::Process,
+                }),
         }
     }
 }

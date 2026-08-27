@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::ResourceUsage;
+use super::{GpuScope, GpuUsage, ResourceUsage};
 
 pub(super) struct ProcessResourceSampler {
     cpu: CpuSampler,
@@ -26,7 +26,7 @@ impl ProcessResourceSampler {
     pub(super) fn sample(&mut self) -> ResourceUsage {
         ResourceUsage {
             cpu_percent: self.cpu.sample(),
-            gpu_percent: self.gpu.sample(),
+            gpu: self.gpu.sample(),
         }
     }
 }
@@ -110,11 +110,32 @@ impl GpuSampler {
         }
     }
 
-    fn sample(&mut self) -> Option<f32> {
+    /// Prefers a per-process reading and only widens to the whole adapter
+    /// when neither per-process source answers.
+    ///
+    /// Both per-process sources are unavailable together on NVIDIA's Linux
+    /// driver: it exposes no `drm-engine-*` fdinfo, and per-process NVML
+    /// samples are absent on GeForce parts. Without the last tier the status
+    /// bar simply reads `--` on those machines.
+    fn sample(&mut self) -> Option<GpuUsage> {
+        let process = self
+            .nvml
+            .as_mut()
+            .and_then(nvml::NvmlSampler::sample_process)
+            .or_else(|| self.drm.sample());
+        if let Some(percent) = process {
+            return Some(GpuUsage {
+                percent,
+                scope: GpuScope::Process,
+            });
+        }
         self.nvml
             .as_mut()
-            .and_then(nvml::NvmlSampler::sample)
-            .or_else(|| self.drm.sample())
+            .and_then(nvml::NvmlSampler::sample_device)
+            .map(|percent| GpuUsage {
+                percent,
+                scope: GpuScope::Device,
+            })
     }
 }
 

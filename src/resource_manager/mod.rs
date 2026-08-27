@@ -18,10 +18,32 @@ mod windows;
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// What a GPU reading actually measures.
+///
+/// Not cosmetic: a per-process figure and a whole-device one answer different
+/// questions, and no platform offers both from one source. Reporting a device
+/// figure as if it were this process's would overstate obs-rs's cost by
+/// whatever else is drawing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuScope {
+    /// This process's own share, from per-process engine counters.
+    Process,
+    /// Every process on the adapter. Used only where no per-process counter
+    /// exists — NVIDIA's Linux driver exposes neither `drm-engine-*` fdinfo
+    /// nor working per-process NVML samples on GeForce parts.
+    Device,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GpuUsage {
+    pub percent: f32,
+    pub scope: GpuScope,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResourceUsage {
     pub cpu_percent: Option<f32>,
-    pub gpu_percent: Option<f32>,
+    pub gpu: Option<GpuUsage>,
 }
 
 pub struct ResourceManager {
