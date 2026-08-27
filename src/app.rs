@@ -39,7 +39,10 @@ impl ObsApp {
         };
         if let Some(update) = manager.latest() {
             match update {
-                ProjectUpdate::Scenes(scenes) => self.snapshots.scenes = scenes,
+                ProjectUpdate::Snapshot { scenes, sources } => {
+                    self.snapshots.scenes = scenes;
+                    self.snapshots.sources = sources;
+                }
                 ProjectUpdate::Error(error) => eprintln!("project database error: {error}"),
             }
         }

@@ -20,6 +20,7 @@ pub fn show(
         ui,
         &mut state.dock_layout,
         &mut state.scenes,
+        &mut state.sources,
         snapshots,
         actions,
     );

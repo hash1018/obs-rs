@@ -6,6 +6,7 @@ use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
 use crate::snapshots::Snapshots;
 use crate::ui::{UiAction, panels};
 use panels::scenes::ScenesPanelState;
+use panels::sources::SourcesPanelState;
 
 const SIDE_DEFAULT_SIZE: f32 = 260.0;
 const SIDE_MIN_SIZE: f32 = 180.0;
@@ -49,6 +50,7 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     layout: &mut DockLayout,
     scenes_state: &mut ScenesPanelState,
+    sources_state: &mut SourcesPanelState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) {
@@ -63,7 +65,15 @@ pub(super) fn show(
         }
 
         let response = region_panel(region, layout).show(ui, |ui| {
-            show_region(ui, layout, region, scenes_state, snapshots, actions)
+            show_region(
+                ui,
+                layout,
+                region,
+                scenes_state,
+                sources_state,
+                snapshots,
+                actions,
+            )
         });
         region_rects.insert(region, response.inner.rect);
         panel_drags.extend(response.inner.panel_drags);
@@ -121,6 +131,7 @@ fn show_region(
     layout: &mut DockLayout,
     region: DockRegionId,
     scenes_state: &mut ScenesPanelState,
+    sources_state: &mut SourcesPanelState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) -> RegionOutput {
@@ -142,7 +153,15 @@ fn show_region(
             usable_length * weights[index]
         };
         let pane_rect = rect_along_axis(region, region_rect, axis_cursor, pane_length);
-        let title_response = show_panel(ui, pane_rect, panel, scenes_state, snapshots, actions);
+        let title_response = show_panel(
+            ui,
+            pane_rect,
+            panel,
+            scenes_state,
+            sources_state,
+            snapshots,
+            actions,
+        );
         panel_drags.push((panel, title_response));
         axis_cursor += pane_length;
 
@@ -172,6 +191,7 @@ fn show_panel(
     rect: egui::Rect,
     panel: DockPanel,
     scenes_state: &mut ScenesPanelState,
+    sources_state: &mut SourcesPanelState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) -> egui::Response {
@@ -209,7 +229,9 @@ fn show_panel(
         DockPanel::Scenes => {
             panels::scenes::show(&mut child, scenes_state, &snapshots.scenes, actions);
         }
-        DockPanel::Sources => panels::sources::show(&mut child),
+        DockPanel::Sources => {
+            panels::sources::show(&mut child, sources_state, &snapshots.sources);
+        }
     }
 
     title_response

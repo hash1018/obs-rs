@@ -1,9 +1,9 @@
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
-use crate::domain::Scene;
-use crate::persistence::{PersistenceResult, ProjectDatabase, SceneStore};
-use crate::snapshots::{SceneSnapshot, ScenesSnapshot};
+use crate::domain::{Scene, SceneItem, Source};
+use crate::persistence::{PersistenceResult, ProjectDatabase, SceneStore, SourceStore};
+use crate::snapshots::{SceneItemSnapshot, SceneSnapshot, ScenesSnapshot, SourcesSnapshot};
 
 use super::{ProjectCommand, SceneCommand};
 
@@ -13,7 +13,10 @@ enum ManagerMessage {
 }
 
 pub enum ProjectUpdate {
-    Scenes(ScenesSnapshot),
+    Snapshot {
+        scenes: ScenesSnapshot,
+        sources: SourcesSnapshot,
+    },
     Error(String),
 }
 
@@ -127,13 +130,73 @@ fn scene_snapshot(database: &ProjectDatabase) -> PersistenceResult<ScenesSnapsho
     })
 }
 
+fn sources_snapshot(
+    database: &ProjectDatabase,
+    scenes: &ScenesSnapshot,
+) -> PersistenceResult<SourcesSnapshot> {
+    let Some(scene_id) = scenes.selected_scene_id else {
+        return Ok(SourcesSnapshot::default());
+    };
+    let scene_name = scenes
+        .items
+        .iter()
+        .find(|scene| scene.id == scene_id)
+        .map(|scene| scene.name.clone());
+    let items = SourceStore::list_for_scene(database.connection(), scene_id)?
+        .into_iter()
+        .map(|(item, source)| {
+            debug_assert_eq!(item.scene_id, scene_id);
+            debug_assert_eq!(item.source_id, source.id);
+            let SceneItem {
+                id,
+                visible,
+                locked,
+                transform,
+                crop,
+                z_index,
+                ..
+            } = item;
+            let Source {
+                id: source_id,
+                name,
+                kind,
+            } = source;
+            SceneItemSnapshot {
+                id,
+                source_id,
+                name,
+                kind,
+                visible,
+                locked,
+                transform,
+                crop,
+                z_index,
+            }
+        })
+        .collect();
+
+    Ok(SourcesSnapshot {
+        scene_id: Some(scene_id),
+        scene_name,
+        items,
+    })
+}
+
+fn project_snapshot(
+    database: &ProjectDatabase,
+) -> PersistenceResult<(ScenesSnapshot, SourcesSnapshot)> {
+    let scenes = scene_snapshot(database)?;
+    let sources = sources_snapshot(database, &scenes)?;
+    Ok((scenes, sources))
+}
+
 fn publish_snapshot(
     database: &ProjectDatabase,
     update_tx: &Sender<ProjectUpdate>,
     wake_ui: &impl Fn(),
 ) {
-    let update = match scene_snapshot(database) {
-        Ok(snapshot) => ProjectUpdate::Scenes(snapshot),
+    let update = match project_snapshot(database) {
+        Ok((scenes, sources)) => ProjectUpdate::Snapshot { scenes, sources },
         Err(error) => ProjectUpdate::Error(error.to_string()),
     };
     let _ = update_tx.send(update);
@@ -187,5 +250,35 @@ mod tests {
         handle_scene_command(&mut database, SceneCommand::Delete(second)).unwrap();
         let snapshot = scene_snapshot(&database).unwrap();
         assert_eq!(snapshot.items.len(), 2);
+    }
+
+    #[test]
+    fn sources_snapshot_follows_the_selected_scene() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let first_scene = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        database
+            .transaction(|transaction| {
+                let source = SourceStore::create(
+                    transaction,
+                    "Display Capture",
+                    crate::domain::SourceKind::DisplayCapture,
+                )?;
+                SourceStore::add_to_scene(transaction, first_scene, source)?;
+                Ok(())
+            })
+            .unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.scene_id, Some(first_scene));
+        assert_eq!(sources.items.len(), 1);
+        assert_eq!(sources.items[0].name, "Display Capture");
+
+        handle_scene_command(&mut database, SceneCommand::Add).unwrap();
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert!(sources.items.is_empty());
+        assert_eq!(sources.scene_name.as_deref(), Some("Scene 2"));
     }
 }
