@@ -1,5 +1,4 @@
 mod menu_bar;
-mod preview;
 mod status_bar;
 
 use eframe::egui;
@@ -14,6 +13,7 @@ pub fn show(
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) {
+    state.editor.sync(&snapshots.sources);
     menu_bar::show(ui, state, actions);
     status_bar::show(ui, &snapshots.status);
     docking::show(
@@ -21,9 +21,10 @@ pub fn show(
         &mut state.dock_layout,
         &mut state.scenes,
         &mut state.sources,
+        &mut state.editor,
         snapshots,
         actions,
     );
-    preview::show(ui);
+    super::preview::show(ui, &mut state.editor, &snapshots.sources, actions);
     menu_bar::show_about(ui, state);
 }

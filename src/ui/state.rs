@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use super::docking::DockLayout;
+use super::editor::SceneEditorState;
 use super::panels::scenes::ScenesPanelState;
 use super::panels::sources::SourcesPanelState;
 
@@ -9,6 +10,7 @@ pub struct UiState {
     pub(super) dock_layout: DockLayout,
     pub(super) fullscreen: bool,
     pub(super) scenes: ScenesPanelState,
+    pub(super) editor: SceneEditorState,
     pub(super) sources: SourcesPanelState,
     pub(super) theme: egui::ThemePreference,
 }
@@ -26,6 +28,7 @@ impl Default for UiState {
             dock_layout: DockLayout::default(),
             fullscreen: false,
             scenes: ScenesPanelState::default(),
+            editor: SceneEditorState::default(),
             sources: SourcesPanelState::default(),
             theme: egui::ThemePreference::Dark,
         }

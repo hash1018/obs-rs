@@ -1,9 +1,8 @@
-use rusqlite::Connection;
-#[cfg(test)]
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 
 use crate::domain::{
-    Crop, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind, Transform,
+    ColorSourceSettings, Crop, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId,
+    SourceKind, SourceSettings, Transform,
 };
 
 use super::PersistenceResult;
@@ -34,9 +33,17 @@ impl SourceStore {
                 scene_items.crop_bottom,
                 scene_items.z_index,
                 sources.name,
-                sources.kind
+                sources.kind,
+                color_source_settings.width,
+                color_source_settings.height,
+                color_source_settings.red,
+                color_source_settings.green,
+                color_source_settings.blue,
+                color_source_settings.alpha
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
+             LEFT JOIN color_source_settings
+                ON color_source_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -51,6 +58,18 @@ impl SourceStore {
                         rusqlite::types::Type::Text,
                     )
                 })?;
+                let settings = match kind {
+                    SourceKind::Color => SourceSettings::Color(ColorSourceSettings {
+                        size: [row.get::<_, i64>(18)? as f32, row.get::<_, i64>(19)? as f32],
+                        rgba: [
+                            row.get::<_, i64>(20)? as u8,
+                            row.get::<_, i64>(21)? as u8,
+                            row.get::<_, i64>(22)? as u8,
+                            row.get::<_, i64>(23)? as u8,
+                        ],
+                    }),
+                    _ => SourceSettings::None,
+                };
                 let source_id = SourceId(row.get(1)?);
                 Ok((
                     SceneItem {
@@ -77,43 +96,143 @@ impl SourceStore {
                         id: source_id,
                         name: row.get(16)?,
                         kind,
+                        settings,
                     },
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub(crate) fn add_color(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, "Color Source")?;
+        let source_id = create(transaction, &name, SourceKind::Color)?;
+        let canvas = SceneCanvas::DEFAULT;
+        let rgba = [53_u8, 91, 192, 255];
+        transaction.execute(
+            "INSERT INTO color_source_settings
+                (source_id, width, height, red, green, blue, alpha)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                source_id.0,
+                canvas.width as i64,
+                canvas.height as i64,
+                rgba[0],
+                rgba[1],
+                rgba[2],
+                rgba[3]
+            ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, canvas)
+    }
+
+    pub(crate) fn set_transform(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        transform: Transform,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_items
+             SET position_x = ?1,
+                 position_y = ?2,
+                 scale_x = ?3,
+                 scale_y = ?4,
+                 rotation_degrees = ?5,
+                 anchor_x = ?6,
+                 anchor_y = ?7
+             WHERE id = ?8",
+            params![
+                transform.position[0],
+                transform.position[1],
+                transform.scale[0],
+                transform.scale[1],
+                transform.rotation_degrees,
+                transform.anchor[0],
+                transform.anchor[1],
+                scene_item_id.0
+            ],
+        )?;
+        Ok(())
+    }
+
     #[cfg(test)]
-    pub(crate) fn create(
+    pub(crate) fn create_for_test(
         transaction: &Transaction<'_>,
         name: &str,
         kind: SourceKind,
     ) -> PersistenceResult<SourceId> {
-        transaction.execute(
-            "INSERT INTO sources (name, kind) VALUES (?1, ?2)",
-            params![name, kind.storage_name()],
-        )?;
-        Ok(SourceId(transaction.last_insert_rowid()))
+        create(transaction, name, kind)
     }
 
     #[cfg(test)]
-    pub(crate) fn add_to_scene(
+    pub(crate) fn add_to_scene_for_test(
         transaction: &Transaction<'_>,
         scene_id: SceneId,
         source_id: SourceId,
     ) -> PersistenceResult<SceneItemId> {
-        transaction.execute(
-            "INSERT INTO scene_items (scene_id, source_id, z_index)
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+}
+
+fn create(
+    transaction: &Transaction<'_>,
+    name: &str,
+    kind: SourceKind,
+) -> PersistenceResult<SourceId> {
+    transaction.execute(
+        "INSERT INTO sources (name, kind) VALUES (?1, ?2)",
+        params![name, kind.storage_name()],
+    )?;
+    Ok(SourceId(transaction.last_insert_rowid()))
+}
+
+fn add_to_scene(
+    transaction: &Transaction<'_>,
+    scene_id: SceneId,
+    source_id: SourceId,
+    canvas: SceneCanvas,
+) -> PersistenceResult<SceneItemId> {
+    transaction.execute(
+        "INSERT INTO scene_items
+                (scene_id, source_id, position_x, position_y, z_index)
              VALUES (
                 ?1,
                 ?2,
+                ?3,
+                ?4,
                 COALESCE(
                     (SELECT MAX(z_index) + 1 FROM scene_items WHERE scene_id = ?1),
                     0
                 )
              )",
-            params![scene_id.0, source_id.0],
+        params![
+            scene_id.0,
+            source_id.0,
+            canvas.width * 0.5,
+            canvas.height * 0.5
+        ],
+    )?;
+    Ok(SceneItemId(transaction.last_insert_rowid()))
+}
+
+fn unique_source_name(connection: &Connection, base: &str) -> PersistenceResult<String> {
+    let mut suffix = 1;
+    loop {
+        let candidate = if suffix == 1 {
+            base.to_owned()
+        } else {
+            format!("{base} {suffix}")
+        };
+        let exists = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sources WHERE name = ?1)",
+            [&candidate],
+            |row| row.get::<_, bool>(0),
         )?;
-        Ok(SceneItemId(transaction.last_insert_rowid()))
+        if !exists {
+            return Ok(candidate);
+        }
+        suffix += 1;
     }
 }

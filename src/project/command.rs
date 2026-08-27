@@ -1,8 +1,15 @@
-use crate::domain::SceneId;
+use crate::domain::{SceneId, SceneItemId, Transform};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProjectCommand {
     Scene(SceneCommand),
+    Source(SourceCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SourceCommand {
+    AddColor(SceneId),
+    SetTransform(SceneItemId, Transform),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

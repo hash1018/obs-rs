@@ -4,6 +4,7 @@ use eframe::egui;
 
 use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
 use crate::snapshots::Snapshots;
+use crate::ui::editor::SceneEditorState;
 use crate::ui::{UiAction, panels};
 use panels::scenes::ScenesPanelState;
 use panels::sources::SourcesPanelState;
@@ -40,6 +41,14 @@ struct RegionOutput {
     rect: egui::Rect,
 }
 
+struct DockContent<'a> {
+    scenes_state: &'a mut ScenesPanelState,
+    sources_state: &'a mut SourcesPanelState,
+    editor: &'a mut SceneEditorState,
+    snapshots: &'a Snapshots,
+    actions: &'a mut Vec<UiAction>,
+}
+
 #[derive(Clone, Copy)]
 enum DropIndicator {
     Area(egui::Rect),
@@ -51,6 +60,7 @@ pub(super) fn show(
     layout: &mut DockLayout,
     scenes_state: &mut ScenesPanelState,
     sources_state: &mut SourcesPanelState,
+    editor: &mut SceneEditorState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) {
@@ -58,23 +68,21 @@ pub(super) fn show(
     let mut panel_drags = Vec::new();
     let mut region_rects = HashMap::new();
     let mut pending_move = None;
+    let mut content = DockContent {
+        scenes_state,
+        sources_state,
+        editor,
+        snapshots,
+        actions,
+    };
 
     for region in REGIONS {
         if layout.visible_panels(region).is_empty() {
             continue;
         }
 
-        let response = region_panel(region, layout).show(ui, |ui| {
-            show_region(
-                ui,
-                layout,
-                region,
-                scenes_state,
-                sources_state,
-                snapshots,
-                actions,
-            )
-        });
+        let response = region_panel(region, layout)
+            .show(ui, |ui| show_region(ui, layout, region, &mut content));
         region_rects.insert(region, response.inner.rect);
         panel_drags.extend(response.inner.panel_drags);
     }
@@ -130,10 +138,7 @@ fn show_region(
     ui: &mut egui::Ui,
     layout: &mut DockLayout,
     region: DockRegionId,
-    scenes_state: &mut ScenesPanelState,
-    sources_state: &mut SourcesPanelState,
-    snapshots: &Snapshots,
-    actions: &mut Vec<UiAction>,
+    content: &mut DockContent<'_>,
 ) -> RegionOutput {
     let panels = layout.visible_panels(region);
     let weights = layout.normalized_weights(region, &panels);
@@ -153,15 +158,7 @@ fn show_region(
             usable_length * weights[index]
         };
         let pane_rect = rect_along_axis(region, region_rect, axis_cursor, pane_length);
-        let title_response = show_panel(
-            ui,
-            pane_rect,
-            panel,
-            scenes_state,
-            sources_state,
-            snapshots,
-            actions,
-        );
+        let title_response = show_panel(ui, pane_rect, panel, content);
         panel_drags.push((panel, title_response));
         axis_cursor += pane_length;
 
@@ -190,10 +187,7 @@ fn show_panel(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     panel: DockPanel,
-    scenes_state: &mut ScenesPanelState,
-    sources_state: &mut SourcesPanelState,
-    snapshots: &Snapshots,
-    actions: &mut Vec<UiAction>,
+    content: &mut DockContent<'_>,
 ) -> egui::Response {
     ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
     ui.painter().rect_stroke(
@@ -227,10 +221,21 @@ fn show_panel(
 
     match panel {
         DockPanel::Scenes => {
-            panels::scenes::show(&mut child, scenes_state, &snapshots.scenes, actions);
+            panels::scenes::show(
+                &mut child,
+                content.scenes_state,
+                &content.snapshots.scenes,
+                content.actions,
+            );
         }
         DockPanel::Sources => {
-            panels::sources::show(&mut child, sources_state, &snapshots.sources);
+            panels::sources::show(
+                &mut child,
+                content.sources_state,
+                content.editor,
+                &content.snapshots.sources,
+                content.actions,
+            );
         }
     }
 

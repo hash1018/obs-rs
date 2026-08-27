@@ -7,6 +7,7 @@ use crate::snapshots::Snapshots;
 
 use super::{
     UiAction,
+    editor::SceneEditorState,
     panels::{scenes::ScenesPanelState, sources::SourcesPanelState},
 };
 
@@ -17,8 +18,17 @@ pub(super) fn show(
     layout: &mut DockLayout,
     scenes_state: &mut ScenesPanelState,
     sources_state: &mut SourcesPanelState,
+    editor: &mut SceneEditorState,
     snapshots: &Snapshots,
     actions: &mut Vec<UiAction>,
 ) {
-    renderer::show(ui, layout, scenes_state, sources_state, snapshots, actions);
+    renderer::show(
+        ui,
+        layout,
+        scenes_state,
+        sources_state,
+        editor,
+        snapshots,
+        actions,
+    );
 }

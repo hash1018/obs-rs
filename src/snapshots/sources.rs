@@ -1,26 +1,35 @@
-use crate::domain::{Crop, SceneId, SceneItemId, SourceId, SourceKind, Transform};
+use crate::domain::{
+    Crop, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings, Transform,
+};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SourcesSnapshot {
+    pub canvas: SceneCanvas,
     pub scene_id: Option<SceneId>,
     pub scene_name: Option<String>,
     /// Front-most item first, matching the order shown in the Sources dock.
     pub items: Vec<SceneItemSnapshot>,
 }
 
+impl Default for SourcesSnapshot {
+    fn default() -> Self {
+        Self {
+            canvas: SceneCanvas::DEFAULT,
+            scene_id: None,
+            scene_name: None,
+            items: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone)]
-#[expect(
-    dead_code,
-    reason = "transform and source metadata are consumed by the upcoming preview editor"
-)]
 pub struct SceneItemSnapshot {
     pub id: SceneItemId,
-    pub source_id: SourceId,
     pub name: String,
     pub kind: SourceKind,
+    pub settings: SourceSettings,
     pub visible: bool,
     pub locked: bool,
     pub transform: Transform,
     pub crop: Crop,
-    pub z_index: i64,
 }

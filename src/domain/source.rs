@@ -13,7 +13,6 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    #[cfg(test)]
     pub(crate) fn storage_name(self) -> &'static str {
         match self {
             Self::DisplayCapture => "display_capture",
@@ -52,9 +51,22 @@ impl SourceKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorSourceSettings {
+    pub size: [f32; 2],
+    pub rgba: [u8; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SourceSettings {
+    Color(ColorSourceSettings),
+    None,
+}
+
 #[derive(Debug, Clone)]
 pub struct Source {
     pub id: SourceId,
     pub name: String,
     pub kind: SourceKind,
+    pub settings: SourceSettings,
 }

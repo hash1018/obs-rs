@@ -5,7 +5,7 @@ use crate::domain::{Scene, SceneItem, Source};
 use crate::persistence::{PersistenceResult, ProjectDatabase, SceneStore, SourceStore};
 use crate::snapshots::{SceneItemSnapshot, SceneSnapshot, ScenesSnapshot, SourcesSnapshot};
 
-use super::{ProjectCommand, SceneCommand};
+use super::{ProjectCommand, SceneCommand, SourceCommand};
 
 enum ManagerMessage {
     Execute(ProjectCommand),
@@ -97,7 +97,23 @@ fn handle_project_command(
 ) -> PersistenceResult<()> {
     match command {
         ProjectCommand::Scene(command) => handle_scene_command(database, command),
+        ProjectCommand::Source(command) => handle_source_command(database, command),
     }
+}
+
+fn handle_source_command(
+    database: &mut ProjectDatabase,
+    command: SourceCommand,
+) -> PersistenceResult<()> {
+    database.transaction(|transaction| match command {
+        SourceCommand::AddColor(scene_id) => {
+            SourceStore::add_color(transaction, scene_id)?;
+            Ok(())
+        }
+        SourceCommand::SetTransform(scene_item_id, transform) => {
+            SourceStore::set_transform(transaction, scene_item_id, transform)
+        }
+    })
 }
 
 fn handle_scene_command(
@@ -157,25 +173,27 @@ fn sources_snapshot(
                 ..
             } = item;
             let Source {
-                id: source_id,
+                id: _,
                 name,
                 kind,
+                settings,
             } = source;
+            debug_assert!(z_index >= 0);
             SceneItemSnapshot {
                 id,
-                source_id,
                 name,
                 kind,
+                settings,
                 visible,
                 locked,
                 transform,
                 crop,
-                z_index,
             }
         })
         .collect();
 
     Ok(SourcesSnapshot {
+        canvas: crate::domain::SceneCanvas::DEFAULT,
         scene_id: Some(scene_id),
         scene_name,
         items,
@@ -261,12 +279,12 @@ mod tests {
             .unwrap();
         database
             .transaction(|transaction| {
-                let source = SourceStore::create(
+                let source = SourceStore::create_for_test(
                     transaction,
                     "Display Capture",
                     crate::domain::SourceKind::DisplayCapture,
                 )?;
-                SourceStore::add_to_scene(transaction, first_scene, source)?;
+                SourceStore::add_to_scene_for_test(transaction, first_scene, source)?;
                 Ok(())
             })
             .unwrap();
@@ -280,5 +298,41 @@ mod tests {
         let (_, sources) = project_snapshot(&database).unwrap();
         assert!(sources.items.is_empty());
         assert_eq!(sources.scene_name.as_deref(), Some("Scene 2"));
+    }
+
+    #[test]
+    fn color_sources_are_named_and_transformed_persistently() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items.len(), 2);
+        assert_eq!(sources.items[0].name, "Color Source 2");
+        assert_eq!(sources.items[1].name, "Color Source");
+        assert_eq!(sources.items[0].transform.position, [960.0, 540.0]);
+        assert!(matches!(
+            sources.items[0].settings,
+            crate::domain::SourceSettings::Color(_)
+        ));
+
+        let item_id = sources.items[0].id;
+        let transform = crate::domain::Transform {
+            position: [480.0, 270.0],
+            scale: [0.5, 0.5],
+            ..crate::domain::Transform::default()
+        };
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetTransform(item_id, transform),
+        )
+        .unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items[0].transform, transform);
     }
 }

@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -71,6 +71,21 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 2;",
         )?;
     }
+    if current_version < 3 {
+        transaction.execute_batch(
+            "CREATE TABLE color_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                width     INTEGER NOT NULL,
+                height    INTEGER NOT NULL,
+                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
+                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
+                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
+                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255)
+            );
+
+            PRAGMA user_version = 3;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -102,11 +117,14 @@ mod tests {
         let scene_name: String = connection
             .query_row("SELECT name FROM scenes", [], |row| row.get(0))
             .unwrap();
-        let source_table_exists: bool = connection
+        let source_tables_exist: bool = connection
             .query_row(
                 "SELECT EXISTS(
                     SELECT 1 FROM sqlite_master
                     WHERE type = 'table' AND name = 'sources'
+                ) AND EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'color_source_settings'
                 )",
                 [],
                 |row| row.get(0),
@@ -115,6 +133,6 @@ mod tests {
 
         assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(scene_name, "Existing Scene");
-        assert!(source_table_exists);
+        assert!(source_tables_exist);
     }
 }

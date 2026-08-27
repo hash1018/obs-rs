@@ -1,6 +1,8 @@
 mod action;
 mod docking;
+mod editor;
 mod panels;
+mod preview;
 mod shell;
 mod state;
 
