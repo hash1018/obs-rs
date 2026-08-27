@@ -184,6 +184,17 @@ impl Nv12Target {
         if frame.width() != width || frame.height() != height {
             return false;
         }
+        if is_partly_unwritten(frame) {
+            static REPORTED: std::sync::Once = std::sync::Once::new();
+            REPORTED.call_once(|| {
+                eprintln!(
+                    "a composited frame arrived partly unwritten and was dropped; \
+                     this happens while a layer is resized quickly and is not yet \
+                     understood. The Preview skips such frames."
+                );
+            });
+            return false;
+        }
         upload_plane(queue, &self.luma, frame.data(0), frame.stride(0), 1);
         upload_plane(queue, &self.chroma, frame.data(1), frame.stride(1), 2);
 
@@ -215,6 +226,41 @@ impl Nv12Target {
         queue.submit([encoder.finish()]);
         true
     }
+}
+
+/// Whether a frame's tail was never written.
+///
+/// Rapidly resizing a layer makes the compositor emit, roughly once in six
+/// hundred frames, a frame whose last rows are untouched — the shape of a
+/// linear write that stopped part way. Those bytes are zero, and zero is not
+/// a colour this pipeline produces: BT.709 limited-range black is Y=16 with
+/// both chroma at 128, and every Source arrives converted. So all three at
+/// zero means nothing wrote there.
+///
+/// Dropping the frame costs one Preview refresh out of hundreds and is
+/// invisible; showing it is a flash of green, since that is what zeroed NV12
+/// resolves to. The defect itself is upstream and unfound — this only keeps
+/// it off the screen, and says so the first time it fires.
+fn is_partly_unwritten(frame: &ffmpeg::frame::Video) -> bool {
+    let (luma, chroma) = (frame.data(0), frame.data(1));
+    let (luma_stride, chroma_stride) = (frame.stride(0), frame.stride(1));
+    let height = frame.height() as usize;
+    let width = frame.width() as usize;
+    if height < 2 || width < 2 {
+        return false;
+    }
+
+    // The last two rows, spread across the width: the region always reaches
+    // the bottom edge, being the tail of the frame.
+    (0..8).any(|step| {
+        let column = (width - 2) * step / 8;
+        (height - 2..height).any(|row| {
+            let at = (row / 2) * chroma_stride + (column / 2) * 2;
+            luma.get(row * luma_stride + column) == Some(&0)
+                && chroma.get(at) == Some(&0)
+                && chroma.get(at + 1) == Some(&0)
+        })
+    })
 }
 
 fn plane(
