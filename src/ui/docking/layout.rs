@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use eframe::egui;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::ui) enum DockPanel {
     Scenes,
@@ -69,6 +71,12 @@ impl DockPanel {
             Self::Sources => "Sources",
         }
     }
+
+    pub(super) fn min_size(self) -> egui::Vec2 {
+        match self {
+            Self::Scenes | Self::Sources => egui::vec2(180.0, 120.0),
+        }
+    }
 }
 
 impl DockRegion {
@@ -132,7 +140,8 @@ impl DockLayout {
         first: DockPanel,
         second: DockPanel,
         delta_fraction: f32,
-        min_fraction: f32,
+        first_min_fraction: f32,
+        second_min_fraction: f32,
     ) {
         let panels = self.visible_panels(region);
         let normalized = self.normalized_weights(region, &panels);
@@ -145,8 +154,15 @@ impl DockLayout {
             .position(|panel| *panel == second)
             .expect("resized panel must be visible")];
         let pair_total = first_weight + second_weight;
-        let min_weight = min_fraction.min(pair_total * 0.5);
-        let next_first = (first_weight + delta_fraction).clamp(min_weight, pair_total - min_weight);
+        let minimum_total = first_min_fraction + second_min_fraction;
+        let minimum_scale = if minimum_total > pair_total {
+            pair_total / minimum_total
+        } else {
+            1.0
+        };
+        let first_min = first_min_fraction * minimum_scale;
+        let second_min = second_min_fraction * minimum_scale;
+        let next_first = (first_weight + delta_fraction).clamp(first_min, pair_total - second_min);
 
         let region = self.region_mut(region);
         for (panel, weight) in panels.into_iter().zip(normalized) {
@@ -255,5 +271,23 @@ mod tests {
             layout.visible_panels(DockRegionId::Left),
             vec![DockPanel::Sources]
         );
+    }
+
+    #[test]
+    fn splitter_respects_each_panels_minimum_fraction() {
+        let mut layout = DockLayout::default();
+        layout.resize_pair(
+            DockRegionId::Left,
+            DockPanel::Scenes,
+            DockPanel::Sources,
+            -1.0,
+            0.2,
+            0.3,
+        );
+
+        let weights =
+            layout.normalized_weights(DockRegionId::Left, &[DockPanel::Scenes, DockPanel::Sources]);
+        assert!(weights[0] >= 0.2);
+        assert!(weights[1] >= 0.3);
     }
 }

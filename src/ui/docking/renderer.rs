@@ -12,7 +12,6 @@ const BOTTOM_DEFAULT_SIZE: f32 = 240.0;
 const BOTTOM_MIN_SIZE: f32 = 140.0;
 const BOTTOM_MAX_SIZE: f32 = 460.0;
 const SPLITTER_SIZE: f32 = 6.0;
-const MIN_PANE_SIZE: f32 = 80.0;
 const DROP_ZONE_FRACTION: f32 = 0.25;
 const DRAG_START_DISTANCE: f32 = 4.0;
 const TITLE_BAR_HEIGHT: f32 = 24.0;
@@ -55,7 +54,7 @@ pub(super) fn show(ui: &mut egui::Ui, layout: &mut DockLayout) {
             continue;
         }
 
-        let response = region_panel(region).show(ui, |ui| show_region(ui, layout, region));
+        let response = region_panel(region, layout).show(ui, |ui| show_region(ui, layout, region));
         region_rects.insert(region, response.inner.rect);
         panel_drags.extend(response.inner.panel_drags);
     }
@@ -77,23 +76,32 @@ pub(super) fn show(ui: &mut egui::Ui, layout: &mut DockLayout) {
     }
 }
 
-fn region_panel(region: DockRegionId) -> egui::Panel {
+fn region_panel(region: DockRegionId, layout: &DockLayout) -> egui::Panel {
     let panel = match region {
         DockRegionId::Left => egui::Panel::left("left_dock_region"),
         DockRegionId::Right => egui::Panel::right("right_dock_region"),
         DockRegionId::Bottom => egui::Panel::bottom("bottom_dock_region"),
     };
-    let (default_size, min_size, max_size) = match region {
+    let panel_min_size = layout
+        .visible_panels(region)
+        .into_iter()
+        .map(|panel| match region {
+            DockRegionId::Left | DockRegionId::Right => panel.min_size().x,
+            DockRegionId::Bottom => panel.min_size().y,
+        })
+        .fold(0.0, f32::max);
+    let (default_size, configured_min, max_size) = match region {
         DockRegionId::Left | DockRegionId::Right => {
             (SIDE_DEFAULT_SIZE, SIDE_MIN_SIZE, SIDE_MAX_SIZE)
         }
         DockRegionId::Bottom => (BOTTOM_DEFAULT_SIZE, BOTTOM_MIN_SIZE, BOTTOM_MAX_SIZE),
     };
+    let min_size = configured_min.max(panel_min_size);
 
     panel
         .default_size(default_size)
         .min_size(min_size)
-        .max_size(max_size)
+        .max_size(max_size.max(min_size))
         .resizable(true)
         .frame(egui::Frame::new())
 }
@@ -224,9 +232,22 @@ fn show_splitter(
             DockRegionId::Left | DockRegionId::Right => response.drag_delta().y,
             DockRegionId::Bottom => response.drag_delta().x,
         };
-        let min_fraction = (MIN_PANE_SIZE / usable_length).min(0.45);
-        layout.resize_pair(region, first, second, delta / usable_length, min_fraction);
+        layout.resize_pair(
+            region,
+            first,
+            second,
+            delta / usable_length,
+            pane_axis_min_size(region, first) / usable_length,
+            pane_axis_min_size(region, second) / usable_length,
+        );
         ui.ctx().request_repaint();
+    }
+}
+
+fn pane_axis_min_size(region: DockRegionId, panel: DockPanel) -> f32 {
+    match region {
+        DockRegionId::Left | DockRegionId::Right => panel.min_size().y,
+        DockRegionId::Bottom => panel.min_size().x,
     }
 }
 
