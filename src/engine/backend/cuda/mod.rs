@@ -40,6 +40,7 @@ impl Backend {
         render_state: &RenderState,
         size: [u32; 2],
         fps: u32,
+        preview_fps: u32,
         on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
     ) -> Result<Self, BackendError> {
         media_pp::init()?;
@@ -82,7 +83,7 @@ impl Backend {
         // UI thread nor the engine's does the conversion.
         let wgpu_device = render_state.device.clone();
         let queue = render_state.queue.clone();
-        let interval = Duration::from_secs_f32(1.0 / fps as f32);
+        let interval = Duration::from_secs_f32(1.0 / preview_fps as f32);
         let mut last_drawn: Option<Instant> = None;
         let sink = AppSink::new("preview-out", move |buffer| {
             let MediaBuffer::Video(video) = buffer else {

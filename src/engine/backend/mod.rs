@@ -23,7 +23,10 @@
 //!
 //! Add a file here, point the `cfg_attr` below at it, and provide:
 //!
-//! - `Backend::start` — build the compositor and the branch that publishes
+//! - `Backend::start` — takes two rates and must not confuse them. `fps` is
+//!   what the compositor is built for and what an output would be recorded
+//!   at; `preview_fps` is only how often the frame reaching wgpu is refreshed.
+//!   Build the compositor and the branch that publishes
 //!   frames, and register one texture with egui. Call `on_frame` for *every*
 //!   frame the compositor produced, passing the texture id only for the ones
 //!   actually drawn into it: the rate of calls is the compositor's, which is

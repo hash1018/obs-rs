@@ -211,7 +211,7 @@ fn run(
             }
         }
     };
-    let backend = Backend::start(&render_state, size, PREVIEW_FPS, publish)?;
+    let backend = Backend::start(&render_state, size, TARGET_FPS, PREVIEW_FPS, publish)?;
 
     // Nothing has been composited yet, and an empty Scene never will be, so
     // the Preview branch starts asleep and is woken by the first Source.

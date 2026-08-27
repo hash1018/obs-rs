@@ -33,6 +33,7 @@ impl Backend {
         _render_state: &RenderState,
         _size: [u32; 2],
         _fps: u32,
+        _preview_fps: u32,
         _on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
     ) -> Result<Self, BackendError> {
         Err("no compositor backend is written for this platform yet".into())
