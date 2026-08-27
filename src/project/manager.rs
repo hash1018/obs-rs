@@ -117,6 +117,9 @@ fn handle_source_command(
             SourceStore::add_display_capture(transaction, scene_id, &monitor_name)?;
             Ok(())
         }
+        SourceCommand::Delete(scene_item_id) => {
+            SourceStore::delete_scene_item(transaction, scene_item_id)
+        }
         SourceCommand::SetTransform(scene_item_id, transform) => {
             SourceStore::set_transform(transaction, scene_item_id, transform)
         }
@@ -363,5 +366,67 @@ mod tests {
             crate::domain::SourceSettings::DisplayCapture(settings)
                 if settings.monitor_name == r"\\.\DISPLAY2"
         ));
+    }
+
+    #[test]
+    fn deleting_a_scene_item_removes_only_an_orphaned_source() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let first_scene = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        let (first_item, source_id, second_item) = database
+            .transaction(|transaction| {
+                let first_item = SourceStore::add_color(transaction, first_scene)?;
+                let source_id = transaction.query_row(
+                    "SELECT source_id FROM scene_items WHERE id = ?1",
+                    [first_item.0],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let second_scene = SceneStore::add(transaction)?;
+                transaction.execute(
+                    "INSERT INTO scene_items
+                        (scene_id, source_id, position_x, position_y, z_index)
+                     VALUES (?1, ?2, 960, 540, 0)",
+                    rusqlite::params![second_scene.0, source_id],
+                )?;
+                Ok((
+                    first_item,
+                    source_id,
+                    crate::domain::SceneItemId(transaction.last_insert_rowid()),
+                ))
+            })
+            .unwrap();
+
+        handle_source_command(&mut database, SourceCommand::Delete(first_item)).unwrap();
+        let source_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sources WHERE id = ?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_count, 1);
+
+        handle_source_command(&mut database, SourceCommand::Delete(second_item)).unwrap();
+        let source_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sources WHERE id = ?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let settings_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM color_source_settings WHERE source_id = ?1",
+                [source_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_count, 0);
+        assert_eq!(settings_count, 0);
     }
 }

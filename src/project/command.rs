@@ -13,6 +13,7 @@ pub enum SourceCommand {
         scene_id: SceneId,
         monitor_name: String,
     },
+    Delete(SceneItemId),
     SetTransform(SceneItemId, Transform),
 }
 

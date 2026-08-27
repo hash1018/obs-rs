@@ -84,6 +84,10 @@ fn handle_pointer(
 ) {
     let pointer = response.interact_pointer_pos();
 
+    if response.clicked() || response.drag_started() {
+        response.request_focus();
+    }
+
     if response.hovered()
         && let Some(pointer) = pointer
         && let Some((handle, _)) = selected_handle_at(pointer, viewport, editor, snapshot)
@@ -148,6 +152,16 @@ fn handle_pointer(
         } else {
             editor.clear_selection();
         }
+    }
+
+    if response.has_focus()
+        && ui.input(|input| input.key_pressed(egui::Key::Delete))
+        && let Some(item_id) = editor.selected_item_id()
+    {
+        actions.push(UiAction::Project(ProjectCommand::Source(
+            SourceCommand::Delete(item_id),
+        )));
+        editor.clear_selection();
     }
 }
 

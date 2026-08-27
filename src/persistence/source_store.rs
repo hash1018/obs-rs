@@ -179,6 +179,27 @@ impl SourceStore {
         )?;
         Ok(())
     }
+
+    pub(crate) fn delete_scene_item(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+    ) -> PersistenceResult<()> {
+        let source_id = transaction.query_row(
+            "SELECT source_id FROM scene_items WHERE id = ?1",
+            [scene_item_id.0],
+            |row| row.get::<_, i64>(0),
+        )?;
+        transaction.execute("DELETE FROM scene_items WHERE id = ?1", [scene_item_id.0])?;
+        transaction.execute(
+            "DELETE FROM sources
+             WHERE id = ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM scene_items WHERE source_id = ?1
+               )",
+            [source_id],
+        )?;
+        Ok(())
+    }
 }
 
 fn create(

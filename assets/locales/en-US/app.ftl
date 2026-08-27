@@ -29,6 +29,7 @@ scene-move-down = Move selected scene down
 source-selected-scene = selected scene
 source-empty = No sources in { $scene }
 source-add = Add source
+source-remove = Remove selected source
 source-add-title = Add Source
 source-type = Source type
 source-display-title = Select Display

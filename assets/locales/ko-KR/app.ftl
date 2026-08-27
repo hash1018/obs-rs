@@ -29,6 +29,7 @@ scene-move-down = 선택한 장면 아래로 이동
 source-selected-scene = 선택한 장면
 source-empty = { $scene }에 소스가 없습니다
 source-add = 소스 추가
+source-remove = 선택한 소스 삭제
 source-add-title = 소스 추가
 source-type = 소스 종류
 source-display-title = 디스플레이 선택

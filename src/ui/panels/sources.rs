@@ -36,6 +36,12 @@ enum AddSourceKind {
     Color,
 }
 
+#[derive(Clone, Copy)]
+enum SourceToolIcon {
+    Add,
+    Remove,
+}
+
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     state: &mut SourcesPanelState,
@@ -57,7 +63,7 @@ pub(in crate::ui) fn show(
     }
     state.known_item_count = snapshot.items.len();
 
-    show_toolbar(ui, state, snapshot, i18n);
+    show_toolbar(ui, state, editor, snapshot, i18n, actions);
 
     if snapshot.items.is_empty() {
         let fallback_name = i18n.text(TextKey::SourceSelectedScene);
@@ -139,8 +145,10 @@ fn source_kind_key(kind: SourceKind) -> TextKey {
 fn show_toolbar(
     ui: &mut egui::Ui,
     state: &mut SourcesPanelState,
+    editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
     i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
 ) {
     egui::Panel::bottom("sources_toolbar")
         .exact_size(TOOLBAR_HEIGHT)
@@ -152,34 +160,59 @@ fn show_toolbar(
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                let response = ui.add_enabled(
+                if source_tool_button(
+                    ui,
+                    SourceToolIcon::Add,
+                    i18n.text(TextKey::SourceAdd),
                     snapshot.scene_id.is_some(),
-                    egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
-                );
-                let center = response.rect.center();
-                let stroke = ui.style().interact(&response).fg_stroke;
-                ui.painter().line_segment(
-                    [
-                        center + egui::vec2(-5.0, 0.0),
-                        center + egui::vec2(5.0, 0.0),
-                    ],
-                    stroke,
-                );
-                ui.painter().line_segment(
-                    [
-                        center + egui::vec2(0.0, -5.0),
-                        center + egui::vec2(0.0, 5.0),
-                    ],
-                    stroke,
-                );
-                if response
-                    .on_hover_text(i18n.text(TextKey::SourceAdd))
-                    .clicked()
-                {
+                ) {
                     state.add_dialog_open = true;
+                }
+                if source_tool_button(
+                    ui,
+                    SourceToolIcon::Remove,
+                    i18n.text(TextKey::SourceRemove),
+                    editor.selected_item_id().is_some(),
+                ) && let Some(item_id) = editor.selected_item_id()
+                {
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::Delete(item_id),
+                    )));
+                    editor.clear_selection();
                 }
             });
         });
+}
+
+fn source_tool_button(
+    ui: &mut egui::Ui,
+    icon: SourceToolIcon,
+    tooltip: impl Into<egui::WidgetText>,
+    enabled: bool,
+) -> bool {
+    let response = ui.add_enabled(
+        enabled,
+        egui::Button::new("").min_size(egui::vec2(TOOL_BUTTON_SIZE, TOOL_BUTTON_SIZE)),
+    );
+    let center = response.rect.center();
+    let stroke = ui.style().interact(&response).fg_stroke;
+    ui.painter().line_segment(
+        [
+            center + egui::vec2(-5.0, 0.0),
+            center + egui::vec2(5.0, 0.0),
+        ],
+        stroke,
+    );
+    if matches!(icon, SourceToolIcon::Add) {
+        ui.painter().line_segment(
+            [
+                center + egui::vec2(0.0, -5.0),
+                center + egui::vec2(0.0, 5.0),
+            ],
+            stroke,
+        );
+    }
+    response.on_hover_text(tooltip).clicked()
 }
 
 fn show_add_dialog(
