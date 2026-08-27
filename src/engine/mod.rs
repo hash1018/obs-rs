@@ -159,8 +159,11 @@ fn run(
     active_fps: Arc<AtomicU32>,
     scenes: mpsc::Receiver<SourcesSnapshot>,
     stop: &AtomicBool,
-    wake_ui: impl Fn() + Send + 'static,
+    wake_ui: impl Fn() + Send + Sync + 'static,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Shared rather than moved: both the sink that publishes a frame and the
+    // loop that puts the branch to sleep have to ask for a repaint.
+    let wake_ui = Arc::new(wake_ui);
     media_pp::init()?;
     let [width, height] = size;
 
@@ -201,6 +204,9 @@ fn run(
     // thread nor this one does the conversion.
     let wgpu_device = render_state.device.clone();
     let queue = render_state.queue.clone();
+    let published = Arc::clone(&frame);
+    let reported_fps = Arc::clone(&active_fps);
+    let wake_sink = Arc::clone(&wake_ui);
     let mut rate = FrameRate::new();
     let sink = AppSink::new("preview-out", move |buffer| {
         let MediaBuffer::Video(video) = buffer else {
@@ -213,7 +219,7 @@ fn run(
         if let Some(measured) = rate.tick() {
             active_fps.store(measured.to_bits(), Ordering::Relaxed);
         }
-        wake_ui();
+        wake_sink();
         Ok(())
     });
 
@@ -234,6 +240,10 @@ fn run(
         Ok(())
     })?;
     pipeline.run()?;
+    // Nothing has been composited yet, and an empty Scene never will be, so
+    // the Preview branch starts asleep and is woken by the first Source.
+    pipeline.pause();
+    let mut compositing = false;
 
     let mut open = HashMap::new();
     while !stop.load(Ordering::Acquire) {
@@ -246,6 +256,28 @@ fn run(
                     latest = newer;
                 }
                 reconcile(&device, &handle, &mut open, &latest);
+
+                // A Scene with no running Source composites the background
+                // colour, forever, at the full frame rate — a download and two
+                // uploads per frame to redraw a picture that never changes.
+                // Switching to such a Scene should cost nothing.
+                let wanted = open
+                    .values()
+                    .any(|state| matches!(state, SourceState::Open(_)));
+                if wanted != compositing {
+                    if wanted {
+                        pipeline.resume();
+                    } else {
+                        pipeline.pause();
+                        // The texture still holds the Scene that was showing a
+                        // moment ago, and leaving it up would attribute another
+                        // Scene's picture to this one.
+                        published.store(None);
+                        reported_fps.store(0, Ordering::Relaxed);
+                        wake_ui();
+                    }
+                    compositing = wanted;
+                }
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
