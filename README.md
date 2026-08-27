@@ -55,6 +55,13 @@ Items near the top of the Sources dock are composited in front of lower items. W
 
 The Compositor and Composite Frame are not implemented yet, so the Preview Viewport currently displays an empty frame. The UI does not directly composite Sources inside the Viewport. It only renders the selected SceneItem's Canvas overflow and Transform Gizmo as editor overlays. Once the Compositor produces a GPU texture-backed Composite Frame, Preview will display that texture together with the Editor Overlay.
 
+## Current source support
+
+- Color Source is persisted and can be moved and resized in the editor.
+- Display Capture can enumerate monitors, persist the selected monitor name, and create a SceneItem. Runtime capture is not connected yet, so it does not produce Preview pixels.
+
+Monitor geometry is intentionally not persisted. The runtime capture layer will resolve the saved monitor name against the current display layout and open `DxgiCaptureSource` in GPU mode. GPU mode is an application invariant rather than a user setting and does not currently support cursor inclusion.
+
 ## Localization
 
 UI translations use Fluent FTL language packs. `en-US` is the default and fallback locale, and `ko-KR` is currently included.

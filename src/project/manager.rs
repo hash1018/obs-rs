@@ -110,6 +110,13 @@ fn handle_source_command(
             SourceStore::add_color(transaction, scene_id)?;
             Ok(())
         }
+        SourceCommand::AddDisplayCapture {
+            scene_id,
+            monitor_name,
+        } => {
+            SourceStore::add_display_capture(transaction, scene_id, &monitor_name)?;
+            Ok(())
+        }
         SourceCommand::SetTransform(scene_item_id, transform) => {
             SourceStore::set_transform(transaction, scene_item_id, transform)
         }
@@ -279,12 +286,7 @@ mod tests {
             .unwrap();
         database
             .transaction(|transaction| {
-                let source = SourceStore::create_for_test(
-                    transaction,
-                    "Display Capture",
-                    crate::domain::SourceKind::DisplayCapture,
-                )?;
-                SourceStore::add_to_scene_for_test(transaction, first_scene, source)?;
+                SourceStore::add_display_capture(transaction, first_scene, r"\\.\DISPLAY1")?;
                 Ok(())
             })
             .unwrap();
@@ -334,5 +336,32 @@ mod tests {
 
         let (_, sources) = project_snapshot(&database).unwrap();
         assert_eq!(sources.items[0].transform, transform);
+    }
+
+    #[test]
+    fn display_capture_source_persists_its_monitor() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddDisplayCapture {
+                scene_id,
+                monitor_name: r"\\.\DISPLAY2".into(),
+            },
+        )
+        .unwrap();
+
+        let (_, sources) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items.len(), 1);
+        assert_eq!(sources.items[0].name, "Display Capture");
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::DisplayCapture(settings)
+                if settings.monitor_name == r"\\.\DISPLAY2"
+        ));
     }
 }

@@ -1,8 +1,8 @@
 use rusqlite::{Connection, Transaction, params};
 
 use crate::domain::{
-    ColorSourceSettings, Crop, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId,
-    SourceKind, SourceSettings, Transform,
+    ColorSourceSettings, Crop, DisplayCaptureSettings, SceneCanvas, SceneId, SceneItem,
+    SceneItemId, Source, SourceId, SourceKind, SourceSettings, Transform,
 };
 
 use super::PersistenceResult;
@@ -39,11 +39,14 @@ impl SourceStore {
                 color_source_settings.red,
                 color_source_settings.green,
                 color_source_settings.blue,
-                color_source_settings.alpha
+                color_source_settings.alpha,
+                display_capture_settings.monitor_name
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
                 ON color_source_settings.source_id = sources.id
+             LEFT JOIN display_capture_settings
+                ON display_capture_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -68,6 +71,11 @@ impl SourceStore {
                             row.get::<_, i64>(23)? as u8,
                         ],
                     }),
+                    SourceKind::DisplayCapture => {
+                        SourceSettings::DisplayCapture(DisplayCaptureSettings {
+                            monitor_name: row.get(24)?,
+                        })
+                    }
                     _ => SourceSettings::None,
                 };
                 let source_id = SourceId(row.get(1)?);
@@ -128,6 +136,21 @@ impl SourceStore {
         add_to_scene(transaction, scene_id, source_id, canvas)
     }
 
+    pub(crate) fn add_display_capture(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        monitor_name: &str,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, "Display Capture")?;
+        let source_id = create(transaction, &name, SourceKind::DisplayCapture)?;
+        transaction.execute(
+            "INSERT INTO display_capture_settings (source_id, monitor_name)
+             VALUES (?1, ?2)",
+            params![source_id.0, monitor_name],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
     pub(crate) fn set_transform(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
@@ -155,24 +178,6 @@ impl SourceStore {
             ],
         )?;
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn create_for_test(
-        transaction: &Transaction<'_>,
-        name: &str,
-        kind: SourceKind,
-    ) -> PersistenceResult<SourceId> {
-        create(transaction, name, kind)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn add_to_scene_for_test(
-        transaction: &Transaction<'_>,
-        scene_id: SceneId,
-        source_id: SourceId,
-    ) -> PersistenceResult<SceneItemId> {
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
     }
 }
 

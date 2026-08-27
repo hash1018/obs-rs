@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -86,6 +86,16 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 3;",
         )?;
     }
+    if current_version < 4 {
+        transaction.execute_batch(
+            "CREATE TABLE display_capture_settings (
+                source_id    INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                monitor_name TEXT NOT NULL
+            );
+
+            PRAGMA user_version = 4;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -125,6 +135,9 @@ mod tests {
                 ) AND EXISTS(
                     SELECT 1 FROM sqlite_master
                     WHERE type = 'table' AND name = 'color_source_settings'
+                ) AND EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'display_capture_settings'
                 )",
                 [],
                 |row| row.get(0),

@@ -326,9 +326,9 @@ fn workspace_overflow_rects(workspace: egui::Rect, viewport: egui::Rect) -> [egu
 }
 
 fn color_settings(item: &SceneItemSnapshot) -> Option<ColorSourceSettings> {
-    match item.settings {
-        SourceSettings::Color(settings) => Some(settings),
-        SourceSettings::None => None,
+    match &item.settings {
+        SourceSettings::Color(settings) => Some(*settings),
+        SourceSettings::DisplayCapture(_) | SourceSettings::None => None,
     }
 }
 

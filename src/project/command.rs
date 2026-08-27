@@ -6,9 +6,13 @@ pub enum ProjectCommand {
     Source(SourceCommand),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SourceCommand {
     AddColor(SceneId),
+    AddDisplayCapture {
+        scene_id: SceneId,
+        monitor_name: String,
+    },
     SetTransform(SceneItemId, Transform),
 }
 

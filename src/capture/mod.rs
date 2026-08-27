@@ -19,9 +19,9 @@
 //! [`SourcePicker`] is that fork, named once here so the UI can branch on it
 //! instead of a Windows-shaped list leaking into the rest of the app.
 
-// Nothing draws a source list yet — the UI layout is still being decided —
-// so every public item here is currently unused outside its own tests.
-// Remove this once the picker is wired into the UI.
+// Display-target enumeration is wired into the Sources dock. Window targets
+// are retained for the upcoming Window Capture picker, so part of this shared
+// platform API is still intentionally unused.
 #![allow(dead_code)]
 
 #[cfg(target_os = "windows")]

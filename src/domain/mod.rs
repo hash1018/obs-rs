@@ -6,4 +6,6 @@ mod source;
 pub use canvas::SceneCanvas;
 pub use scene::{Scene, SceneId};
 pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
-pub use source::{ColorSourceSettings, Source, SourceId, SourceKind, SourceSettings};
+pub use source::{
+    ColorSourceSettings, DisplayCaptureSettings, Source, SourceId, SourceKind, SourceSettings,
+};

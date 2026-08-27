@@ -45,9 +45,15 @@ pub struct ColorSourceSettings {
     pub rgba: [u8; 4],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayCaptureSettings {
+    pub monitor_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
+    DisplayCapture(DisplayCaptureSettings),
     None,
 }
 
