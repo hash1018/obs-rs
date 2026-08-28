@@ -84,7 +84,9 @@ impl Backend {
         let wgpu_device = render_state.device.clone();
         let queue = render_state.queue.clone();
         let interval = Duration::from_secs_f32(1.0 / preview_fps as f32);
-        let mut last_drawn: Option<Instant> = None;
+        // When the next draw becomes due. Advanced by whole intervals, never
+        // restarted from the current time.
+        let mut next_due: Option<Instant> = None;
         let sink = AppSink::new("preview-out", move |buffer| {
             let MediaBuffer::Video(video) = buffer else {
                 return Ok(());
@@ -92,10 +94,21 @@ impl Backend {
             // Dropped here rather than upstream: the download is the cheapest
             // part of this branch, while the upload, the resolve pass, and the
             // full egui repaint each drawn frame asks for are not.
-            let due = last_drawn.is_none_or(|last| last.elapsed() >= interval);
+            let now = Instant::now();
+            let due = next_due.is_none_or(|due| now >= due);
             let drawn = due && target.draw(&wgpu_device, &queue, &video);
             if drawn {
-                last_drawn = Some(Instant::now());
+                // The deadline advances by a whole interval rather than
+                // restarting from now, which is what keeps this at the rate it
+                // was asked for. Restarting measures from the moment a frame
+                // happened to arrive, so with frames arriving twice as often
+                // as the Preview wants one, the next arrival lands a hair
+                // under the interval, is dropped, and the one after that is a
+                // whole compositor frame late — 30 fps asked for, 20
+                // delivered. Clamped to now so a stalled compositor cannot
+                // leave a backlog of deadlines to draw in a burst.
+                let due = next_due.map_or(now + interval, |due| due + interval);
+                next_due = Some(due.max(now));
             }
             // Every composited frame, drawn or not: this is the compositor's
             // rate, and it is the one that says whether an output could be
