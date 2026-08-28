@@ -4,16 +4,16 @@
 mod nv12;
 mod shared;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, CudaDevice, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
+        AppSink, ChangeGate, CudaDevice, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
         CudaVideoCompositorHandle, CudaVideoLayerHandle, SubmitError, TeeBuilder,
         VideoCompositorOptions, VideoLayer,
     },
@@ -111,8 +111,6 @@ impl Backend {
                 target,
                 shared,
                 drawn_flag,
-                interval: Duration::from_secs_f32(1.0 / preview_fps as f32),
-                next_due: Mutex::new(None),
             }),
         );
 
@@ -124,9 +122,18 @@ impl Backend {
             // the repaint it asks for happen on this queue's worker, and the
             // queue drops whatever cannot keep up rather than making the
             // compositor wait.
+            //
+            // What reaches the renderer past the gate is the newest picture,
+            // no more often than the Preview's rate, and never one it has
+            // already drawn — so a Scene that is not changing costs nothing
+            // at all: no copy, no resolve pass, and no egui repaint.
             let draw_branch = context
                 .branch()
                 .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
+                .pipe(ChangeGate::new(
+                    "preview-changes",
+                    Duration::from_secs_f32(1.0 / preview_fps as f32),
+                ))
                 .to(Box::new(renderer))?;
             let tee_branch = TeeBuilder::new("preview-tee", context.clone())
                 .branch(count_branch)
@@ -191,12 +198,6 @@ struct PreviewRenderer {
     /// Set when the shared memory has new content the Preview has not been
     /// told about; the counting sink clears it as it reports.
     drawn_flag: Arc<AtomicBool>,
-    /// `1 / preview_fps`. The copy is cheap, but every refreshed frame asks
-    /// egui for a whole-UI repaint, and that is not.
-    interval: Duration,
-    /// When the next draw becomes due. Advanced by whole intervals, never
-    /// restarted from the current time — see `submit_nv12`.
-    next_due: Mutex<Option<Instant>>,
 }
 
 impl CudaFrameRenderer for PreviewRenderer {
@@ -209,16 +210,12 @@ impl CudaFrameRenderer for PreviewRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), SubmitError> {
-        let now = Instant::now();
-        let mut next_due = self
-            .next_due
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Dropped rather than drawn: the copy would be cheap, the repaint it
-        // leads to would not.
-        if next_due.is_some_and(|due| now < due) {
-            return Ok(());
-        }
+        // Everything that arrives is drawn. The rate this is held to, and
+        // the frames carrying a picture already on screen, are both the
+        // `ChangeGate` in front of it — deliberately, since a renderer that
+        // dropped frames of its own would make that gate suppress the
+        // repeats carrying a change it had just dropped.
+        //
         // SAFETY: `CudaRenderer` has already established what this needs —
         // an NV12 CUDA frame on the primary context, both planes present —
         // before calling, which is the whole reason the element is in the
@@ -227,9 +224,7 @@ impl CudaFrameRenderer for PreviewRenderer {
             return Err(SubmitError::InvalidFrame);
         }
         // Checked after the copy rather than before: the frame is only
-        // readable at all once it is in memory the CPU can see. The deadline
-        // deliberately does not advance, so the frame replacing this one is
-        // drawn as soon as it arrives.
+        // readable at all once it is in memory the CPU can see.
         if self.shared.tail_is_unwritten() {
             return Ok(());
         }
@@ -239,16 +234,6 @@ impl CudaFrameRenderer for PreviewRenderer {
         {
             return Err(SubmitError::InvalidFrame);
         }
-        // The deadline advances by a whole interval rather than restarting
-        // from now, which is what keeps this at the rate it was asked for.
-        // Restarting measures from the moment a frame happened to arrive, so
-        // with frames arriving twice as often as the Preview wants one, the
-        // next arrival lands a hair under the interval, is dropped, and the
-        // one after that is a whole compositor frame late — 30 fps asked for,
-        // 22 delivered. Clamped to now so a stalled compositor cannot leave a
-        // backlog of deadlines to draw in a burst.
-        let due = next_due.map_or(now + self.interval, |due| due + self.interval);
-        *next_due = Some(due.max(now));
         self.drawn_flag.store(true, Ordering::Relaxed);
         Ok(())
     }
