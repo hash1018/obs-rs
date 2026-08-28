@@ -1,7 +1,7 @@
 //! The D3D11 backend: DXGI desktop duplication straight into D3D11 textures,
-//! a BGRA compositor, and one download to reach wgpu.
+//! a BGRA compositor, and a shared texture to reach wgpu without a readback.
 
-mod bgra;
+mod shared;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,9 +12,10 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, CaptureArea, CaptureMode, D3d11Download, D3d11VideoCompositor,
+        AppSink, CaptureArea, CaptureMode, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCompositor,
         D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle,
-        DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder, VideoCompositorOptions, VideoLayer,
+        DxgiCaptureOptions, DxgiCaptureSource, SubmitError, TeeBuilder, VideoCompositorOptions,
+        VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -26,7 +27,7 @@ use windows::Win32::Graphics::{
     },
     Direct3D11::{
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
-        ID3D11DeviceContext,
+        ID3D11DeviceContext, ID3D11Texture2D,
     },
     Dxgi::{CreateDXGIFactory1, IDXGIFactory1},
 };
@@ -36,7 +37,7 @@ use crate::snapshots::SceneItemSnapshot;
 
 use super::{BACKGROUND, BackendError, OpenSource, flat_bgra, input_name, unsupported_kind};
 
-use bgra::BgraTarget;
+use shared::SharedTarget;
 
 /// The compositor's layer control already offers exactly what a backend must.
 pub(in crate::engine) type Layer = D3d11VideoLayerHandle;
@@ -68,13 +69,6 @@ impl Backend {
         // through system memory.
         let (device, context) = create_device()?;
 
-        let target = BgraTarget::new(&render_state.device, width, height);
-        let texture_id = render_state.renderer.write().register_native_texture(
-            &render_state.device,
-            target.output_view(),
-            wgpu::FilterMode::Linear,
-        );
-
         let (compositor, handle) = D3d11VideoCompositor::new(
             "preview-compositor",
             &device,
@@ -87,32 +81,28 @@ impl Backend {
             },
         )?;
 
-        // The compositor works in D3D11 textures; this is the one place the
-        // frame returns to system memory. Replacing this download with a
-        // shared-texture import into wgpu is what removes the round trip.
-        let download =
-            D3d11Download::new("preview-download", &device, context.clone(), width, height)?;
+        // The composited frame reaches wgpu as a shared texture rather than a
+        // readback: see `shared`. The copy into it is cheap enough that this
+        // whole branch costs almost nothing, which is the point — the
+        // `D3d11Download` it replaces measured as nearly this application's
+        // entire GPU cost.
+        let shared = SharedTarget::new(&device, render_state, width, height)?;
+        let texture_id = shared.texture_id();
 
-        // Unlike the CUDA side, `on_frame` cannot be called from the drawing
-        // sink here: `D3d11Download` maps a staging texture under the shared
-        // context lock, which waits for the GPU, so its branch keeps up with
-        // the Preview's rate rather than the compositor's and the dropping
-        // queue in front of it eats the difference. Counting there would
-        // report the download's pace as the compositor's — the exact
-        // misattribution the status bar was once fixed for. So the frames are
-        // teed: a synchronous counting sink sees every composited frame and
-        // makes every `on_frame` call, while the drawing branch only leaves a
-        // flag saying the texture was refreshed since the last call.
+        // `on_frame` is not called from the rendering branch: that branch sits
+        // behind a dropping queue and refreshes only at the Preview's rate,
+        // while the rate reported has to be the compositor's — it is what says
+        // whether an output could be made at the rate it is configured for.
+        // So the frames are teed. A synchronous counting sink sees every
+        // composited frame and makes every call; the rendering branch only
+        // leaves a flag saying the texture was refreshed since the last one.
         let drawn_flag = Arc::new(AtomicBool::new(false));
         let count = {
             let drawn_flag = Arc::clone(&drawn_flag);
             AppSink::new("preview-rate", move |buffer| {
                 if matches!(buffer, MediaBuffer::Video(_)) {
-                    // Every composited frame, drawn or not: this is the
-                    // compositor's rate, and it is the one that says whether
-                    // an output could be made at the rate it is configured
-                    // for. A drawn frame is reported one call late, which is
-                    // one compositor tick after the texture already changed.
+                    // A refreshed texture is reported one call late, which is
+                    // one compositor tick after it actually changed.
                     on_frame(
                         drawn_flag
                             .swap(false, Ordering::Relaxed)
@@ -123,36 +113,30 @@ impl Backend {
             })
         };
 
-        // The drawing sink runs on the queue's own worker thread, so neither
-        // the UI thread nor the engine's does the copy.
-        let queue = render_state.queue.clone();
-        let interval = Duration::from_secs_f32(1.0 / preview_fps as f32);
-        let mut last_drawn: Option<Instant> = None;
-        let sink = AppSink::new("preview-out", move |buffer| {
-            let MediaBuffer::Video(video) = buffer else {
-                return Ok(());
-            };
-            let due = last_drawn.is_none_or(|last| last.elapsed() >= interval);
-            if due && target.draw(&queue, &video) {
-                last_drawn = Some(Instant::now());
-                drawn_flag.store(true, Ordering::Relaxed);
-            }
-            Ok(())
-        });
+        let renderer = D3d11Renderer::new(
+            "preview-out",
+            Box::new(PreviewRenderer {
+                device: device.clone(),
+                context: context.clone(),
+                shared,
+                drawn_flag,
+                interval: Duration::from_secs_f32(1.0 / preview_fps as f32),
+                last_drawn: Mutex::new(None),
+            }),
+        );
 
         let preview = Pipeline::new("preview", compositor, |source, context| {
             // The counting branch is synchronous — it is how the calls stay
             // at the compositor's own rate — so its sink must stay trivial.
             let count_branch = context.branch().to(Box::new(count))?;
-            // The Preview must not set the compositor's pace. The download's
-            // GPU wait happens on this queue's worker, and the queue drops
-            // whatever the download cannot keep up with rather than making
-            // the compositor wait with it.
+            // The Preview must not set the compositor's pace, so the copy and
+            // the repaint it asks for happen on this queue's worker, and the
+            // queue drops whatever cannot keep up rather than making the
+            // compositor wait.
             let draw_branch = context
                 .branch()
                 .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
-                .pipe(download)
-                .to(Box::new(sink))?;
+                .to(Box::new(renderer))?;
             let tee_branch = TeeBuilder::new("preview-tee", context.clone())
                 .branch(count_branch)
                 .branch(draw_branch)
@@ -161,7 +145,6 @@ impl Backend {
             Ok(())
         })?;
         preview.run()?;
-
         Ok(Self {
             device,
             compositor: handle,
@@ -198,6 +181,84 @@ impl Backend {
             SourceKind::Color => open_color_source(&self.device, &self.compositor, item, layer),
             _ => Err(unsupported_kind(item)),
         }
+    }
+}
+
+/// Puts each composited frame into the texture wgpu shares, at the Preview's
+/// own rate.
+///
+/// A `D3d11FrameRenderer` normally presents to a window; this one presents to
+/// egui, which draws the frame itself. `media-pp` still does the useful half:
+/// it validates the frame, rejects one from another device, and hands over a
+/// texture that is already exactly what has to be copied.
+struct PreviewRenderer {
+    device: ID3D11Device,
+    context: Arc<Mutex<ID3D11DeviceContext>>,
+    shared: SharedTarget,
+    /// Set when the shared texture has new content the Preview has not been
+    /// told about; the counting sink clears it as it reports.
+    drawn_flag: Arc<AtomicBool>,
+    /// `1 / preview_fps`. Copying is cheap, but every refreshed frame asks
+    /// egui for a whole-UI repaint, and that is not.
+    interval: Duration,
+    last_drawn: Mutex<Option<Instant>>,
+}
+
+// SAFETY: the two COM handles are `windows-rs` interface wrappers, thread-safe
+// to hold; every context call goes through `context`'s own mutex, and the
+// device is only read from. The rest is plain data behind its own locks.
+unsafe impl Send for PreviewRenderer {}
+unsafe impl Sync for PreviewRenderer {}
+
+impl D3d11FrameRenderer for PreviewRenderer {
+    fn device(&self) -> ID3D11Device {
+        self.device.clone()
+    }
+
+    unsafe fn submit_bgra_texture(
+        &self,
+        texture: ID3D11Texture2D,
+        _array_index: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), SubmitError> {
+        let mut last_drawn = self
+            .last_drawn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Dropped rather than copied: the copy would be cheap, the repaint it
+        // leads to would not.
+        if last_drawn.is_some_and(|last| last.elapsed() < self.interval) {
+            return Ok(());
+        }
+        let copied = self
+            .shared
+            .copy_from(&self.context, &texture, width, height);
+        if !copied {
+            return Err(SubmitError::InvalidFrame);
+        }
+        *last_drawn = Some(Instant::now());
+        self.drawn_flag.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    unsafe fn submit_nv12_texture(
+        &self,
+        _texture: ID3D11Texture2D,
+        _array_index: u32,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), SubmitError> {
+        // `D3d11VideoCompositor` emits BGRA and nothing else feeds this
+        // renderer, so an NV12 frame arriving here is a graph that was not
+        // built the way this backend builds it.
+        Err(SubmitError::InvalidFrame)
+    }
+
+    fn resize(&self, _width: u32, _height: u32) -> Result<(), SubmitError> {
+        // The target is the Scene Canvas, not the window: the Viewport scales
+        // it while drawing, so a resized window changes nothing here.
+        Ok(())
     }
 }
 

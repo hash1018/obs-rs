@@ -29,7 +29,7 @@ use eframe::egui;
 use app::ObsApp;
 
 fn main() -> eframe::Result {
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("obs-rs")
             .with_inner_size([960.0, 600.0])
@@ -37,6 +37,7 @@ fn main() -> eframe::Result {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    pin_windows_backend(&mut options);
 
     eframe::run_native(
         "obs-rs",
@@ -44,3 +45,22 @@ fn main() -> eframe::Result {
         Box::new(|cc| Ok(Box::new(ObsApp::new(cc)))),
     )
 }
+
+/// Restricts wgpu to Direct3D 12 on Windows.
+///
+/// Not a preference: the D3D11 compositor hands the Preview its frames as
+/// shared textures, and opening one is `ID3D12Device::OpenSharedHandle`.
+/// Left to itself wgpu picks Vulkan here, where the same import means
+/// `VK_KHR_external_memory_win32` and building the image by hand — a second
+/// interop path to write and keep working for no benefit. Every Windows GPU
+/// that runs this application's D3D11 compositor has a D3D12 driver too, so
+/// nothing is excluded by asking for it.
+#[cfg(target_os = "windows")]
+fn pin_windows_backend(options: &mut eframe::NativeOptions) {
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn pin_windows_backend(_options: &mut eframe::NativeOptions) {}

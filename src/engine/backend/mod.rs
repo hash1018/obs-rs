@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor  → download → NV12 resolve
-//! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor → download → BGRA copy
+//! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor → shared texture
 //! ```
 //!
 //! Wiring a D3D11 capture into a CUDA compositor is not merely slow, it is
