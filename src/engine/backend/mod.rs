@@ -6,7 +6,7 @@
 //! the frame reaches wgpu:
 //!
 //! ```text
-//! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor  → download → NV12 resolve
+//! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor  → shared buffer → NV12 resolve
 //! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor → shared texture
 //! ```
 //!

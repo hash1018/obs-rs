@@ -41,6 +41,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     pin_windows_backend(&mut options);
+    request_vulkan_interop(&mut options);
 
     eframe::run_native(
         "obs-rs",
@@ -67,6 +68,44 @@ fn pin_windows_backend(options: &mut eframe::NativeOptions) {
 
 #[cfg(not(target_os = "windows"))]
 fn pin_windows_backend(_options: &mut eframe::NativeOptions) {}
+
+/// Asks wgpu for the one Vulkan extension the CUDA interop needs, on Linux.
+///
+/// The composited frame reaches wgpu as memory both APIs hold, and the
+/// Vulkan half of that is `VK_KHR_external_memory_fd`: the buffer's memory
+/// is exported as a file descriptor and `cuImportExternalMemory` takes
+/// exactly that. wgpu enables the extension only when the device is asked
+/// for `VULKAN_EXTERNAL_MEMORY_FD`, and eframe is what creates the device,
+/// so the asking has to happen here.
+///
+/// An adapter that cannot offer it gets a device without it, and the backend
+/// then refuses to start with an error naming what is missing — rather than
+/// quietly going back to copying every frame through system memory.
+#[cfg(target_os = "linux")]
+fn request_vulkan_interop(options: &mut eframe::NativeOptions) {
+    use eframe::wgpu;
+
+    let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
+    else {
+        return;
+    };
+    // Vulkan is what wgpu picks here anyway; naming it makes that the only
+    // outcome, since the import is written against no other backend.
+    setup.instance_descriptor.backends = wgpu::Backends::VULKAN;
+    let inner = std::sync::Arc::clone(&setup.device_descriptor);
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut descriptor = inner(adapter);
+        // Intersected with what the adapter has: asking for a feature it
+        // does not offer fails device creation outright, which would take
+        // the whole application down over the Preview's copy path.
+        descriptor.required_features |=
+            wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD & adapter.features();
+        descriptor
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn request_vulkan_interop(_options: &mut eframe::NativeOptions) {}
 
 /// Turns on `media-pp`'s own file log, beside this user's project database.
 ///

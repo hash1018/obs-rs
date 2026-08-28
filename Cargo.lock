@@ -2415,6 +2415,7 @@ name = "obs-rs"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "ash",
  "ashpd",
  "eframe",
  "fluent-bundle",

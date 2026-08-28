@@ -7,10 +7,12 @@
 //! texture the Preview already knows how to draw. The UI side does not change.
 //!
 //! The planes are separate textures rather than one, because that is what the
-//! CUDA interop needs them to be: each becomes a Vulkan image that CUDA writes
-//! into directly, and only the pass below has to know they are two.
+//! shape of NV12 makes them: different resolutions, different formats. What
+//! fills them is one buffer CUDA wrote the whole frame into — see [`super::shared`] —
+//! so the upload is two `copy_buffer_to_texture` calls in the same submission
+//! as the pass, and nothing here crosses the bus.
 
-use media_pp::ffmpeg;
+use super::shared::SharedNv12;
 
 /// `CudaConverter` documents its output as BT.709 limited-range Y'CbCr from
 /// full-range RGB, so this is that conversion run backwards. Guessing the
@@ -58,6 +60,9 @@ const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub(super) struct Nv12Target {
     luma: wgpu::Texture,
     chroma: wgpu::Texture,
+    /// The resolved frame. A view keeps its texture alive on its own, so
+    /// this is held for one reason: a test reads back what the pass drew.
+    _output: wgpu::Texture,
     output_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
@@ -82,6 +87,13 @@ impl Nv12Target {
             width / 2,
             height / 2,
         );
+        let mut usage =
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
+        // Only a test ever reads the resolved frame back; the Preview samples
+        // it where it lies.
+        if cfg!(test) {
+            usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("composite-frame"),
             size: wgpu::Extent3d {
@@ -93,7 +105,7 @@ impl Nv12Target {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: OUTPUT_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             view_formats: &[],
         });
 
@@ -159,6 +171,7 @@ impl Nv12Target {
             luma,
             chroma,
             output_view: output.create_view(&Default::default()),
+            _output: output,
             bind_group,
             pipeline,
             size: [width, height],
@@ -170,37 +183,41 @@ impl Nv12Target {
         &self.output_view
     }
 
-    /// Uploads one NV12 frame and resolves it into the output texture.
+    /// The same texture, for a test that reads back what the pass resolved.
+    #[cfg(test)]
+    pub(super) fn output_texture(&self) -> &wgpu::Texture {
+        &self._output
+    }
+
+    /// Resolves the frame now in the shared buffer into the output texture.
     ///
-    /// Returns `false` when the frame does not match the size this was built
-    /// for, which would otherwise paint a torn picture rather than fail.
+    /// Returns `false` when the buffer was built for a different size, which
+    /// would otherwise paint a torn picture rather than fail.
     pub(super) fn draw(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        frame: &ffmpeg::frame::Video,
+        shared: &SharedNv12,
     ) -> bool {
-        let [width, height] = self.size;
-        if frame.width() != width || frame.height() != height {
+        let layout = shared.layout();
+        if [layout.width, layout.height] != self.size {
             return false;
         }
-        if is_partly_unwritten(frame) {
-            static REPORTED: std::sync::Once = std::sync::Once::new();
-            REPORTED.call_once(|| {
-                eprintln!(
-                    "a composited frame arrived partly unwritten and was dropped; \
-                     this happens while a layer is resized quickly and is not yet \
-                     understood. The Preview skips such frames."
-                );
-            });
-            return false;
-        }
-        upload_plane(queue, &self.luma, frame.data(0), frame.stride(0), 1);
-        upload_plane(queue, &self.chroma, frame.data(1), frame.stride(1), 2);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("nv12-to-rgba"),
         });
+        // The two plane copies and the pass go in one submission: the buffer
+        // is read and resolved before anything else can be recorded against
+        // it, so the next frame's copy cannot overtake this one.
+        copy_plane(&mut encoder, shared.buffer(), 0, layout.pitch, &self.luma);
+        copy_plane(
+            &mut encoder,
+            shared.buffer(),
+            layout.chroma_offset,
+            layout.pitch,
+            &self.chroma,
+        );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("nv12-to-rgba"),
@@ -228,39 +245,27 @@ impl Nv12Target {
     }
 }
 
-/// Whether a frame's tail was never written.
-///
-/// Rapidly resizing a layer makes the compositor emit, roughly once in six
-/// hundred frames, a frame whose last rows are untouched — the shape of a
-/// linear write that stopped part way. Those bytes are zero, and zero is not
-/// a colour this pipeline produces: BT.709 limited-range black is Y=16 with
-/// both chroma at 128, and every Source arrives converted. So all three at
-/// zero means nothing wrote there.
-///
-/// Dropping the frame costs one Preview refresh out of hundreds and is
-/// invisible; showing it is a flash of green, since that is what zeroed NV12
-/// resolves to. The defect itself is upstream and unfound — this only keeps
-/// it off the screen, and says so the first time it fires.
-fn is_partly_unwritten(frame: &ffmpeg::frame::Video) -> bool {
-    let (luma, chroma) = (frame.data(0), frame.data(1));
-    let (luma_stride, chroma_stride) = (frame.stride(0), frame.stride(1));
-    let height = frame.height() as usize;
-    let width = frame.width() as usize;
-    if height < 2 || width < 2 {
-        return false;
-    }
-
-    // The last two rows, spread across the width: the region always reaches
-    // the bottom edge, being the tail of the frame.
-    (0..8).any(|step| {
-        let column = (width - 2) * step / 8;
-        (height - 2..height).any(|row| {
-            let at = (row / 2) * chroma_stride + (column / 2) * 2;
-            luma.get(row * luma_stride + column) == Some(&0)
-                && chroma.get(at) == Some(&0)
-                && chroma.get(at + 1) == Some(&0)
-        })
-    })
+/// Moves one plane out of the shared buffer and into its texture.
+fn copy_plane(
+    encoder: &mut wgpu::CommandEncoder,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    pitch: u32,
+    texture: &wgpu::Texture,
+) {
+    let size = texture.size();
+    encoder.copy_buffer_to_texture(
+        wgpu::TexelCopyBufferInfo {
+            buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset,
+                bytes_per_row: Some(pitch),
+                rows_per_image: Some(size.height),
+            },
+        },
+        texture.as_image_copy(),
+        size,
+    );
 }
 
 fn plane(
@@ -284,30 +289,4 @@ fn plane(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
-}
-
-/// FFmpeg pads rows to its own alignment, so the plane's stride is passed
-/// through: `write_texture` re-strides into its staging buffer.
-fn upload_plane(
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    data: &[u8],
-    stride: usize,
-    bytes_per_texel: u32,
-) {
-    let size = texture.size();
-    let needed = stride * size.height as usize;
-    if data.len() < needed || stride < (size.width * bytes_per_texel) as usize {
-        return;
-    }
-    queue.write_texture(
-        texture.as_image_copy(),
-        &data[..needed],
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(stride as u32),
-            rows_per_image: Some(size.height),
-        },
-        size,
-    );
 }

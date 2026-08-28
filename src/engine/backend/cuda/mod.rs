@@ -1,9 +1,11 @@
 //! The CUDA backend: PipeWire capture straight into CUDA surfaces, an NV12
-//! compositor, and one download to reach wgpu.
+//! compositor, and memory both CUDA and Vulkan hold to reach wgpu.
 
 mod nv12;
+mod shared;
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -11,8 +13,9 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, CudaDevice, CudaDownload, CudaFrameFormat, CudaVideoCompositor,
-        CudaVideoCompositorHandle, CudaVideoLayerHandle, VideoCompositorOptions, VideoLayer,
+        AppSink, CudaDevice, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
+        CudaVideoCompositorHandle, CudaVideoLayerHandle, SubmitError, TeeBuilder,
+        VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -25,6 +28,7 @@ use crate::snapshots::SceneItemSnapshot;
 use super::{BACKGROUND, BackendError, OpenSource, flat_bgra, input_name, unsupported_kind};
 
 use nv12::Nv12Target;
+use shared::SharedNv12;
 
 /// The compositor's layer control already offers exactly what a backend must.
 pub(in crate::engine) type Layer = CudaVideoLayerHandle;
@@ -68,66 +72,67 @@ impl Backend {
             },
         )?;
 
-        // The compositor works in CUDA surfaces; this is the one place the
-        // frame returns to system memory. Replacing this download with an
-        // import into the planes above is what removes the round trip.
-        let download = CudaDownload::new(
-            "preview-download",
+        // The composited frame reaches wgpu through memory both APIs hold
+        // rather than a readback: see `shared`. What it replaces —
+        // `CudaDownload` plus `write_texture` — carried every Preview frame
+        // across PCIe twice for pixels that never left the GPU.
+        let shared = SharedNv12::new(&render_state.device, width, height)?;
+
+        // `on_frame` is not called from the drawing branch: that branch sits
+        // behind a dropping queue and refreshes only at the Preview's rate,
+        // while the rate reported has to be the compositor's — it is what
+        // says whether an output could be made at the rate it is configured
+        // for. So the frames are teed. A synchronous counting sink sees every
+        // composited frame and makes every call; the drawing branch only
+        // leaves a flag saying the texture was refreshed since the last one.
+        let drawn_flag = Arc::new(AtomicBool::new(false));
+        let count = {
+            let drawn_flag = Arc::clone(&drawn_flag);
+            AppSink::new("preview-rate", move |buffer| {
+                if matches!(buffer, MediaBuffer::Video(_)) {
+                    // A refreshed texture is reported one call late, which is
+                    // one compositor tick after it actually changed.
+                    on_frame(
+                        drawn_flag
+                            .swap(false, Ordering::Relaxed)
+                            .then_some(texture_id),
+                    );
+                }
+                Ok(())
+            })
+        };
+
+        let renderer = CudaRenderer::new(
+            "preview-out",
             &device,
-            CudaFrameFormat::Nv12,
-            width,
-            height,
+            Box::new(PreviewRenderer {
+                wgpu_device: render_state.device.clone(),
+                queue: render_state.queue.clone(),
+                target,
+                shared,
+                drawn_flag,
+                interval: Duration::from_secs_f32(1.0 / preview_fps as f32),
+                next_due: Mutex::new(None),
+            }),
         );
 
-        // The sink runs on the compositor's own source thread, so neither the
-        // UI thread nor the engine's does the conversion.
-        let wgpu_device = render_state.device.clone();
-        let queue = render_state.queue.clone();
-        let interval = Duration::from_secs_f32(1.0 / preview_fps as f32);
-        // When the next draw becomes due. Advanced by whole intervals, never
-        // restarted from the current time.
-        let mut next_due: Option<Instant> = None;
-        let sink = AppSink::new("preview-out", move |buffer| {
-            let MediaBuffer::Video(video) = buffer else {
-                return Ok(());
-            };
-            // Dropped here rather than upstream: the download is the cheapest
-            // part of this branch, while the upload, the resolve pass, and the
-            // full egui repaint each drawn frame asks for are not.
-            let now = Instant::now();
-            let due = next_due.is_none_or(|due| now >= due);
-            let drawn = due && target.draw(&wgpu_device, &queue, &video);
-            if drawn {
-                // The deadline advances by a whole interval rather than
-                // restarting from now, which is what keeps this at the rate it
-                // was asked for. Restarting measures from the moment a frame
-                // happened to arrive, so with frames arriving twice as often
-                // as the Preview wants one, the next arrival lands a hair
-                // under the interval, is dropped, and the one after that is a
-                // whole compositor frame late — 30 fps asked for, 20
-                // delivered. Clamped to now so a stalled compositor cannot
-                // leave a backlog of deadlines to draw in a burst.
-                let due = next_due.map_or(now + interval, |due| due + interval);
-                next_due = Some(due.max(now));
-            }
-            // Every composited frame, drawn or not: this is the compositor's
-            // rate, and it is the one that says whether an output could be
-            // made at the rate it is configured for.
-            on_frame(drawn.then_some(texture_id));
-            Ok(())
-        });
-
         let preview = Pipeline::new("preview", compositor, |source, context| {
-            // The Preview must not set the compositor's pace. `CudaDownload`
-            // waits for the GPU to finish before the CPU can read, and a
-            // synchronous chain makes the compositor wait with it — which
-            // dragged a 60 fps compositor down to exactly half that.
-            let branch = context
+            // The counting branch is synchronous — it is how the calls stay at
+            // the compositor's own rate — so its sink must stay trivial.
+            let count_branch = context.branch().to(Box::new(count))?;
+            // The Preview must not set the compositor's pace, so the copy and
+            // the repaint it asks for happen on this queue's worker, and the
+            // queue drops whatever cannot keep up rather than making the
+            // compositor wait.
+            let draw_branch = context
                 .branch()
                 .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
-                .pipe(download)
-                .to(Box::new(sink))?;
-            context.attach(source, 0, branch)?;
+                .to(Box::new(renderer))?;
+            let tee_branch = TeeBuilder::new("preview-tee", context.clone())
+                .branch(count_branch)
+                .branch(draw_branch)
+                .build()?;
+            context.attach(source, 0, tee_branch)?;
             Ok(())
         })?;
         preview.run()?;
@@ -168,6 +173,90 @@ impl Backend {
             SourceKind::Color => open_color_source(&self.device, &self.compositor, item, layer),
             _ => Err(unsupported_kind(item)),
         }
+    }
+}
+
+/// Puts each composited frame into the memory wgpu reads, at the Preview's
+/// own rate.
+///
+/// A `CudaFrameRenderer` normally presents to a window; this one presents to
+/// egui, which draws the frame itself. `media-pp` still does the useful half:
+/// it validates the frame, rejects one belonging to another CUDA context, and
+/// hands over exactly the plane pointers a copy needs.
+struct PreviewRenderer {
+    wgpu_device: wgpu::Device,
+    queue: wgpu::Queue,
+    target: Nv12Target,
+    shared: SharedNv12,
+    /// Set when the shared memory has new content the Preview has not been
+    /// told about; the counting sink clears it as it reports.
+    drawn_flag: Arc<AtomicBool>,
+    /// `1 / preview_fps`. The copy is cheap, but every refreshed frame asks
+    /// egui for a whole-UI repaint, and that is not.
+    interval: Duration,
+    /// When the next draw becomes due. Advanced by whole intervals, never
+    /// restarted from the current time — see `submit_nv12`.
+    next_due: Mutex<Option<Instant>>,
+}
+
+impl CudaFrameRenderer for PreviewRenderer {
+    unsafe fn submit_nv12(
+        &self,
+        y: *const u8,
+        y_pitch: usize,
+        uv: *const u8,
+        uv_pitch: usize,
+        width: u32,
+        height: u32,
+    ) -> Result<(), SubmitError> {
+        let now = Instant::now();
+        let mut next_due = self
+            .next_due
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Dropped rather than drawn: the copy would be cheap, the repaint it
+        // leads to would not.
+        if next_due.is_some_and(|due| now < due) {
+            return Ok(());
+        }
+        // SAFETY: `CudaRenderer` has already established what this needs —
+        // an NV12 CUDA frame on the primary context, both planes present —
+        // before calling, which is the whole reason the element is in the
+        // graph rather than an `AppSink`.
+        if !unsafe { self.shared.write(y, y_pitch, uv, uv_pitch, width, height) } {
+            return Err(SubmitError::InvalidFrame);
+        }
+        // Checked after the copy rather than before: the frame is only
+        // readable at all once it is in memory the CPU can see. The deadline
+        // deliberately does not advance, so the frame replacing this one is
+        // drawn as soon as it arrives.
+        if self.shared.tail_is_unwritten() {
+            return Ok(());
+        }
+        if !self
+            .target
+            .draw(&self.wgpu_device, &self.queue, &self.shared)
+        {
+            return Err(SubmitError::InvalidFrame);
+        }
+        // The deadline advances by a whole interval rather than restarting
+        // from now, which is what keeps this at the rate it was asked for.
+        // Restarting measures from the moment a frame happened to arrive, so
+        // with frames arriving twice as often as the Preview wants one, the
+        // next arrival lands a hair under the interval, is dropped, and the
+        // one after that is a whole compositor frame late — 30 fps asked for,
+        // 22 delivered. Clamped to now so a stalled compositor cannot leave a
+        // backlog of deadlines to draw in a burst.
+        let due = next_due.map_or(now + self.interval, |due| due + self.interval);
+        *next_due = Some(due.max(now));
+        self.drawn_flag.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Nothing resizes: the Preview draws the Canvas, whose size the
+    /// compositor is built for and does not change while it runs.
+    fn resize(&self, _width: u32, _height: u32) -> Result<(), SubmitError> {
+        Ok(())
     }
 }
 
