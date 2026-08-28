@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use eframe::egui;
 
 use crate::domain::SceneCanvas;
@@ -25,6 +27,22 @@ pub struct ObsApp {
     settings_store: SettingsStore,
     ui_actions: Vec<UiAction>,
 }
+
+/// What the engine's wake asks egui to wait before repainting — which is
+/// as good as nothing, and deliberately not nothing.
+///
+/// `Context::request_repaint` is `request_repaint_after(ZERO)`, and egui
+/// answers a zero delay with *two* passes rather than one, "to give some
+/// things time to settle". That is a reasonable default for a repaint caused
+/// by an interaction whose response is only known a pass later. It is not one
+/// for this: a composited frame has arrived, and drawing it twice is drawing
+/// the whole UI a second time for nothing. Doing that thirty times a second
+/// was the application's single largest cost — 64% of a core against 7%.
+///
+/// Any non-zero delay takes egui's single-pass path, and it then subtracts a
+/// predicted frame time from whatever it was given, so this one arrives as
+/// "repaint now". The Preview is no slower for it; it is drawn once.
+const REPAINT_NOW: Duration = Duration::from_nanos(1);
 
 impl ObsApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -69,7 +87,7 @@ impl ObsApp {
                     render_state,
                     SceneCanvas::DEFAULT,
                     project_dispatcher,
-                    move || engine_repaint_ctx.request_repaint(),
+                    move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))
                 .ok()
