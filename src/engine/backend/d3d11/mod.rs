@@ -6,14 +6,14 @@ mod shared;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCompositor,
+        AppSink, ChangeGate, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCompositor,
         D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle, SubmitError,
         TeeBuilder, VideoCompositorOptions, VideoLayer,
     },
@@ -124,8 +124,6 @@ impl Backend {
                 context: context.clone(),
                 shared,
                 drawn_flag,
-                interval: Duration::from_secs_f32(1.0 / preview_fps as f32),
-                next_due: Mutex::new(None),
             }),
         );
 
@@ -137,9 +135,18 @@ impl Backend {
             // the repaint it asks for happen on this queue's worker, and the
             // queue drops whatever cannot keep up rather than making the
             // compositor wait.
+            //
+            // What reaches the renderer past the gate is the newest picture,
+            // no more often than the Preview's rate, and never one it has
+            // already drawn — so a Scene that is not changing costs nothing
+            // at all: no copy into the shared texture, and no egui repaint.
             let draw_branch = context
                 .branch()
                 .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
+                .pipe(ChangeGate::new(
+                    "preview-changes",
+                    Duration::from_secs_f32(1.0 / preview_fps as f32),
+                ))
                 .to(Box::new(renderer))?;
             let tee_branch = TeeBuilder::new("preview-tee", context.clone())
                 .branch(count_branch)
@@ -194,13 +201,15 @@ impl Backend {
     }
 }
 
-/// Puts each composited frame into the texture wgpu shares, at the Preview's
-/// own rate.
+/// Puts each composited frame it is given into the texture wgpu shares.
 ///
 /// A `D3d11FrameRenderer` normally presents to a window; this one presents to
 /// egui, which draws the frame itself. `media-pp` still does the useful half:
 /// it validates the frame, rejects one from another device, and hands over a
 /// texture that is already exactly what has to be copied.
+///
+/// What it is given is the `ChangeGate`'s business: the newest picture, at
+/// most at the Preview's rate, and never one already drawn.
 struct PreviewRenderer {
     device: ID3D11Device,
     context: Arc<Mutex<ID3D11DeviceContext>>,
@@ -208,12 +217,6 @@ struct PreviewRenderer {
     /// Set when the shared texture has new content the Preview has not been
     /// told about; the counting sink clears it as it reports.
     drawn_flag: Arc<AtomicBool>,
-    /// `1 / preview_fps`. Copying is cheap, but every refreshed frame asks
-    /// egui for a whole-UI repaint, and that is not.
-    interval: Duration,
-    /// When the next copy becomes due. Advanced by whole intervals, never
-    /// restarted from the current time — see `submit_bgra_texture`.
-    next_due: Mutex<Option<Instant>>,
 }
 
 // SAFETY: the two COM handles are `windows-rs` interface wrappers, thread-safe
@@ -234,31 +237,17 @@ impl D3d11FrameRenderer for PreviewRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), SubmitError> {
-        let now = Instant::now();
-        let mut next_due = self
-            .next_due
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Dropped rather than copied: the copy would be cheap, the repaint it
-        // leads to would not.
-        if next_due.is_some_and(|due| now < due) {
-            return Ok(());
-        }
+        // Everything that arrives is copied. The rate this is held to, and
+        // the frames carrying a picture already on screen, are both the
+        // `ChangeGate` in front of it — deliberately, since a renderer that
+        // dropped frames of its own would make that gate suppress the
+        // repeats carrying a change it had just dropped.
         let copied = self
             .shared
             .copy_from(&self.context, &texture, width, height);
         if !copied {
             return Err(SubmitError::InvalidFrame);
         }
-        // The deadline advances by a whole interval rather than restarting
-        // from now, which is what keeps this at the rate it was asked for.
-        // Restarting measures from the moment a frame happened to arrive, so
-        // with frames arriving twice as often as the Preview wants one, the
-        // next arrival lands a hair under the interval, is dropped, and the
-        // one after that is a whole source frame late — 30 fps asked for,
-        // 21 delivered, and a visibly rougher drag.
-        let due = next_due.map_or(now + self.interval, |due| due + self.interval);
-        *next_due = Some(due.max(now));
         self.drawn_flag.store(true, Ordering::Relaxed);
         Ok(())
     }
