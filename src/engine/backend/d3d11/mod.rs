@@ -121,7 +121,7 @@ impl Backend {
                 shared,
                 drawn_flag,
                 interval: Duration::from_secs_f32(1.0 / preview_fps as f32),
-                last_drawn: Mutex::new(None),
+                next_due: Mutex::new(None),
             }),
         );
 
@@ -201,7 +201,9 @@ struct PreviewRenderer {
     /// `1 / preview_fps`. Copying is cheap, but every refreshed frame asks
     /// egui for a whole-UI repaint, and that is not.
     interval: Duration,
-    last_drawn: Mutex<Option<Instant>>,
+    /// When the next copy becomes due. Advanced by whole intervals, never
+    /// restarted from the current time — see `submit_bgra_texture`.
+    next_due: Mutex<Option<Instant>>,
 }
 
 // SAFETY: the two COM handles are `windows-rs` interface wrappers, thread-safe
@@ -222,13 +224,14 @@ impl D3d11FrameRenderer for PreviewRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), SubmitError> {
-        let mut last_drawn = self
-            .last_drawn
+        let now = Instant::now();
+        let mut next_due = self
+            .next_due
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Dropped rather than copied: the copy would be cheap, the repaint it
         // leads to would not.
-        if last_drawn.is_some_and(|last| last.elapsed() < self.interval) {
+        if next_due.is_some_and(|due| now < due) {
             return Ok(());
         }
         let copied = self
@@ -237,7 +240,15 @@ impl D3d11FrameRenderer for PreviewRenderer {
         if !copied {
             return Err(SubmitError::InvalidFrame);
         }
-        *last_drawn = Some(Instant::now());
+        // The deadline advances by a whole interval rather than restarting
+        // from now, which is what keeps this at the rate it was asked for.
+        // Restarting measures from the moment a frame happened to arrive, so
+        // with frames arriving twice as often as the Preview wants one, the
+        // next arrival lands a hair under the interval, is dropped, and the
+        // one after that is a whole source frame late — 30 fps asked for,
+        // 21 delivered, and a visibly rougher drag.
+        let due = next_due.map_or(now + self.interval, |due| due + self.interval);
+        *next_due = Some(due.max(now));
         self.drawn_flag.store(true, Ordering::Relaxed);
         Ok(())
     }
