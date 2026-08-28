@@ -29,6 +29,9 @@ use eframe::egui;
 use app::ObsApp;
 
 fn main() -> eframe::Result {
+    // Held for the whole process: dropping it stops `media-pp`'s file logger.
+    let _log = start_media_pp_log();
+
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("obs-rs")
@@ -64,3 +67,33 @@ fn pin_windows_backend(options: &mut eframe::NativeOptions) {
 
 #[cfg(not(target_os = "windows"))]
 fn pin_windows_backend(_options: &mut eframe::NativeOptions) {}
+
+/// Turns on `media-pp`'s own file log, beside this user's project database.
+///
+/// The library keeps a private logger rather than emitting through `log` or
+/// `tracing`, so nothing here is installed process-wide and this is the only
+/// way to see what the pipelines are doing. Failing to open it is not worth
+/// refusing to start over — the application runs perfectly well without a
+/// log — so this reports and carries on.
+///
+/// `OBS_RS_MEDIA_PP_LOG` raises or lowers the threshold; `info` is what a
+/// normal run wants, and chasing a frame through the graph wants `trace`.
+fn start_media_pp_log() -> Option<media_pp::log::LogGuard> {
+    use media_pp::log::Level;
+
+    let level = match std::env::var("OBS_RS_MEDIA_PP_LOG").as_deref() {
+        Ok("error") => Level::Error,
+        Ok("warn") => Level::Warn,
+        Ok("debug") => Level::Debug,
+        Ok("trace") => Level::Trace,
+        _ => Level::Info,
+    };
+    let directory = paths::data_dir().join("logs");
+    match media_pp::log::init("media-pp", &directory.to_string_lossy(), level, 7) {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            eprintln!("media-pp logging is off: {error}");
+            None
+        }
+    }
+}
