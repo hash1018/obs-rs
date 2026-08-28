@@ -50,6 +50,9 @@ pub(in crate::engine) struct Backend {
     device: ID3D11Device,
     compositor: D3d11VideoCompositorHandle,
     preview: Arc<Pipeline>,
+    /// Reached from the UI through [`Backend::set_preview_visible`] — see
+    /// [`PreviewSurface`].
+    surface: Arc<PreviewSurface>,
 }
 
 impl Backend {
@@ -117,13 +120,21 @@ impl Backend {
             })
         };
 
+        let surface = Arc::new(PreviewSurface {
+            context: context.clone(),
+            shared,
+            drawn: drawn_flag,
+            // Whether the window is up is the UI's to say, and it says so on
+            // its next pass; starting visible is what keeps the first frames
+            // from being held back until it does.
+            visible: AtomicBool::new(true),
+            pending: Mutex::new(None),
+        });
         let renderer = D3d11Renderer::new(
             "preview-out",
             Box::new(PreviewRenderer {
                 device: device.clone(),
-                context: context.clone(),
-                shared,
-                drawn_flag,
+                surface: Arc::clone(&surface),
             }),
         );
 
@@ -161,7 +172,13 @@ impl Backend {
             device,
             compositor: handle,
             preview,
+            surface,
         })
+    }
+
+    /// Whether anyone is looking at the Preview — see [`PreviewSurface`].
+    pub(in crate::engine) fn set_preview_visible(&self, visible: bool) {
+        self.surface.set_visible(visible);
     }
 
     pub(in crate::engine) fn pause(&self) {
@@ -201,6 +218,93 @@ impl Backend {
     }
 }
 
+/// The texture the Preview is drawn from, and whether anyone is looking at
+/// it.
+///
+/// Shared between the renderer inside the pipeline and the `Backend` the UI
+/// reaches, because the two answer different halves of one question. A
+/// minimised window is nobody looking, and copying a composited frame into a
+/// texture no one will sample is 8 MiB a frame spent on nothing.
+///
+/// What arrives while nobody is looking is kept rather than dropped, and
+/// copied the moment the window comes back. Without that the Preview would
+/// show the picture from when it was minimised until something on the
+/// captured screen happened to change — the `ChangeGate` in front of this
+/// forwards changes, and a Scene that is not changing sends nothing at all.
+struct PreviewSurface {
+    context: Arc<Mutex<ID3D11DeviceContext>>,
+    shared: SharedTarget,
+    /// Set when the shared texture has new content the Preview has not been
+    /// told about; the counting sink clears it as it reports.
+    drawn: Arc<AtomicBool>,
+    visible: AtomicBool,
+    /// The last frame that arrived while nobody was looking.
+    ///
+    /// Only the texture, not the frame that owned it: the compositor may
+    /// compose into it again before the window comes back, and that is not a
+    /// problem worth holding a pool frame to prevent — what a restored
+    /// Preview should show is the picture as it is then, and drawing over
+    /// this one is how it becomes that.
+    pending: Mutex<Option<PendingFrame>>,
+}
+
+struct PendingFrame {
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
+// SAFETY: the COM handles here are `windows-rs` interface wrappers, thread-safe
+// to hold; every context call goes through `context`'s own mutex, and the rest
+// is plain data behind its own locks.
+unsafe impl Send for PreviewSurface {}
+unsafe impl Sync for PreviewSurface {}
+
+impl PreviewSurface {
+    /// Takes one composited frame, copying it only if there is anyone to see
+    /// it. Returns whether the frame was accepted; a copy that fails is the
+    /// only rejection.
+    fn submit(&self, texture: ID3D11Texture2D, width: u32, height: u32) -> bool {
+        if !self.visible.load(Ordering::Relaxed) {
+            *self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PendingFrame {
+                texture,
+                width,
+                height,
+            });
+            return true;
+        }
+        self.copy(&texture, width, height)
+    }
+
+    /// Tells this whether anyone is looking. Coming back into view copies
+    /// whatever arrived while nobody was.
+    fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Relaxed);
+        if !visible {
+            return;
+        }
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(frame) = pending {
+            self.copy(&frame.texture, frame.width, frame.height);
+        }
+    }
+
+    fn copy(&self, texture: &ID3D11Texture2D, width: u32, height: u32) -> bool {
+        if !self.shared.copy_from(&self.context, texture, width, height) {
+            return false;
+        }
+        self.drawn.store(true, Ordering::Relaxed);
+        true
+    }
+}
+
 /// Puts each composited frame it is given into the texture wgpu shares.
 ///
 /// A `D3d11FrameRenderer` normally presents to a window; this one presents to
@@ -209,14 +313,11 @@ impl Backend {
 /// texture that is already exactly what has to be copied.
 ///
 /// What it is given is the `ChangeGate`'s business: the newest picture, at
-/// most at the Preview's rate, and never one already drawn.
+/// most at the Preview's rate, and never one already drawn. Whether it is
+/// copied at all is [`PreviewSurface`]'s.
 struct PreviewRenderer {
     device: ID3D11Device,
-    context: Arc<Mutex<ID3D11DeviceContext>>,
-    shared: SharedTarget,
-    /// Set when the shared texture has new content the Preview has not been
-    /// told about; the counting sink clears it as it reports.
-    drawn_flag: Arc<AtomicBool>,
+    surface: Arc<PreviewSurface>,
 }
 
 // SAFETY: the two COM handles are `windows-rs` interface wrappers, thread-safe
@@ -237,18 +338,15 @@ impl D3d11FrameRenderer for PreviewRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), SubmitError> {
-        // Everything that arrives is copied. The rate this is held to, and
-        // the frames carrying a picture already on screen, are both the
+        // Everything that arrives is taken. The rate this is held to, and the
+        // frames carrying a picture already on screen, are both the
         // `ChangeGate` in front of it — deliberately, since a renderer that
         // dropped frames of its own would make that gate suppress the
-        // repeats carrying a change it had just dropped.
-        let copied = self
-            .shared
-            .copy_from(&self.context, &texture, width, height);
-        if !copied {
+        // repeats carrying a change it had just dropped. Whether taking it
+        // means copying it is `PreviewSurface`'s answer, not this one's.
+        if !self.surface.submit(texture, width, height) {
             return Err(SubmitError::InvalidFrame);
         }
-        self.drawn_flag.store(true, Ordering::Relaxed);
         Ok(())
     }
 

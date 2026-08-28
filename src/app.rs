@@ -26,6 +26,9 @@ pub struct ObsApp {
     settings: AppSettings,
     settings_store: SettingsStore,
     ui_actions: Vec<UiAction>,
+    /// What the engine was last told about whether anyone can see the
+    /// Preview — see [`ObsApp::poll_engine`].
+    preview_visible: bool,
 }
 
 /// What the engine's wake asks egui to wait before repainting — which is
@@ -101,6 +104,9 @@ impl ObsApp {
             settings,
             settings_store,
             ui_actions: Vec::new(),
+            // What the engine starts believing, so the first pass says
+            // something only if the window came up minimised.
+            preview_visible: true,
         }
     }
 
@@ -122,12 +128,24 @@ impl ObsApp {
         }
     }
 
-    fn poll_engine(&mut self) {
+    fn poll_engine(&mut self, ctx: &egui::Context) {
         let Some(engine) = &self.engine else {
             return;
         };
         self.snapshots.status.active_fps = engine.active_fps();
         self.snapshots.status.target_fps = Some(engine.target_fps());
+
+        // A minimised window is nobody looking at the Preview, and the engine
+        // can stop putting frames where nobody will sample them. Only the
+        // change is sent: this runs every pass, and the engine's queue is not
+        // the place to say the same thing sixty times a second. `None` is a
+        // platform that does not report it, which is not a reason to hide the
+        // Preview from someone who can see it.
+        let visible = !ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+        if self.preview_visible != visible {
+            self.preview_visible = visible;
+            engine.set_preview_visible(visible);
+        }
     }
 
     fn poll_resource_usage(&mut self) {
@@ -198,9 +216,9 @@ impl ObsApp {
 }
 
 impl eframe::App for ObsApp {
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_project();
-        self.poll_engine();
+        self.poll_engine(ctx);
         self.poll_resource_usage();
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();

@@ -37,6 +37,9 @@ pub(in crate::engine) struct Backend {
     device: CudaDevice,
     compositor: CudaVideoCompositorHandle,
     preview: Arc<Pipeline>,
+    /// Reached from the UI through [`Backend::set_preview_visible`] — see
+    /// [`PreviewSurface`].
+    surface: Arc<PreviewSurface>,
 }
 
 impl Backend {
@@ -102,15 +105,23 @@ impl Backend {
             })
         };
 
+        let surface = Arc::new(PreviewSurface {
+            wgpu_device: render_state.device.clone(),
+            queue: render_state.queue.clone(),
+            target,
+            shared,
+            drawn: drawn_flag,
+            // Whether the window is up is the UI's to say, and it says so on
+            // its next pass; starting visible is what keeps the first frames
+            // from being held back until it does.
+            visible: AtomicBool::new(true),
+            undrawn: AtomicBool::new(false),
+        });
         let renderer = CudaRenderer::new(
             "preview-out",
             &device,
             Box::new(PreviewRenderer {
-                wgpu_device: render_state.device.clone(),
-                queue: render_state.queue.clone(),
-                target,
-                shared,
-                drawn_flag,
+                surface: Arc::clone(&surface),
             }),
         );
 
@@ -148,7 +159,13 @@ impl Backend {
             device,
             compositor: handle,
             preview,
+            surface,
         })
+    }
+
+    /// Whether anyone is looking at the Preview — see [`PreviewSurface`].
+    pub(in crate::engine) fn set_preview_visible(&self, visible: bool) {
+        self.surface.set_visible(visible);
     }
 
     pub(in crate::engine) fn pause(&self) {
@@ -191,13 +208,60 @@ impl Backend {
 /// it validates the frame, rejects one belonging to another CUDA context, and
 /// hands over exactly the plane pointers a copy needs.
 struct PreviewRenderer {
+    surface: Arc<PreviewSurface>,
+}
+
+/// What the Preview is drawn from, and whether anyone is looking at it.
+///
+/// Shared between the renderer inside the pipeline and the `Backend` the UI
+/// reaches. A minimised window is nobody looking, and the resolve pass and
+/// the buffer-to-texture copies it drives are work for a texture no one will
+/// sample.
+///
+/// The CUDA copy into shared memory still happens: it is device-to-device and
+/// cheap, and keeping it current is what lets the window come back to the
+/// picture as it is then rather than as it was when it went down — the
+/// `ChangeGate` in front of this forwards changes, and a Scene that is not
+/// changing sends nothing at all.
+struct PreviewSurface {
     wgpu_device: wgpu::Device,
     queue: wgpu::Queue,
     target: Nv12Target,
     shared: SharedNv12,
     /// Set when the shared memory has new content the Preview has not been
     /// told about; the counting sink clears it as it reports.
-    drawn_flag: Arc<AtomicBool>,
+    drawn: Arc<AtomicBool>,
+    visible: AtomicBool,
+    /// Whether the shared memory holds a picture the target has not drawn,
+    /// which is what coming back into view has to answer.
+    undrawn: AtomicBool,
+}
+
+impl PreviewSurface {
+    /// Draws what is in shared memory, if there is anyone to see it.
+    fn present(&self) -> bool {
+        if !self.visible.load(Ordering::Relaxed) {
+            self.undrawn.store(true, Ordering::Relaxed);
+            return true;
+        }
+        if !self
+            .target
+            .draw(&self.wgpu_device, &self.queue, &self.shared)
+        {
+            return false;
+        }
+        self.drawn.store(true, Ordering::Relaxed);
+        true
+    }
+
+    /// Tells this whether anyone is looking. Coming back into view draws
+    /// whatever arrived while nobody was.
+    fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Relaxed);
+        if visible && self.undrawn.swap(false, Ordering::Relaxed) {
+            self.present();
+        }
+    }
 }
 
 impl CudaFrameRenderer for PreviewRenderer {
@@ -220,21 +284,23 @@ impl CudaFrameRenderer for PreviewRenderer {
         // an NV12 CUDA frame on the primary context, both planes present —
         // before calling, which is the whole reason the element is in the
         // graph rather than an `AppSink`.
-        if !unsafe { self.shared.write(y, y_pitch, uv, uv_pitch, width, height) } {
+        if !unsafe {
+            self.surface
+                .shared
+                .write(y, y_pitch, uv, uv_pitch, width, height)
+        } {
             return Err(SubmitError::InvalidFrame);
         }
         // Checked after the copy rather than before: the frame is only
         // readable at all once it is in memory the CPU can see.
-        if self.shared.tail_is_unwritten() {
+        if self.surface.shared.tail_is_unwritten() {
             return Ok(());
         }
-        if !self
-            .target
-            .draw(&self.wgpu_device, &self.queue, &self.shared)
-        {
+        // Whether drawing it happens now is `PreviewSurface`'s answer, not
+        // this one's.
+        if !self.surface.present() {
             return Err(SubmitError::InvalidFrame);
         }
-        self.drawn_flag.store(true, Ordering::Relaxed);
         Ok(())
     }
 

@@ -48,6 +48,7 @@ impl Backend {
         Err("no compositor backend is written for this platform yet".into())
     }
 
+    pub(in crate::engine) fn set_preview_visible(&self, _visible: bool) {}
     pub(in crate::engine) fn pause(&self) {}
     pub(in crate::engine) fn resume(&self) {}
     pub(in crate::engine) fn stop(&self) {}

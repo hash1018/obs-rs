@@ -66,6 +66,9 @@ enum EngineCommand {
     Scene(Box<SourcesSnapshot>),
     /// One item's Transform mid-gesture, which the project does not hold yet.
     Dragging(SceneItemId, Transform),
+    /// Whether anyone is looking at the Preview — a minimised window is
+    /// nobody, and the frame then has nowhere worth going.
+    PreviewVisible(bool),
 }
 
 /// The two slots the engine writes and the UI reads, which travel together.
@@ -148,6 +151,18 @@ impl EngineManager {
     /// the gesture directly and the snapshot confirms it afterwards.
     pub fn set_dragging_transform(&self, item: SceneItemId, transform: Transform) {
         let _ = self.commands.send(EngineCommand::Dragging(item, transform));
+    }
+
+    /// Tells the engine whether anyone is looking at the Preview.
+    ///
+    /// A minimised window is nobody: the frame still has to be composited,
+    /// since the rate reported is what a recording would be made at, but
+    /// putting it into the texture egui samples is work for a texture nobody
+    /// will sample. Coming back into view is what makes the newest frame
+    /// reach it, so the Preview is current rather than as it was when the
+    /// window went down.
+    pub fn set_preview_visible(&self, visible: bool) {
+        let _ = self.commands.send(EngineCommand::PreviewVisible(visible));
     }
 
     /// The most recent composited frame, or `None` before the first one.
@@ -296,6 +311,10 @@ fn apply_command(
             let item = &scene.items[index];
             let layer = layer_for(item, transform, (scene.items.len() - index) as i32);
             let _ = source.layer.set_layer(layer);
+            false
+        }
+        EngineCommand::PreviewVisible(visible) => {
+            backend.set_preview_visible(visible);
             false
         }
     }
