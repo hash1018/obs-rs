@@ -158,6 +158,28 @@ impl Backend {
     }
 }
 
+/// One SceneItem's share of whatever is producing its frames.
+///
+/// Every Source here owns its own pipeline: the portal hands out a separate
+/// stream per request, so unlike Windows' desktop duplication there is
+/// nothing two SceneItems have to share. See `engine::backend`'s own docs on
+/// why this is a type each backend defines rather than a `Pipeline`.
+pub(in crate::engine) struct RunningSource(Arc<Pipeline>);
+
+impl RunningSource {
+    pub(in crate::engine) fn pause(&self) {
+        self.0.pause();
+    }
+
+    pub(in crate::engine) fn resume(&self) {
+        self.0.resume();
+    }
+
+    pub(in crate::engine) fn stop(&self) {
+        self.0.stop();
+    }
+}
+
 /// Feeds the compositor one frame of flat colour and leaves it there.
 ///
 /// Pushed once rather than per frame: the compositor keeps the latest frame
@@ -203,7 +225,7 @@ fn open_color_source(
     pusher.push(flat_bgra(width, height, settings.rgba))?;
 
     Ok(OpenSource {
-        pipeline,
+        source: RunningSource(pipeline),
         layer,
         name,
         refreshed_token: None,
@@ -295,7 +317,7 @@ fn open_display_capture(
     pipeline.run()?;
 
     Ok(OpenSource {
-        pipeline,
+        source: RunningSource(pipeline),
         layer,
         name,
         refreshed_token,

@@ -264,7 +264,7 @@ fn run(
 
     for (_, state) in open.drain() {
         if let SourceState::Open(source) = state {
-            source.pipeline.stop();
+            source.source.stop();
         }
     }
     backend.stop();
@@ -365,9 +365,9 @@ fn reconcile(
             continue;
         }
         if showing {
-            source.pipeline.resume();
+            source.source.resume();
         } else {
-            source.pipeline.pause();
+            source.source.pause();
             let _ = source.layer.set_visible(false);
         }
         source.showing = showing;
@@ -379,7 +379,7 @@ fn reconcile(
             return true;
         }
         if let SourceState::Open(source) = state {
-            source.pipeline.stop();
+            source.source.stop();
             backend.remove_source(&source.name);
         }
         false

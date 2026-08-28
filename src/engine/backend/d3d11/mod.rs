@@ -1,6 +1,7 @@
 //! The D3D11 backend: DXGI desktop duplication straight into D3D11 textures,
 //! a BGRA compositor, and a shared texture to reach wgpu without a readback.
 
+mod capture;
 mod shared;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,10 +13,9 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, CaptureArea, CaptureMode, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCompositor,
-        D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle,
-        DxgiCaptureOptions, DxgiCaptureSource, SubmitError, TeeBuilder, VideoCompositorOptions,
-        VideoLayer,
+        AppSink, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCompositor,
+        D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle, SubmitError,
+        TeeBuilder, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -37,12 +37,16 @@ use crate::snapshots::SceneItemSnapshot;
 
 use super::{BACKGROUND, BackendError, OpenSource, flat_bgra, input_name, unsupported_kind};
 
+use media_pp::graph::BranchId;
+
+use capture::CaptureRegistry;
 use shared::SharedTarget;
 
 /// The compositor's layer control already offers exactly what a backend must.
 pub(in crate::engine) type Layer = D3d11VideoLayerHandle;
 
 pub(in crate::engine) struct Backend {
+    captures: Arc<CaptureRegistry>,
     device: ID3D11Device,
     compositor: D3d11VideoCompositorHandle,
     preview: Arc<Pipeline>,
@@ -146,6 +150,7 @@ impl Backend {
         })?;
         preview.run()?;
         Ok(Self {
+            captures: Arc::new(CaptureRegistry::default()),
             device,
             compositor: handle,
             preview,
@@ -175,9 +180,14 @@ impl Backend {
         fps: u32,
     ) -> Result<OpenSource, BackendError> {
         match item.kind {
-            SourceKind::DisplayCapture => {
-                open_display_capture(&self.device, &self.compositor, item, layer, fps)
-            }
+            SourceKind::DisplayCapture => open_display_capture(
+                &self.device,
+                &self.compositor,
+                &self.captures,
+                item,
+                layer,
+                fps,
+            ),
             SourceKind::Color => open_color_source(&self.device, &self.compositor, item, layer),
             _ => Err(unsupported_kind(item)),
         }
@@ -365,7 +375,7 @@ fn open_color_source(
     pusher.push(flat_bgra(width, height, settings.rgba))?;
 
     Ok(OpenSource {
-        pipeline,
+        source: RunningSource::Owned(pipeline),
         layer,
         name,
         refreshed_token: None,
@@ -373,10 +383,60 @@ fn open_color_source(
     })
 }
 
-/// Starts duplicating one display and wires it into the compositor.
+/// One SceneItem's share of whatever is producing its frames.
+///
+/// Not a `Pipeline`, because one Source is not always one pipeline: a display
+/// capture is shared between every item showing that display (see
+/// [`capture`]), so stopping one item has to leave the capture running for
+/// the others.
+pub(in crate::engine) enum RunningSource {
+    /// A pipeline this item alone owns, such as a Color Source's pusher.
+    Owned(Arc<Pipeline>),
+    /// One branch of a display capture other items may also be drawing from.
+    Shared {
+        captures: Arc<CaptureRegistry>,
+        monitor: String,
+        branch: BranchId,
+    },
+}
+
+impl RunningSource {
+    pub(in crate::engine) fn pause(&self) {
+        match self {
+            Self::Owned(pipeline) => pipeline.pause(),
+            Self::Shared {
+                captures, monitor, ..
+            } => captures.set_showing(monitor, false),
+        }
+    }
+
+    pub(in crate::engine) fn resume(&self) {
+        match self {
+            Self::Owned(pipeline) => pipeline.resume(),
+            Self::Shared {
+                captures, monitor, ..
+            } => captures.set_showing(monitor, true),
+        }
+    }
+
+    pub(in crate::engine) fn stop(&self) {
+        match self {
+            Self::Owned(pipeline) => pipeline.stop(),
+            Self::Shared {
+                captures,
+                monitor,
+                branch,
+            } => captures.detach(monitor, *branch),
+        }
+    }
+}
+
+/// Points one SceneItem at a display's capture, opening it if this is the
+/// first item to want it.
 fn open_display_capture(
     device: &ID3D11Device,
     handle: &D3d11VideoCompositorHandle,
+    captures: &Arc<CaptureRegistry>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
@@ -391,41 +451,22 @@ fn open_display_capture(
         // display.
         return Err("a portal selection names no display Windows can resolve".into());
     };
-    let output_index = resolve_output_index(monitor)?;
 
     let name = input_name(item);
-    // GPU capture: the desktop lands in D3D11 textures on this backend's own
-    // device and never reaches system memory. A monitor on another adapter is
-    // rejected here rather than bridged through a CPU copy, which is the
-    // point — a silent fallback would undo the whole arrangement.
-    let (source, format) = DxgiCaptureSource::open_with_device(
-        name.clone(),
-        DxgiCaptureOptions {
-            area: CaptureArea::Output { output_index },
-            fps,
-            capture_mode: CaptureMode::Gpu,
-        },
-        device,
-    )?;
-    eprintln!(
-        "\"{}\": opened {} as output {} ({}x{})",
-        item.name, monitor, output_index, format.width, format.height,
-    );
-
-    // Capture gives BGRA D3D11 textures and the compositor takes exactly
-    // those, so unlike the CUDA side nothing sits between them.
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
+    // The capture is shared, so what this item gets is a branch of it. Its
+    // own compositor input is still its own: position, size and z-order stay
+    // per item even when the pixels behind two of them are the same.
+    let branch = captures.attach(monitor, device, fps, sink)?;
 
     Ok(OpenSource {
-        pipeline,
+        source: RunningSource::Shared {
+            captures: Arc::clone(captures),
+            monitor: monitor.clone(),
+            branch,
+        },
         layer,
         name,
         refreshed_token: None,

@@ -40,6 +40,12 @@
 //! - `Backend::remove_source` — drop a registration by name.
 //! - `Layer` — runtime control for one registered input, with `set_layer` and
 //!   `set_visible`. A platform whose handle already has both can alias it.
+//! - `RunningSource` — `pause`, `resume`, and `stop` for one open Source.
+//!   Not the pipeline itself, because one Source is not always one pipeline:
+//!   desktop duplication refuses to open the same display twice on one
+//!   device, so two SceneItems showing that display share one capture and
+//!   this is each item's own share of it. Stopping one must leave the other
+//!   running, and a shared capture may only pause once nothing shows it.
 //!
 //! The Preview branch must sit behind a dropping queue. A Preview that cannot
 //! keep up has to drop frames rather than slow the compositor, which every
@@ -48,7 +54,7 @@
 use std::error::Error;
 use std::sync::Arc;
 
-use media_pp::{color::Color, pipeline::Pipeline};
+use media_pp::color::Color;
 
 use crate::snapshots::SceneItemSnapshot;
 
@@ -60,7 +66,7 @@ use crate::snapshots::SceneItemSnapshot;
 )]
 mod platform;
 
-pub(super) use platform::{Backend, Layer};
+pub(super) use platform::{Backend, Layer, RunningSource};
 
 pub(super) type BackendError = Box<dyn Error + Send + Sync>;
 
@@ -73,7 +79,7 @@ pub(super) const BACKGROUND: Color = Color::BLACK;
 
 /// A Source that is running, and the controls for its layer.
 pub(super) struct OpenSource {
-    pub(super) pipeline: Arc<Pipeline>,
+    pub(super) source: RunningSource,
     pub(super) layer: Layer,
     pub(super) name: String,
     /// The token the portal handed back, when it differs from the one it was

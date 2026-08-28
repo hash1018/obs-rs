@@ -26,6 +26,15 @@ impl Layer {
     }
 }
 
+/// One SceneItem's share of whatever is producing its frames. Nothing does.
+pub(in crate::engine) struct RunningSource;
+
+impl RunningSource {
+    pub(in crate::engine) fn pause(&self) {}
+    pub(in crate::engine) fn resume(&self) {}
+    pub(in crate::engine) fn stop(&self) {}
+}
+
 pub(in crate::engine) struct Backend;
 
 impl Backend {
