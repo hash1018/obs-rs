@@ -315,8 +315,40 @@ impl CudaFrameRenderer for PreviewRenderer {
 ///
 /// Every Source here owns its own pipeline: the portal hands out a separate
 /// stream per request, so unlike Windows' desktop duplication there is
-/// nothing two SceneItems have to share. See `engine::backend`'s own docs on
+/// nothing two SceneItems *have* to share. See `engine::backend`'s own docs on
 /// why this is a type each backend defines rather than a `Pipeline`.
+///
+/// # Sharing one capture between them was measured, and declined
+///
+/// Not sharing does cost something. Two SceneItems showing one monitor open
+/// two portal sessions, two DMA-BUF imports, two CUDA copies and two
+/// `CudaConverter` passes for identical pixels. Measured 2026-08-29 with
+/// capture and conversion alone, against a moving screen: one capture cost
+/// 3.1% of a core and two cost 6.6%, so the duplicate is about **3.5% of a
+/// core** — roughly what an idle Scene costs in total. It is per-buffer work,
+/// not per-pixel, so it is the same 3.5% whether a little of the screen is
+/// moving or a lot; only a wholly still screen is free, and the repeat
+/// handling is what makes it so.
+///
+/// It is declined anyway, because what it would cost is worse than what it
+/// saves:
+///
+/// - **Window captures could never join.** The portal reports `position()`,
+///   the only thing that identifies one source as another, for monitor
+///   streams only. Two items on one window would stay duplicated regardless.
+/// - **The second dialog cannot be avoided.** Which monitor a session got is
+///   known only once the handshake has finished, so a new source is already
+///   open — and already prompted — before it can be recognised as a duplicate.
+///   Only the pipeline behind it could be collapsed.
+/// - **A stale position can share the wrong display.** `position()` is read
+///   once, at open. Rearranging monitors afterwards can put a different one
+///   where a live capture's key says it is, and the next item to open there
+///   would silently be handed the wrong screen.
+///
+/// Windows had no such choice: `DuplicateOutput` refuses the same output
+/// twice, so the second item was a black rectangle until it shared. Here both
+/// captures work, and the trade is a few percent of one core against a
+/// correctness hazard, in a configuration that is rare to begin with.
 pub(in crate::engine) struct RunningSource(Arc<Pipeline>);
 
 impl RunningSource {
