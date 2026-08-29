@@ -235,13 +235,7 @@ impl Backend {
         self.surface.set_visible(visible);
     }
 
-    pub(in crate::engine) fn pause(&self) {
-        self.preview.pause();
-    }
 
-    pub(in crate::engine) fn resume(&self) {
-        self.preview.resume();
-    }
 
     pub(in crate::engine) fn stop(&self) {
         self.preview.stop();

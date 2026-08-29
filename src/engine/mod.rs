@@ -338,11 +338,6 @@ fn run(
         .encoders
         .store(Some(Arc::new(backend.available_encoders().to_vec())));
 
-    // Nothing has been composited yet, and an empty Scene never will be, so
-    // the Preview branch starts asleep and is woken by the first Source.
-    backend.pause();
-    let mut compositing = false;
-
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
     // `recording_settings` is owned by this loop rather than shared: only
@@ -375,28 +370,6 @@ fn run(
                 }
                 if !reconciled {
                     continue;
-                }
-
-                // A Scene with no running Source composites the background
-                // colour, forever, at the full frame rate — a download and two
-                // uploads per frame to redraw a picture that never changes.
-                // Switching to such a Scene should cost nothing.
-                let wanted = open
-                    .values()
-                    .any(|state| matches!(state, SourceState::Open(source) if source.showing));
-                if wanted != compositing {
-                    if wanted {
-                        backend.resume();
-                    } else {
-                        backend.pause();
-                        // The texture still holds the Scene that was showing a
-                        // moment ago, and leaving it up would attribute another
-                        // Scene's picture to this one.
-                        published.frame.store(None);
-                        published.active_fps.store(0, Ordering::Relaxed);
-                        wake_ui();
-                    }
-                    compositing = wanted;
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
