@@ -56,7 +56,12 @@ pub struct AudioSource {
 /// from disagreeing about where that is.
 pub const MIN_GAIN_DB: f32 = -60.0;
 
-/// The loudest a fader goes. Boosting is allowed, because a quiet microphone
-/// is more common than a loud one, but not so far that clipping is the
-/// default outcome.
-pub const MAX_GAIN_DB: f32 = 20.0;
+/// The loudest a fader goes: unity, where the source is passed through
+/// untouched.
+///
+/// Not a boost range, so that the fader and the level meter beside it share
+/// one scale — a fader whose top was +20 would line up with the meter's 0 and
+/// mean something else there. Amplifying a quiet microphone past unity is a
+/// real want, and it arrives with the control that can show what it is doing
+/// rather than by stretching this one.
+pub const MAX_GAIN_DB: f32 = 0.0;

@@ -2,6 +2,18 @@
 //!
 //! Lists what the project holds rather than what the selected Scene does:
 //! audio is global here, so this dock does not change when Scenes do.
+//!
+//! # Why the channels stand up
+//!
+//! A fader is read against a scale, and a level is read against a scale. Both
+//! run from silence to unity here, so standing them side by side puts them on
+//! one axis with one set of numbers between them — which is how every mixer is
+//! built, and why a horizontal row ends up with a meter that has no scale
+//! beside it at all. See [`crate::domain::MAX_GAIN_DB`] for why the fader
+//! stops where the meter does.
+//!
+//! It also costs a fixed width per source rather than a fixed height, so a
+//! dock with room shows more sources instead of more padding.
 
 use eframe::egui;
 
@@ -12,10 +24,28 @@ use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
 use super::super::UiAction;
 
-/// The meter's own height. Thin, because it is read as a level rather than
-/// looked at — the fader below it is what the pointer wants.
-const METER_HEIGHT: f32 = 8.0;
-const ROW_SPACING: f32 = 10.0;
+/// One source's column: a fader, a meter, and the scale between them, and no
+/// wider. The dock shows as many as it has room for and scrolls past the rest.
+const SOURCE_WIDTH: f32 = 88.0;
+const METER_WIDTH: f32 = 9.0;
+/// Room for "-60", the longest label on the scale.
+const SCALE_WIDTH: f32 = 22.0;
+/// What a column spends on everything that is not the channel: the name, the
+/// readout, the mute button, and the gaps between them.
+const FIXED_ROW_HEIGHT: f32 = 76.0;
+/// The shortest a channel may be squeezed to. Below this the scale's labels
+/// collide and the fader stops being worth dragging.
+const MIN_CHANNEL_HEIGHT: f32 = 96.0;
+const MUTE_HEIGHT: f32 = 22.0;
+
+/// Every label on the scale, in decibels. Every 12 rather than the 6 a large
+/// mixer uses: this dock is drawn at whatever height it is given, and half as
+/// many marks stay legible when that is not much.
+const SCALE_MARKS: [f32; 6] = [0.0, -12.0, -24.0, -36.0, -48.0, -60.0];
+
+/// Where the meter stops being green, and where it starts warning of a clip.
+const WARN_DB: f32 = -20.0;
+const CLIP_DB: f32 = -9.0;
 
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
@@ -30,70 +60,77 @@ pub(in crate::ui) fn show(
         return;
     }
 
-    egui::ScrollArea::vertical()
-        .id_salt("audio_mixer_list")
+    // Whatever is left after the labels above and the button below, so a
+    // taller dock is a taller meter rather than a taller gap.
+    let channel_height = (ui.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
+
+    egui::ScrollArea::horizontal()
+        .id_salt("audio_mixer_channels")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (index, source) in snapshot.items.iter().enumerate() {
-                if index > 0 {
-                    ui.add_space(ROW_SPACING);
+            ui.horizontal_top(|ui| {
+                for source in &snapshot.items {
+                    // Scoped per source: every column holds the same widgets,
+                    // so without this they would collide on ids derived from
+                    // their position alone.
+                    ui.push_id(source.id.0, |ui| {
+                        show_channel(ui, source, channel_height, i18n, actions);
+                    });
                 }
-                // Scoped per source rather than per widget: every row holds
-                // the same three controls, so without this they would collide
-                // on ids derived from their position alone.
-                ui.push_id(source.id.0, |ui| show_source(ui, source, i18n, actions));
-            }
+            });
         });
 }
 
-fn show_source(
+fn show_channel(
     ui: &mut egui::Ui,
     source: &AudioSourceSnapshot,
+    channel_height: f32,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    ui.horizontal(|ui| {
-        // What this row is listening to, on the name's own line rather than
-        // under it: four docks share this column, and a line per source is
-        // one the mixer cannot spare. "Default" is not nothing — it says the
-        // row follows whatever the system calls its default rather than
-        // being pointed at one device.
-        let kind = i18n.text(match source.kind {
-            AudioSourceKind::Output => TextKey::AudioKindOutput,
-            AudioSourceKind::Input => TextKey::AudioKindInput,
-        });
-        let device = source
-            .device
-            .as_deref()
-            .map(str::to_owned)
-            .unwrap_or_else(|| i18n.text(TextKey::AudioDeviceDefault).into_owned());
-        ui.strong(&source.name)
-            .on_hover_text(format!("{kind} · {device}"));
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let label = if source.muted {
-                TextKey::AudioUnmute
-            } else {
-                TextKey::AudioMute
-            };
-            if ui.button(i18n.text(label)).clicked() {
-                actions.push(audio_action(AudioCommand::SetMuted(
-                    source.id,
-                    !source.muted,
-                )));
-            }
+    let size = egui::vec2(SOURCE_WIDTH, channel_height + FIXED_ROW_HEIGHT);
+    ui.allocate_ui(size, |ui| {
+        ui.vertical(|ui| {
+            ui.set_width(SOURCE_WIDTH);
+            show_name(ui, source, i18n);
             ui.monospace(format_gain(source.gain_db));
+            ui.horizontal(|ui| {
+                show_fader(ui, source, actions);
+                show_meter(ui, source, channel_height);
+                show_scale(ui, channel_height);
+            });
+            show_mute(ui, source, i18n, actions);
         });
     });
+}
 
-    show_meter(ui, source);
+/// The name, with what the column is listening to on its hover: a column this
+/// narrow cannot spell out a device, and the name is what the pointer is
+/// already over.
+fn show_name(ui: &mut egui::Ui, source: &AudioSourceSnapshot, i18n: &LocalizationManager) {
+    let kind = i18n.text(match source.kind {
+        AudioSourceKind::Output => TextKey::AudioKindOutput,
+        AudioSourceKind::Input => TextKey::AudioKindInput,
+    });
+    let device = source
+        .device
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| i18n.text(TextKey::AudioDeviceDefault).into_owned());
+    ui.add(egui::Label::new(egui::RichText::new(&source.name).strong()).truncate())
+        .on_hover_text(format!("{kind} · {device}"));
+}
 
-    // The fader stays live while muted rather than greying out: muting is not
-    // meant to lose the level somebody set, and a fader that cannot be moved
-    // until unmuted makes setting it a two-step job.
+/// The fader stays live while muted rather than greying out: muting is not
+/// meant to lose the level somebody set, and a fader that cannot be moved
+/// until unmuted makes setting it a two-step job.
+fn show_fader(ui: &mut egui::Ui, source: &AudioSourceSnapshot, actions: &mut Vec<UiAction>) {
     let mut gain_db = source.gain_db;
-    let fader =
-        ui.add(egui::Slider::new(&mut gain_db, MIN_GAIN_DB..=MAX_GAIN_DB).show_value(false));
+    let fader = ui.add(
+        egui::Slider::new(&mut gain_db, MIN_GAIN_DB..=MAX_GAIN_DB)
+            .vertical()
+            .show_value(false),
+    );
     // On release, not on every pixel of the drag: a gesture is one edit, the
     // same rule the Preview's own drag follows.
     if fader.drag_stopped() || (fader.changed() && !fader.dragged()) {
@@ -101,23 +138,20 @@ fn show_source(
     }
 }
 
-/// The level bar.
+/// The level channel.
 ///
-/// Drawn even with nothing behind it, at the width and height it will keep:
-/// what arrives later is a number, not a layout. An unmeasured source shows
-/// the empty channel rather than a full one, which is also what silence looks
-/// like — the two are indistinguishable here, and saying so is
-/// [`AudioSourceSnapshot::peak_db`]'s job rather than this one's.
-fn show_meter(ui: &mut egui::Ui, source: &AudioSourceSnapshot) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), METER_HEIGHT),
-        egui::Sense::hover(),
-    );
+/// Drawn at the size it will keep even with nothing behind it: what arrives
+/// later is a number, not a layout. An unmeasured source shows the empty
+/// channel, which is also what silence looks like — the two are
+/// indistinguishable here, and saying so is [`AudioSourceSnapshot::peak_db`]'s
+/// job rather than this one's.
+fn show_meter(ui: &mut egui::Ui, source: &AudioSourceSnapshot, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(METER_WIDTH, height), egui::Sense::hover());
     let painter = ui.painter();
-    let rounding = egui::CornerRadius::same(2);
+    let rounding = egui::CornerRadius::same(1);
     painter.rect_filled(rect, rounding, ui.visuals().extreme_bg_color);
     // Outlined, or an empty channel is the same tone as the dock behind it
-    // and reads as a divider rather than as a meter with nothing in it.
+    // and reads as a gap rather than as a meter with nothing in it.
     painter.rect_stroke(
         rect,
         rounding,
@@ -125,27 +159,82 @@ fn show_meter(ui: &mut egui::Ui, source: &AudioSourceSnapshot) {
         egui::StrokeKind::Inside,
     );
 
-    let filled = match source.peak_db {
-        // Muted is silence whatever the source is doing, so the meter says so
-        // rather than showing a level that is not reaching anything.
-        Some(_) if source.muted => 0.0,
-        Some(peak_db) => ((peak_db - MIN_GAIN_DB) / -MIN_GAIN_DB).clamp(0.0, 1.0),
-        None => 0.0,
+    // Muted is silence whatever the source is doing, so the channel says so
+    // rather than showing a level that is not reaching anything.
+    let Some(peak_db) = source.peak_db.filter(|_| !source.muted) else {
+        return;
     };
-    if filled > 0.0 {
-        let mut bar = rect;
-        bar.set_width(rect.width() * filled);
-        painter.rect_filled(bar, rounding, ui.visuals().selection.bg_fill);
+    let reached = rect.bottom() - rect.height() * fraction_of_scale(peak_db);
+    for (from_db, to_db, color) in [
+        (MIN_GAIN_DB, WARN_DB, egui::Color32::from_rgb(60, 180, 75)),
+        (WARN_DB, CLIP_DB, egui::Color32::from_rgb(220, 190, 60)),
+        (CLIP_DB, 0.0, egui::Color32::from_rgb(215, 70, 60)),
+    ] {
+        let band_bottom = rect.bottom() - rect.height() * fraction_of_scale(from_db);
+        let band_top = rect.bottom() - rect.height() * fraction_of_scale(to_db);
+        // Only as far up as the level actually reached.
+        let top = band_top.max(reached);
+        if top < band_bottom {
+            let band = egui::Rect::from_x_y_ranges(rect.x_range(), top..=band_bottom);
+            painter.rect_filled(band, 0.0, color);
+        }
     }
 }
 
-/// Signed, so that boosting is visibly different from cutting at a glance,
-/// and fixed-width so the row does not reflow as the fader moves.
+/// The numbers beside the channel, which are what make it and the fader
+/// readable as levels rather than as proportions.
+fn show_scale(ui: &mut egui::Ui, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(SCALE_WIDTH, height), egui::Sense::hover());
+    let painter = ui.painter();
+    let font = egui::FontId::proportional(9.0);
+    let color = ui.visuals().weak_text_color();
+    for mark in SCALE_MARKS {
+        let y = rect.bottom() - rect.height() * fraction_of_scale(mark);
+        // Clamped inward so the end labels stay inside the channel they
+        // belong to rather than overhanging it.
+        let y = y.clamp(rect.top() + 5.0, rect.bottom() - 5.0);
+        painter.text(
+            egui::pos2(rect.left() + 2.0, y),
+            egui::Align2::LEFT_CENTER,
+            format!("{mark:.0}"),
+            font.clone(),
+            color,
+        );
+    }
+}
+
+fn show_mute(
+    ui: &mut egui::Ui,
+    source: &AudioSourceSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let label = if source.muted {
+        TextKey::AudioUnmute
+    } else {
+        TextKey::AudioMute
+    };
+    let button = egui::Button::new(i18n.text(label)).selected(source.muted);
+    if ui.add_sized([SOURCE_WIDTH, MUTE_HEIGHT], button).clicked() {
+        actions.push(audio_action(AudioCommand::SetMuted(
+            source.id,
+            !source.muted,
+        )));
+    }
+}
+
+/// Where a decibel value sits on the channel: `0.0` at the bottom, `1.0` at
+/// the top. Linear in decibels, which is what the scale's evenly spaced marks
+/// promise.
+fn fraction_of_scale(db: f32) -> f32 {
+    ((db - MIN_GAIN_DB) / -MIN_GAIN_DB).clamp(0.0, 1.0)
+}
+
 fn format_gain(gain_db: f32) -> String {
     if gain_db <= MIN_GAIN_DB {
-        return format!("{:>7}", "-∞ dB");
+        return "-inf dB".to_owned();
     }
-    format!("{gain_db:>+5.1} dB")
+    format!("{gain_db:.1} dB")
 }
 
 fn audio_action(command: AudioCommand) -> UiAction {
@@ -158,8 +247,22 @@ mod tests {
 
     #[test]
     fn the_quietest_the_fader_goes_reads_as_silence() {
-        assert_eq!(format_gain(MIN_GAIN_DB).trim(), "-∞ dB");
-        assert_eq!(format_gain(0.0).trim(), "+0.0 dB");
-        assert_eq!(format_gain(-12.5).trim(), "-12.5 dB");
+        assert_eq!(format_gain(MIN_GAIN_DB), "-inf dB");
+        assert_eq!(format_gain(0.0), "0.0 dB");
+        assert_eq!(format_gain(-12.5), "-12.5 dB");
+    }
+
+    /// The scale's marks and the meter's fill have to agree about where a
+    /// decibel value is, or a level would be read against numbers it does not
+    /// line up with.
+    #[test]
+    fn the_scale_runs_from_silence_at_the_bottom_to_full_at_the_top() {
+        assert_eq!(fraction_of_scale(MIN_GAIN_DB), 0.0);
+        assert_eq!(fraction_of_scale(0.0), 1.0);
+        assert_eq!(fraction_of_scale(-30.0), 0.5);
+        // Boosting does not go past full scale: the channel is what a level is
+        // measured against, and nothing is louder than the top of it.
+        assert_eq!(fraction_of_scale(MAX_GAIN_DB), 1.0);
+        assert_eq!(fraction_of_scale(-100.0), 0.0);
     }
 }

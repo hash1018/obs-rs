@@ -77,10 +77,10 @@ impl DockPanel {
     pub(super) fn min_size(self) -> egui::Vec2 {
         match self {
             Self::Scenes | Self::Sources => egui::vec2(180.0, 120.0),
-            // Two sources' rows — name, meter and fader each — plus the title
-            // bar, so the two a project opens with are both reachable without
-            // dragging a splitter first.
-            Self::AudioMixer => egui::vec2(180.0, 150.0),
+            // A channel plus the name, readout and mute button around it. The
+            // channels stand up, so this dock is the one that wants height:
+            // what it is given past this becomes meter rather than padding.
+            Self::AudioMixer => egui::vec2(200.0, 190.0),
             // Its buttons plus the title bar above them, rather than the
             // list panels' figure: this dock has a height it is complete at,
             // and a splitter should not be able to clip a button in half.
