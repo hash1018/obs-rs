@@ -265,8 +265,15 @@ fn show_fader(
             .vertical()
             .show_value(false),
     );
-    // On release, not on every pixel of the drag: a gesture is one edit, the
-    // same rule the Preview's own drag follows.
+    // Two destinations, because they answer different questions. What is
+    // heard follows the pointer, so every frame of the drag goes to the audio
+    // graph; the project hears one edit, when the gesture ends. The same
+    // split the Preview's own drag makes between the compositor and the
+    // project — a fader is a thing somebody moves while listening to it, and
+    // a level that only arrived on release would make it guesswork.
+    if fader.dragged() && fader.changed() {
+        actions.push(UiAction::DragAudioGain(source.id, gain_db));
+    }
     if fader.drag_stopped() || (fader.changed() && !fader.dragged()) {
         actions.push(audio_action(AudioCommand::SetGainDb(source.id, gain_db)));
     }

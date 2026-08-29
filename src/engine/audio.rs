@@ -180,6 +180,17 @@ impl AudioEngine {
     /// source. Called again on every endpoint change too, which is what
     /// opens a source whose device has just arrived — and closes one whose
     /// device has just left.
+    /// Sets one open source's gain, for a fader being dragged.
+    ///
+    /// Nothing to do for a source with no capture behind it: there is no
+    /// handle to set, and the next `apply` carries the value once the project
+    /// has it.
+    pub(super) fn set_gain_db(&mut self, id: AudioSourceId, gain_db: f32) {
+        if let Some(open) = self.sources.get(&id) {
+            let _ = open.volume.set_gain_db(gain_db);
+        }
+    }
+
     pub(super) fn apply(&mut self, snapshot: &AudioSnapshot, devices: &[AudioDeviceTarget]) {
         if self.mixer.is_none() {
             return;
@@ -482,6 +493,13 @@ fn pick<T>(
 enum AudioCommand {
     /// What the project now holds.
     Project(Box<AudioSnapshot>),
+    /// One source's gain, mid-gesture.
+    ///
+    /// Separate from `Project` because a fader being dragged is not an edit
+    /// yet: the project hears about it once, when the gesture ends, and this
+    /// is what the audio hears in the meantime. Same split the Preview's own
+    /// drag makes between the compositor and the project.
+    Gain(AudioSourceId, f32),
     /// An endpoint appeared, went, or became the default. Says to look
     /// again, not what changed — see [`crate::capture::watch_audio_devices`].
     DevicesChanged,
@@ -550,10 +568,22 @@ impl AudioManager {
                     // dragged sends a snapshot per frame; both collapse to
                     // the one state they all describe.
                     let mut devices_changed = false;
+                    let mut project_changed = false;
                     let mut ending = false;
+                    let mut gains: Vec<(AudioSourceId, f32)> = Vec::new();
                     for command in std::iter::once(first).chain(command_rx.try_iter()) {
                         match command {
-                            AudioCommand::Project(snapshot) => project = Some(*snapshot),
+                            AudioCommand::Project(snapshot) => {
+                                project = Some(*snapshot);
+                                project_changed = true;
+                            }
+                            AudioCommand::Gain(id, gain_db) => {
+                                // Last one wins per source: a drag sends one
+                                // per frame and only the newest is where the
+                                // fader is now.
+                                gains.retain(|(other, _)| *other != id);
+                                gains.push((id, gain_db));
+                            }
                             AudioCommand::DevicesChanged => devices_changed = true,
                             AudioCommand::Shutdown => ending = true,
                         }
@@ -565,8 +595,22 @@ impl AudioManager {
                         known_devices = crate::capture::audio_devices();
                         published_devices.store(Some(Arc::new(known_devices.clone())));
                     }
-                    if let Some(project) = &project {
+                    // Only when something it reads has moved. A fader being
+                    // dragged wakes this loop sixty times a second, and
+                    // reconciling the whole graph against a project that has
+                    // not changed is the work `AudioCommand::Gain` exists to
+                    // avoid — it would also re-apply the stored gain over the
+                    // one being dragged, every frame.
+                    if (project_changed || devices_changed)
+                        && let Some(project) = &project
+                    {
                         engine.apply(project, &known_devices);
+                    }
+                    // After any apply, not before: a project that arrived in
+                    // the same batch carries the gain from before the drag,
+                    // and applying it second would undo every frame of one.
+                    for (id, gain_db) in gains {
+                        engine.set_gain_db(id, gain_db);
                     }
                     // Cloned, not taken: an apply that changed nothing must
                     // leave the engine holding the counters it is still
@@ -582,6 +626,21 @@ impl AudioManager {
             devices,
             worker: Some(worker),
         })
+    }
+
+    /// Sets one source's gain now, without waiting for the project.
+    ///
+    /// For a fader being dragged. What is heard follows the handle, and the
+    /// project is told when the gesture ends — so the level moves under the
+    /// pointer while the database still records one edit per drag.
+    ///
+    /// Dropped if the source is not open. A gain arriving for something with
+    /// no capture behind it has nothing to set, and the next `apply` carries
+    /// the value anyway.
+    pub fn set_gain_db(&self, id: AudioSourceId, gain_db: f32) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(AudioCommand::Gain(id, gain_db));
+        }
     }
 
     /// Tells the audio graph what the project now holds.

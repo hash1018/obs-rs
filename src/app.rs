@@ -427,6 +427,30 @@ impl ObsApp {
                 #[cfg(not(target_os = "linux"))]
                 let _ = scene_id;
             }
+            UiAction::DragAudioGain(id, gain_db) => {
+                if let Some(audio) = &self.audio {
+                    audio.set_gain_db(id, gain_db);
+                }
+                // And into the snapshot, which is what the dock's readout
+                // reads. Nothing else will put it there mid-gesture: the
+                // project is not told until the fader is let go, so a readout
+                // waiting for that would sit at the old number while the
+                // level under it moved.
+                //
+                // Safe to write over: `poll_project` replaces this only when
+                // the project actually changes, which during a drag it does
+                // not — and the edit that lands on release carries this same
+                // value.
+                if let Some(source) = self
+                    .snapshots
+                    .audio
+                    .items
+                    .iter_mut()
+                    .find(|source| source.id == id)
+                {
+                    source.gain_db = gain_db;
+                }
+            }
             UiAction::DragSceneItem(item_id, transform) => {
                 if let Some(engine) = &self.engine {
                     engine.set_dragging_transform(item_id, transform);

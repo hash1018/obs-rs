@@ -1,6 +1,6 @@
 use crate::i18n::Locale;
 use crate::{
-    domain::{SceneId, SceneItemId, Transform},
+    domain::{AudioSourceId, SceneId, SceneItemId, Transform},
     project::ProjectCommand,
 };
 
@@ -13,6 +13,11 @@ pub enum UiAction {
     /// compositor and not to the project: a drag is one edit, recorded when it
     /// ends, but the picture has to follow the pointer meanwhile.
     DragSceneItem(SceneItemId, Transform),
+    /// One source's gain while the fader is still held. Goes to the audio
+    /// graph and not to the project, for the same reason `DragSceneItem`
+    /// does: what is heard has to follow the pointer, and the edit is
+    /// recorded once when the gesture ends.
+    DragAudioGain(AudioSourceId, f32),
     SetFullscreen(bool),
     SetTheme(crate::settings::Theme),
     SetLocale(Locale),
