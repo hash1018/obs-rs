@@ -8,6 +8,9 @@ use super::settings::SettingsDialogState;
 #[derive(Default)]
 pub struct UiState {
     pub(super) about_open: bool,
+    /// Whether the "a recording is running" question is up — see
+    /// `shell::confirm_exit`.
+    pub(super) exit_confirm_open: bool,
     pub(super) dock_layout: DockLayout,
     pub(super) fullscreen: bool,
     pub(super) scenes: ScenesPanelState,
@@ -18,6 +21,11 @@ pub struct UiState {
 }
 
 impl UiState {
+    /// Asks whether to quit while a recording is running.
+    pub fn confirm_exit(&mut self) {
+        self.exit_confirm_open = true;
+    }
+
     /// Opens the Settings dialog on a copy of what is currently set.
     ///
     /// The draft is seeded by the caller's settings rather than read from

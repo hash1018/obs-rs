@@ -88,3 +88,8 @@ settings-recording-while-running = 진행 중인 녹화가 아니라 다음 녹�
 action-apply = 적용
 action-browse = 찾아보기…
 action-ok = 확인
+
+exit-while-recording-title = 녹화 진행 중
+exit-while-recording-body = 녹화가 아직 진행 중입니다. 종료하면 녹화를 끝내고 파일을 닫습니다.
+exit-stop-and-quit = 녹화 종료하고 끝내기
+exit-keep-recording = 녹화 계속하기

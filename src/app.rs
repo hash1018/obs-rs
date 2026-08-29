@@ -26,6 +26,9 @@ pub struct ObsApp {
     settings: AppSettings,
     settings_store: SettingsStore,
     ui_actions: Vec<UiAction>,
+    /// Set once the user has answered the closing question, so the close it
+    /// sends is let through.
+    exiting: bool,
     /// What the engine was last told about whether anyone can see the
     /// Preview — see [`ObsApp::poll_engine`].
     preview_visible: bool,
@@ -113,6 +116,7 @@ impl ObsApp {
             settings,
             settings_store,
             ui_actions: Vec::new(),
+            exiting: false,
             // What the engine starts believing, so the first pass says
             // something only if the window came up minimised.
             preview_visible: true,
@@ -206,6 +210,29 @@ impl ObsApp {
         ctx.request_repaint();
     }
 
+    /// Holds the window open when closing it would end a recording the user
+    /// may not have realised was running.
+    ///
+    /// Only a question, not a rule: the answer is always available and the
+    /// second attempt goes straight through. `close_requested` is asked every
+    /// pass because it is how egui reports the window's own close button, the
+    /// window manager's, and `UiAction::Exit` alike — intercepting one of
+    /// those and not the others would leave a way out that skipped the
+    /// question.
+    fn intercept_close(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.viewport().close_requested()) {
+            return;
+        }
+        // Paused counts: the file is open either way, and someone who paused
+        // to deal with something else is exactly who would forget.
+        let recording = self.snapshots.status.recording_elapsed.is_some();
+        if !recording || self.exiting {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        self.ui_state.confirm_exit();
+    }
+
     fn poll_resource_usage(&mut self) {
         let Some(manager) = &self.resources else {
             return;
@@ -239,6 +266,19 @@ impl ObsApp {
     fn handle_ui_action(&mut self, ctx: &egui::Context, action: UiAction) {
         match action {
             UiAction::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            UiAction::StopRecordingAndExit => {
+                if let Some(engine) = &self.engine {
+                    // Through the ordinary stop, so the muxer sees an `Eos`
+                    // and the encoder flushes what it was holding. Tearing the
+                    // pipeline down would finalize the file too — on
+                    // `ControlMsg::Stop`, which abandons rather than drains,
+                    // and the last frames go with it.
+                    engine.stop_recording();
+                }
+                // So the close this sends is not intercepted again.
+                self.exiting = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             UiAction::Project(command) => {
                 if let Some(manager) = &self.project_manager {
                     manager.dispatch(command);
@@ -303,6 +343,7 @@ impl ObsApp {
 
 impl eframe::App for ObsApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.intercept_close(ctx);
         self.poll_project();
         self.poll_engine(ctx);
         self.poll_resource_usage();

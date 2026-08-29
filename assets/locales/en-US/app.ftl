@@ -88,3 +88,8 @@ settings-recording-while-running = Applies to the next recording, not the one ru
 action-apply = Apply
 action-browse = Browse…
 action-ok = OK
+
+exit-while-recording-title = Recording in progress
+exit-while-recording-body = A recording is still running. Quitting will end it and close its file.
+exit-stop-and-quit = Stop Recording and Quit
+exit-keep-recording = Keep Recording

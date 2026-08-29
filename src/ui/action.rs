@@ -24,6 +24,9 @@ pub enum UiAction {
     SetRecordingPaused(bool),
     /// Finish the running recording and close its file.
     StopRecording,
+    /// End the recording properly and then quit — what the closing question
+    /// asks about.
+    StopRecordingAndExit,
     /// Show the Settings dialog, seeded from what is currently set.
     OpenSettings,
     /// Commit the dialog's draft: persist it, and hand the engine the part it
