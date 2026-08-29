@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 
+use time::OffsetDateTime;
+
 /// The directory name both trees hang under.
 const APPLICATION: &str = "obs-rs";
 
@@ -19,6 +21,33 @@ pub fn config_dir() -> PathBuf {
 pub fn data_dir() -> PathBuf {
     base(Kind::Data).join(APPLICATION)
 }
+
+/// Where recordings are written.
+///
+/// Not under [`data_dir`]: a recording is the user's own video, something
+/// they will look for in a file manager and hand to somebody else, not
+/// application state kept in a directory the platform hides. So it goes
+/// beside their other videos, in a folder named for this application.
+pub fn recordings_dir() -> PathBuf {
+    videos_dir().join(APPLICATION)
+}
+
+/// One recording's full path, named for the moment it started.
+///
+/// `started` is a parameter rather than read in here so the naming can be
+/// asserted against a fixed instant instead of whatever the clock says
+/// during a test.
+pub fn recording_file(started: OffsetDateTime) -> PathBuf {
+    let stamp = started
+        .format(STAMP)
+        .unwrap_or_else(|_| String::from("unknown"));
+    recordings_dir().join(format!("{APPLICATION}-{stamp}.mp4"))
+}
+
+/// Sortable, and legal on every filesystem this runs on — which rules out
+/// the colons of an ISO time.
+const STAMP: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[year]-[month]-[day]-[hour][minute][second]");
 
 enum Kind {
     Config,
@@ -59,6 +88,37 @@ fn base(kind: Kind) -> PathBuf {
         .unwrap_or_else(fallback)
 }
 
+/// The user's own videos folder — the parent of [`recordings_dir`].
+///
+/// Read from the environment like everything else here, rather than through
+/// each platform's known-folder API. That is less exact — a user who moved
+/// their Videos folder is not followed on Windows, and `XDG_VIDEOS_DIR` is
+/// normally set in a config file rather than exported — but it keeps this
+/// module what it is, and the cost of being wrong is a folder in a
+/// predictable place instead of the user's preferred one.
+#[cfg(target_os = "windows")]
+fn videos_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(fallback)
+        .join("Videos")
+}
+
+#[cfg(target_os = "macos")]
+fn videos_dir() -> PathBuf {
+    home()
+        .map(|home| home.join("Movies"))
+        .unwrap_or_else(fallback)
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn videos_dir() -> PathBuf {
+    std::env::var_os("XDG_VIDEOS_DIR")
+        .map(PathBuf::from)
+        .or_else(|| home().map(|home| home.join("Videos")))
+        .unwrap_or_else(fallback)
+}
+
 #[cfg(not(target_os = "windows"))]
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
@@ -81,5 +141,22 @@ mod tests {
     fn both_directories_are_named_for_the_application() {
         assert_eq!(config_dir().file_name().unwrap(), APPLICATION);
         assert_eq!(data_dir().file_name().unwrap(), APPLICATION);
+    }
+
+    /// Sortable, and with nothing in it a filesystem will refuse — which is
+    /// what rules out the colons an ISO time would put in the hour.
+    #[test]
+    fn a_recording_is_named_for_when_it_started() {
+        let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
+
+        let file = recording_file(started);
+
+        assert_eq!(
+            file.file_name().unwrap(),
+            "obs-rs-2026-08-29-143005.mp4",
+            "a recording's name must say when it started, in a form a \
+             filesystem accepts and a listing sorts"
+        );
+        assert_eq!(file.parent().unwrap(), recordings_dir());
     }
 }

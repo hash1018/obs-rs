@@ -27,6 +27,10 @@ arc-swap = "1"
 fluent-bundle = "0.16.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+# Names a recording for the moment it started, in the user's own time zone.
+# The same crate `media-pp` stamps its log records with, so this is a
+# Cargo.toml line rather than a second date implementation in the tree.
+time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 toml = "0.9"
 unic-langid = "0.9.6"
 

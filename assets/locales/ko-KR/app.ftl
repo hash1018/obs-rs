@@ -18,6 +18,7 @@ dock-scenes = 장면
 dock-sources = 소스
 dock-controls = 제어
 control-start-recording = 녹화 시작
+control-stop-recording = 녹화 중지
 control-settings = 설정
 control-unavailable = 아직 연결되지 않았습니다
 status-ready = 준비

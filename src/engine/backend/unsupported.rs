@@ -63,4 +63,19 @@ impl Backend {
     }
 
     pub(in crate::engine) fn remove_source(&self, _name: &str) {}
+
+    /// Unreachable in practice — `start` refuses, so no `Backend` exists on
+    /// this platform to ask. Present because the engine above is written
+    /// against one backend interface, not three.
+    pub(in crate::engine) fn start_recording(
+        &self,
+        _path: &std::path::Path,
+        _fps: u32,
+    ) -> Result<(), BackendError> {
+        Err("no compositor backend is written for this platform yet".into())
+    }
+
+    pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
+        Err("no compositor backend is written for this platform yet".into())
+    }
 }

@@ -18,6 +18,7 @@ dock-scenes = Scenes
 dock-sources = Sources
 dock-controls = Controls
 control-start-recording = Start Recording
+control-stop-recording = Stop Recording
 control-settings = Settings
 control-unavailable = Not wired up yet
 status-ready = Ready

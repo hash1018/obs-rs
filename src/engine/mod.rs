@@ -27,12 +27,13 @@ use arc_swap::ArcSwapOption;
 use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::elements::{VideoFit, VideoLayer, VideoRect};
+use time::OffsetDateTime;
 
 use crate::domain::{SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
-use backend::{Backend, OpenSource};
+use backend::{Backend, BackendError, OpenSource};
 
 /// The compositor's output rate. Independent of the egui repaint rate: egui
 /// redraws when something asks it to, this advances on the compositor's own
@@ -69,18 +70,31 @@ enum EngineCommand {
     /// Whether anyone is looking at the Preview — a minimised window is
     /// nobody, and the frame then has nowhere worth going.
     PreviewVisible(bool),
+    /// Start writing the composited frames to a file. Carries no path: where
+    /// a recording goes is settled here, not by whoever pressed the button.
+    StartRecording,
+    /// Finish the running recording, closing its file.
+    StopRecording,
 }
 
-/// The two slots the engine writes and the UI reads, which travel together.
+/// The slots the engine writes and the UI reads, which travel together.
 struct Published {
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     active_fps: Arc<AtomicU32>,
+    /// When the running recording started, or `None` when none is.
+    ///
+    /// The engine publishes the instant rather than an elapsed time so the
+    /// clock in the status bar advances between engine ticks — and it is
+    /// written only once a recording has actually started, so a start that
+    /// failed leaves the UI showing what is true.
+    recording_since: Arc<ArcSwapOption<Instant>>,
 }
 
 pub struct EngineManager {
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     /// `f32` bits, so the UI can read the rate without a lock.
     active_fps: Arc<AtomicU32>,
+    recording_since: Arc<ArcSwapOption<Instant>>,
     commands: Sender<EngineCommand>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -96,15 +110,21 @@ impl EngineManager {
         let size = [canvas.width as u32, canvas.height as u32];
         let frame = Arc::new(ArcSwapOption::empty());
         let active_fps = Arc::new(AtomicU32::new(0));
+        let recording_since = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let (commands, command_rx) = mpsc::channel();
 
         let worker = thread::Builder::new().name("engine".to_owned()).spawn({
             let frame = Arc::clone(&frame);
             let active_fps = Arc::clone(&active_fps);
+            let recording_since = Arc::clone(&recording_since);
             let stop = Arc::clone(&stop);
             move || {
-                let published = Published { frame, active_fps };
+                let published = Published {
+                    frame,
+                    active_fps,
+                    recording_since,
+                };
                 if let Err(error) = run(
                     render_state,
                     size,
@@ -124,6 +144,7 @@ impl EngineManager {
         Ok(Self {
             frame,
             active_fps,
+            recording_since,
             commands,
             stop,
             worker: Some(worker),
@@ -184,6 +205,29 @@ impl EngineManager {
     pub fn target_fps(&self) -> f32 {
         TARGET_FPS as f32
     }
+
+    /// Starts writing the composited frames to a file.
+    ///
+    /// Asks rather than tells: the engine builds the encoder and the file on
+    /// its own thread, and either can fail. [`EngineManager::recording`] is
+    /// what says whether it worked, and it stays `None` if it did not.
+    pub fn start_recording(&self) {
+        let _ = self.commands.send(EngineCommand::StartRecording);
+    }
+
+    pub fn stop_recording(&self) {
+        let _ = self.commands.send(EngineCommand::StopRecording);
+    }
+
+    /// How long the running recording has been going, or `None` when none is.
+    ///
+    /// Derived from the instant the engine published rather than counted
+    /// here, so the two cannot disagree about whether a recording exists.
+    pub fn recording(&self) -> Option<Duration> {
+        self.recording_since
+            .load_full()
+            .map(|since| since.elapsed())
+    }
 }
 
 impl Drop for EngineManager {
@@ -208,10 +252,9 @@ fn run(
     // Shared rather than moved: both the sink that publishes a frame and the
     // loop that puts the branch to sleep have to ask for a repaint.
     let wake_ui = Arc::new(wake_ui);
-    let Published { frame, active_fps } = published;
     let publish = {
-        let frame = Arc::clone(&frame);
-        let active_fps = Arc::clone(&active_fps);
+        let frame = Arc::clone(&published.frame);
+        let active_fps = Arc::clone(&published.active_fps);
         let wake_ui = Arc::clone(&wake_ui);
         let rate = std::sync::Mutex::new(FrameRate::new());
         move |texture_id| {
@@ -238,13 +281,25 @@ fn run(
     while !stop.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => {
-                let mut reconciled =
-                    apply_command(&backend, project.as_ref(), &mut open, &mut scene, command);
+                let mut reconciled = apply_command(
+                    &backend,
+                    project.as_ref(),
+                    &mut open,
+                    &mut scene,
+                    &published,
+                    command,
+                );
                 // Whatever else is already waiting, so a gesture's newer
                 // positions are not left a poll behind the pointer.
                 while let Ok(next) = commands.try_recv() {
-                    reconciled |=
-                        apply_command(&backend, project.as_ref(), &mut open, &mut scene, next);
+                    reconciled |= apply_command(
+                        &backend,
+                        project.as_ref(),
+                        &mut open,
+                        &mut scene,
+                        &published,
+                        next,
+                    );
                 }
                 if !reconciled {
                     continue;
@@ -265,8 +320,8 @@ fn run(
                         // The texture still holds the Scene that was showing a
                         // moment ago, and leaving it up would attribute another
                         // Scene's picture to this one.
-                        frame.store(None);
-                        active_fps.store(0, Ordering::Relaxed);
+                        published.frame.store(None);
+                        published.active_fps.store(0, Ordering::Relaxed);
                         wake_ui();
                     }
                     compositing = wanted;
@@ -293,6 +348,7 @@ fn apply_command(
     project: Option<&ProjectDispatcher>,
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
+    published: &Published,
     command: EngineCommand,
 ) -> bool {
     match command {
@@ -317,7 +373,44 @@ fn apply_command(
             backend.set_preview_visible(visible);
             false
         }
+        EngineCommand::StartRecording => {
+            // Published only on success, so a Preview that shows a recording
+            // running is showing one that is. A failure is reported and
+            // nothing else changes: the button stays as it was, which is what
+            // the user then sees.
+            match start_recording(backend) {
+                Ok(started) => published.recording_since.store(Some(Arc::new(started))),
+                Err(error) => eprintln!("could not start recording: {error}"),
+            }
+            false
+        }
+        EngineCommand::StopRecording => {
+            // Cleared whatever the backend says: a stop that failed has still
+            // ended this recording as far as anything here can act on it, and
+            // leaving the clock running would say otherwise.
+            published.recording_since.store(None);
+            if let Err(error) = backend.stop_recording() {
+                eprintln!("could not stop recording cleanly: {error}");
+            }
+            false
+        }
     }
+}
+
+/// Opens one recording, returning when it started rather than `()` — the
+/// clock the status bar counts from is the moment the file began taking
+/// frames, not the moment the button was pressed.
+fn start_recording(backend: &Backend) -> Result<Instant, BackendError> {
+    let path = crate::paths::recording_file(
+        // A recording is named for the user's own wall clock. `now_local`
+        // refuses to answer in a process with more than one thread on some
+        // platforms, which this is; UTC is then a worse name rather than no
+        // recording.
+        OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
+    );
+    backend.start_recording(&path, TARGET_FPS)?;
+    println!("recording to {}", path.display());
+    Ok(Instant::now())
 }
 
 enum SourceState {

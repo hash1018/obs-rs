@@ -77,6 +77,41 @@ pub(super) type BackendError = Box<dyn Error + Send + Sync>;
 #[allow(dead_code)]
 pub(super) const BACKGROUND: Color = Color::BLACK;
 
+/// What a recording is encoded at, shared by every backend so that a file
+/// does not come out differently depending on which platform made it. Both
+/// NVENC elements take the same four numbers.
+///
+/// Enough for 1080p screen content at the compositor's rate, where large
+/// still areas cost almost nothing and a scrolling window is the peak.
+#[allow(dead_code)]
+pub(super) const RECORDING_BIT_RATE: usize = 12_000_000;
+
+/// Seconds between keyframes. Two is the usual compromise: a seek lands
+/// within that much of where it aimed, and the cost is one full frame every
+/// two seconds rather than every one.
+#[allow(dead_code)]
+pub(super) const RECORDING_GOP_SECONDS: u32 = 2;
+
+/// Frames the recording branch may fall behind by before the compositor is
+/// made to wait — at 60 fps, about an eighth of a second of slack for an
+/// encoder that hiccups.
+#[allow(dead_code)]
+pub(super) const RECORDING_QUEUE_DEPTH: usize = 8;
+
+/// How long the compositor waits for room in that queue before giving up on
+/// a frame.
+///
+/// Deliberately far longer than any real backpressure: the queue above
+/// absorbs an encoder that is merely behind, so reaching this at all means
+/// one is genuinely stuck. Finite rather than unbounded because an unbounded
+/// wait here would wedge the compositor, and with it the Preview and every
+/// other branch. A timeout arrives on the bus as an error naming this
+/// branch, which is what makes an overloaded encoder visible instead of
+/// silent.
+#[allow(dead_code)]
+pub(super) const RECORDING_SEND_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(500);
+
 /// A Source that is running, and the controls for its layer.
 pub(super) struct OpenSource {
     pub(super) source: RunningSource,

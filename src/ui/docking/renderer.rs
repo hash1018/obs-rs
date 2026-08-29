@@ -253,7 +253,12 @@ fn show_panel(
             );
         }
         DockPanel::Controls => {
-            panels::controls::show(&mut child, content.i18n);
+            panels::controls::show(
+                &mut child,
+                &content.snapshots.status,
+                content.i18n,
+                content.actions,
+            );
         }
     }
 

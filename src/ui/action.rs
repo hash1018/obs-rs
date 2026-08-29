@@ -18,4 +18,9 @@ pub enum UiAction {
     SetFullscreen(bool),
     SetTheme(egui::ThemePreference),
     SetLocale(Locale),
+    /// Begin recording the composited frames. Where the file goes is the
+    /// engine's to decide, so this carries nothing.
+    StartRecording,
+    /// Finish the running recording and close its file.
+    StopRecording,
 }

@@ -4,6 +4,7 @@
 mod capture;
 mod shared;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,9 +14,10 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, ChangeGate, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCompositor,
-        D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle, SubmitError,
-        TeeBuilder, VideoCompositorOptions, VideoLayer,
+        AppSink, ChangeGate, D3d11FrameRenderer, D3d11NvencCodec, D3d11NvencEncoder,
+        D3d11NvencEncoderOptions, D3d11NvencInputFormat, D3d11Renderer, D3d11VideoCompositor,
+        D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle, Mp4Muxer,
+        SubmitError, TeeBuilder, TeeHandle, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -35,7 +37,10 @@ use windows::Win32::Graphics::{
 use crate::domain::{DisplayCaptureTarget, SourceKind, SourceSettings};
 use crate::snapshots::SceneItemSnapshot;
 
-use super::{BACKGROUND, BackendError, OpenSource, flat_bgra, input_name, unsupported_kind};
+use super::{
+    BACKGROUND, BackendError, OpenSource, RECORDING_BIT_RATE, RECORDING_GOP_SECONDS,
+    RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, flat_bgra, input_name, unsupported_kind,
+};
 
 use media_pp::graph::BranchId;
 
@@ -48,8 +53,18 @@ pub(in crate::engine) type Layer = D3d11VideoLayerHandle;
 pub(in crate::engine) struct Backend {
     captures: Arc<CaptureRegistry>,
     device: ID3D11Device,
+    /// The one shared immediate context, kept because the encoder a recording
+    /// builds has to be on it like everything else here.
+    context: Arc<Mutex<ID3D11DeviceContext>>,
+    size: [u32; 2],
     compositor: D3d11VideoCompositorHandle,
     preview: Arc<Pipeline>,
+    /// Where a recording branch is attached — see [`Backend::start_recording`].
+    tee: TeeHandle,
+    /// The recording branch while one is running. `Mutex` rather than an
+    /// atomic because starting one builds a file and an encoder, and two
+    /// concurrent starts must not both get that far.
+    recording: Mutex<Option<BranchId>>,
     /// Reached from the UI through [`Backend::set_preview_visible`] — see
     /// [`PreviewSurface`].
     surface: Arc<PreviewSurface>,
@@ -138,6 +153,10 @@ impl Backend {
             }),
         );
 
+        // Taken back out of the builder below: `Pipeline::new` runs it once,
+        // before returning, and the `Tee` it builds is the only way to attach
+        // a recording later.
+        let mut tee = None;
         let preview = Pipeline::new("preview", compositor, |source, context| {
             // The counting branch is synchronous — it is how the calls stay
             // at the compositor's own rate — so its sink must stay trivial.
@@ -159,19 +178,28 @@ impl Backend {
                     Duration::from_secs_f32(1.0 / preview_fps as f32),
                 ))
                 .to(Box::new(renderer))?;
-            let tee_branch = TeeBuilder::new("preview-tee", context.clone())
+            // `build_dynamic` rather than `build`: the recording branch is
+            // attached and detached while this is already running, and the
+            // handle is the only way back to this `Tee` afterwards.
+            let (tee_branch, tee_handle) = TeeBuilder::new("output-tee", context.clone())
                 .branch(count_branch)
                 .branch(draw_branch)
-                .build()?;
+                .build_dynamic()?;
             context.attach(source, 0, tee_branch)?;
+            tee = Some(tee_handle);
             Ok(())
         })?;
         preview.run()?;
+        let tee = tee.expect("Pipeline::new runs the builder before returning");
         Ok(Self {
             captures: Arc::new(CaptureRegistry::default()),
             device,
+            context: context.clone(),
+            size,
             compositor: handle,
             preview,
+            tee,
+            recording: Mutex::new(None),
             surface,
         })
     }
@@ -191,6 +219,97 @@ impl Backend {
 
     pub(in crate::engine) fn stop(&self) {
         self.preview.stop();
+    }
+
+    /// Attaches an encode-and-mux branch to the compositor's own `Tee`, so a
+    /// recording is made of exactly the frames the Preview is showing.
+    ///
+    /// No colour conversion anywhere: the compositor draws BGRA and NVENC
+    /// takes BGRA directly, converting to its own YUV as part of encoding.
+    ///
+    /// # What the queue's policy has to be
+    ///
+    /// Not the Preview's `DropNewest` — a dropped frame there is one stale
+    /// repaint, here it is a frame missing from the file. Not an unbounded
+    /// wait either: an encoder that stops answering would then wedge the
+    /// compositor, and with it the Preview and every other branch. So it
+    /// blocks, but only for a bounded time, and a timeout arrives on the bus
+    /// as an error naming this branch rather than as silence.
+    pub(in crate::engine) fn start_recording(
+        &self,
+        path: &Path,
+        fps: u32,
+    ) -> Result<(), BackendError> {
+        let mut recording = self.recording.lock().expect("recording state poisoned");
+        if recording.is_some() {
+            return Err("a recording is already running".into());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let [width, height] = self.size;
+        let time_base = ffmpeg::Rational::new(1, fps as i32);
+        let encoder = D3d11NvencEncoder::new(
+            "record-encode",
+            &self.device,
+            Arc::clone(&self.context),
+            D3d11NvencEncoderOptions {
+                codec: D3d11NvencCodec::H264,
+                input_format: D3d11NvencInputFormat::Bgra,
+                width,
+                height,
+                time_base,
+                frame_rate: ffmpeg::Rational::new(fps as i32, 1),
+                bit_rate: RECORDING_BIT_RATE,
+                gop_size: fps * RECORDING_GOP_SECONDS,
+            },
+        )?;
+
+        // The file's tracks are fixed before its header is written, which is
+        // why audio cannot be added to a recording already running — the same
+        // constraint OBS has, and the reason a track list is decided here.
+        let mut muxer = Mp4Muxer::create(path)?;
+        muxer.add_stream("video", encoder.parameters(), time_base)?;
+        let sink = muxer
+            .open()?
+            .pop()
+            .ok_or("the muxer produced no track sink")?;
+
+        let branch = self
+            .tee
+            .branch()
+            .ok_or("the compositor's Tee is gone")?
+            .queue_with_policy(
+                "record-queue",
+                RECORDING_QUEUE_DEPTH,
+                OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
+            )
+            .pipe(encoder)
+            .to(sink)?;
+        *recording = Some(self.tee.attach(branch)?);
+        Ok(())
+    }
+
+    /// Ends the recording and finalizes its file.
+    ///
+    /// `finish_branch` rather than `detach`: an mp4 is unplayable until its
+    /// trailer is written, and that happens when the muxer sees the branch's
+    /// `Eos`. Detaching would drop the branch instead, leaving the file
+    /// exactly as long as it is useless. `finish_branch` detaches too, so the
+    /// branch id is spent either way.
+    ///
+    /// Returns once the `Eos` is on its way, not once the file is closed: the
+    /// encoder flush and the trailer happen on a thread the `Tee` owns, so
+    /// this does not block the engine. The file is complete a moment after
+    /// this returns rather than at the instant it does.
+    pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
+        let mut recording = self.recording.lock().expect("recording state poisoned");
+        let Some(branch) = recording.take() else {
+            return Err("no recording is running".into());
+        };
+        self.tee.finish_branch(branch)?;
+        Ok(())
     }
 
     pub(in crate::engine) fn remove_source(&self, name: &str) {

@@ -134,6 +134,10 @@ impl ObsApp {
         };
         self.snapshots.status.active_fps = engine.active_fps();
         self.snapshots.status.target_fps = Some(engine.target_fps());
+        // Read every pass rather than tracked here: the engine is what knows
+        // whether a recording actually started, and the Controls dock reads
+        // the same answer the status bar's clock does.
+        self.snapshots.status.recording_elapsed = engine.recording();
 
         // A minimised window is nobody looking at the Preview, and the engine
         // can stop putting frames where nobody will sample them. Only the
@@ -215,6 +219,16 @@ impl ObsApp {
             }
             UiAction::SetFullscreen(fullscreen) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+            }
+            UiAction::StartRecording => {
+                if let Some(engine) = &self.engine {
+                    engine.start_recording();
+                }
+            }
+            UiAction::StopRecording => {
+                if let Some(engine) = &self.engine {
+                    engine.stop_recording();
+                }
             }
             UiAction::SetTheme(theme) => ctx.set_theme(theme),
             UiAction::SetLocale(locale) => {
