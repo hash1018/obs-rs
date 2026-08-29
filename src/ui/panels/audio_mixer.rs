@@ -41,6 +41,9 @@ const FIXED_ROW_HEIGHT: f32 = 50.0;
 /// Between two columns, agreed on by the channels and the strip of mute
 /// buttons under them so that a button stays beneath its own channel.
 const COLUMN_GAP: f32 = 4.0;
+/// Left below the channels so scrolling to the end stops short of the mute
+/// strip rather than against it.
+const CHANNEL_BOTTOM_GAP: f32 = 8.0;
 /// The shortest a channel may be squeezed to. Below this the scale's labels
 /// collide and the fader stops being worth dragging.
 const MIN_CHANNEL_HEIGHT: f32 = 96.0;
@@ -96,6 +99,10 @@ pub(in crate::ui) fn show(
                     });
                 }
             });
+            // Scrolled to the end, the quietest mark on the scale would
+            // otherwise sit directly on the mute strip's edge. The same gap
+            // the channel already has above it when nothing is scrolled.
+            ui.add_space(CHANNEL_BOTTOM_GAP);
         });
 
     show_mute_strip(ui, snapshot, scrolled.state.offset.x, i18n, actions);
