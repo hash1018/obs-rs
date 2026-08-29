@@ -183,6 +183,36 @@ pub type AudioDeviceWatch = linux::AudioDeviceWatch;
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub struct AudioDeviceWatch;
 
+/// Where this session's displays are, for deciding whether a remembered
+/// window position still lands on one.
+///
+/// Not the same question the picker answers, and deliberately not routed
+/// through it: [`source_picker`] also enumerates windows, and on Wayland it
+/// puts a portal dialog on screen — neither of which belongs in a startup
+/// check the user did not ask for.
+///
+/// An empty list means "could not say", not "no displays". Wayland does not
+/// let a process enumerate them at all, so a caller must read empty as a
+/// reason to trust whatever it already had rather than as a reason to
+/// discard it.
+pub fn displays() -> Vec<MonitorRect> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::monitors()
+            .into_iter()
+            .map(|monitor| monitor.rect)
+            .collect()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::displays()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Vec::new()
+    }
+}
+
 /// A monitor's place in the virtual desktop. Signed origin: a display left of
 /// or above the primary one has negative coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

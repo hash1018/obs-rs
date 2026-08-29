@@ -9,6 +9,7 @@ use super::{
     panels::{scenes::ScenesPanelState, sources::SourcesPanelState},
 };
 
+pub use layout::WorkspaceDocks;
 pub(super) use layout::{DockLayout, DockPanel};
 
 /// How far a dock insets its content from its own edges.

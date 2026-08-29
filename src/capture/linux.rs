@@ -507,3 +507,28 @@ impl Drop for AudioDeviceWatch {
         }
     }
 }
+
+/// This session's displays, or an empty list where they cannot be
+/// enumerated — see [`super::displays`].
+///
+/// X11 answers; Wayland does not let a client ask, and its portal is a dialog
+/// rather than a query, so there is nothing to fall back to. The connection is
+/// opened and dropped here rather than kept: this is asked once, at startup.
+pub fn displays() -> Vec<MonitorRect> {
+    let Ok((connection, screen_number)) = x11rb::connect(None) else {
+        return Vec::new();
+    };
+    let Some(root) = connection
+        .setup()
+        .roots
+        .get(screen_number)
+        .map(|screen| screen.root)
+    else {
+        return Vec::new();
+    };
+    monitors(&connection, root)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|monitor| monitor.rect)
+        .collect()
+}

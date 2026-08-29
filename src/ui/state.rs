@@ -21,6 +21,23 @@ pub struct UiState {
 }
 
 impl UiState {
+    /// Starts with the arrangement a settings file described.
+    ///
+    /// Only the docks come from it. Everything else here is this run's own
+    /// state — an open dialog, a drag in progress — and starting a session
+    /// inside one of those is not something to restore.
+    pub fn with_docks(docks: &crate::ui::WorkspaceDocks) -> Self {
+        Self {
+            dock_layout: DockLayout::restored(docks),
+            ..Self::default()
+        }
+    }
+
+    /// The dock arrangement as it stands, for the settings file.
+    pub fn docks(&self) -> crate::ui::WorkspaceDocks {
+        self.dock_layout.placement()
+    }
+
     /// Asks whether to quit while a recording is running.
     pub fn confirm_exit(&mut self) {
         self.exit_confirm_open = true;

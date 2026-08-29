@@ -89,6 +89,17 @@ pub(super) fn show(
 
         let response = region_panel(region, layout)
             .show(ui, |ui| show_region(ui, layout, region, &mut content));
+        // Read back rather than tracked through the drag: the splitter is
+        // egui's, so what the region actually came out at is only knowable
+        // from the panel it drew. Closing the application writes this down.
+        let rect = response.response.rect;
+        layout.remember_region_size(
+            region,
+            match region {
+                DockRegionId::Left | DockRegionId::Right => rect.width(),
+                DockRegionId::Bottom => rect.height(),
+            },
+        );
         region_rects.insert(region, response.inner.rect);
         panel_drags.extend(response.inner.panel_drags);
     }
@@ -131,6 +142,11 @@ fn region_panel(region: DockRegionId, layout: &DockLayout) -> egui::Panel {
         DockRegionId::Bottom => (BOTTOM_DEFAULT_SIZE, BOTTOM_MIN_SIZE, BOTTOM_MAX_SIZE),
     };
     let min_size = configured_min.max(panel_min_size);
+    // What the last run was left at, if there was one. `default_size` is the
+    // right lever for it: egui keeps its own panel state once the user drags
+    // the splitter, and takes this only for the first frame, which is exactly
+    // when the saved size should win and afterwards should not.
+    let default_size = layout.region_size(region).unwrap_or(default_size);
 
     panel
         .default_size(default_size)

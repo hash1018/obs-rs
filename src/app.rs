@@ -9,7 +9,7 @@ use crate::engine::{AudioManager, EngineManager};
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
-use crate::settings::{AppSettings, SettingsStore};
+use crate::settings::{AppSettings, SettingsStore, WindowGeometry};
 use crate::snapshots::Snapshots;
 use crate::ui::{self, UiAction, UiState};
 
@@ -34,6 +34,13 @@ pub struct ObsApp {
     /// Set once the user has answered the closing question, so the close it
     /// sends is let through.
     exiting: bool,
+    /// The window as it last was when it was neither maximized nor
+    /// minimized, updated every pass and written on the way out.
+    ///
+    /// Tracked rather than read at exit because by then there is no `Context`
+    /// to read it from — `eframe::App::on_exit` is handed nothing.
+    window: Option<WindowGeometry>,
+    window_maximized: bool,
     /// What the engine was last told about whether anyone can see the
     /// Preview — see [`ObsApp::poll_engine`].
     preview_visible: bool,
@@ -64,17 +71,20 @@ pub struct ObsApp {
 const REPAINT_NOW: Duration = Duration::from_nanos(1);
 
 impl ObsApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let settings_store = SettingsStore::for_current_user();
-        let settings = settings_store.load().unwrap_or_else(|error| {
-            eprintln!("could not load app settings: {error}");
-            AppSettings::default()
-        });
+    /// Both the store and what was in it come from `main`, which has already
+    /// read the file: the window has to be placed before there is one to put
+    /// the settings in, so reading it again here would be reading it twice.
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        settings_store: SettingsStore,
+        settings: AppSettings,
+    ) -> Self {
         // Before the first pass draws, so the window never appears in one
         // palette and switches to another.
         cc.egui_ctx.set_theme(settings.theme);
         install_locale_fonts(&cc.egui_ctx);
-        let ui_state = UiState::default();
+        // The docks come back arranged; nothing else about the session does.
+        let ui_state = UiState::with_docks(&settings.workspace.docks);
         if let Err(error) = settings_store.save(&settings) {
             eprintln!("could not save app settings: {error}");
         }
@@ -93,6 +103,9 @@ impl ObsApp {
             ProjectManager::spawn(move || project_repaint_ctx.request_repaint()).ok();
         let project_dispatcher = project_manager.as_ref().map(ProjectManager::dispatcher);
         let recording_settings = settings.recording.clone();
+        // Taken before the struct owns them, since the fields below are
+        // where they end up.
+        let saved_window = settings.workspace.window;
 
         Self {
             ui_state,
@@ -137,6 +150,10 @@ impl ObsApp {
                 .inspect_err(|error| eprintln!("could not start audio: {error}"))
                 .ok(),
             exiting: false,
+            // Filled in on the first pass, which happens before anything can
+            // close the window.
+            window: saved_window,
+            window_maximized: saved_window.is_some_and(|window| window.maximized),
             // What the engine starts believing, so the first pass says
             // something only if the window came up minimised.
             preview_visible: true,
@@ -247,6 +264,52 @@ impl ObsApp {
     /// window manager's, and `UiAction::Exit` alike — intercepting one of
     /// those and not the others would leave a way out that skipped the
     /// question.
+    /// Notes where the window is, so closing can write it down.
+    ///
+    /// Only while it is neither maximized nor minimized. A maximized window's
+    /// outer rect is the screen, and restoring *that* as a normal window
+    /// would lose the size the user actually chose — so the flag is kept
+    /// beside the last ordinary rect rather than instead of it. A minimized
+    /// one reports a position that is not where it will reappear.
+    fn remember_window(&mut self, ctx: &egui::Context) {
+        ctx.input(|input| {
+            let viewport = input.viewport();
+            self.window_maximized = viewport.maximized.unwrap_or(false);
+            if self.window_maximized || viewport.minimized.unwrap_or(false) {
+                return;
+            }
+            let (Some(outer), Some(inner)) = (viewport.outer_rect, viewport.inner_rect) else {
+                return;
+            };
+            // Outer for the position and inner for the size, because those
+            // are what a window manager and `ViewportBuilder` respectively
+            // take — see `WindowGeometry`.
+            self.window = Some(WindowGeometry {
+                x: outer.min.x,
+                y: outer.min.y,
+                width: inner.width(),
+                height: inner.height(),
+                maximized: false,
+            });
+        });
+    }
+
+    /// Writes down where the window was and how the docks were arranged.
+    ///
+    /// Once, on the way out. Doing it as either changes would rewrite the
+    /// file on every frame of a drag, for a value only the next startup
+    /// reads.
+    fn save_workspace(&mut self) {
+        self.settings.workspace.window = self.window.map(|window| WindowGeometry {
+            maximized: self.window_maximized,
+            ..window
+        });
+        self.settings.workspace.docks = self.ui_state.docks();
+        if let Err(error) = self.settings_store.save(&self.settings) {
+            eprintln!("could not save the workspace layout: {error}");
+        }
+    }
+
     fn intercept_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|input| input.viewport().close_requested()) {
             return;
@@ -397,12 +460,17 @@ impl ObsApp {
 impl eframe::App for ObsApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.intercept_close(ctx);
+        self.remember_window(ctx);
         self.poll_project();
         self.poll_engine(ctx);
         self.poll_resource_usage();
         self.poll_audio_levels();
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();
+    }
+
+    fn on_exit(&mut self) {
+        self.save_workspace();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

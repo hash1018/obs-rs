@@ -9,6 +9,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::Locale;
+use crate::ui::WorkspaceDocks;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -16,6 +17,40 @@ pub struct AppSettings {
     pub locale: Locale,
     pub theme: Theme,
     pub recording: RecordingSettings,
+    pub workspace: WorkspaceLayout,
+}
+
+/// Where the window was and how the docks were arranged when the application
+/// last closed.
+///
+/// A preference like any other, and stored beside them: it is something the
+/// user set deliberately and expects to find again. Written once on exit
+/// rather than as it changes — a window being dragged would otherwise rewrite
+/// the file every frame.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceLayout {
+    /// `None` until the application has closed once, which is what leaves a
+    /// first run to the platform's own idea of where a window goes.
+    pub window: Option<WindowGeometry>,
+    pub docks: WorkspaceDocks,
+}
+
+/// Where the window was, in the desktop's own coordinates.
+///
+/// The position is the outer rect's — the frame, not the client area — since
+/// that is what a window manager is asked to place. The size is the inner
+/// one, because that is what `ViewportBuilder` takes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// Restored as a maximized window. The rect beside it is the one the
+    /// window had *before* it was maximized, so unmaximizing puts it back
+    /// where it was rather than filling the screen a second time.
+    pub maximized: bool,
 }
 
 /// Which palette the window draws in.

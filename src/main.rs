@@ -32,11 +32,22 @@ fn main() -> eframe::Result {
     // Held for the whole process: dropping it stops `media-pp`'s file logger.
     let _log = start_media_pp_log();
 
+    // Read here rather than only in `ObsApp`, because where the window opens
+    // has to be decided before there is one. The same values are handed on,
+    // so the file is read once.
+    let store = settings::SettingsStore::for_current_user();
+    let settings = store.load().unwrap_or_else(|error| {
+        eprintln!("could not load app settings: {error}");
+        settings::AppSettings::default()
+    });
+
     let mut options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("obs-rs")
-            .with_inner_size([960.0, 600.0])
-            .with_min_inner_size([480.0, 320.0]),
+        viewport: place_window(
+            egui::ViewportBuilder::default()
+                .with_title("obs-rs")
+                .with_min_inner_size([480.0, 320.0]),
+            settings.workspace.window,
+        ),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
@@ -46,8 +57,56 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "obs-rs",
         options,
-        Box::new(|cc| Ok(Box::new(ObsApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(ObsApp::new(cc, store, settings)))),
     )
+}
+
+/// The window's own default size, used until the application has closed once.
+const DEFAULT_WINDOW_SIZE: [f32; 2] = [960.0, 600.0];
+
+/// Puts the window back where it was left, if that is still somewhere the
+/// user can reach.
+///
+/// A saved position is not trusted on its own: a window left on a second
+/// display opens off-screen when that display is gone, and there is nothing
+/// on screen to drag back. So the position is only asked for when it still
+/// lands on a monitor this session has — and the *size* is restored either
+/// way, since a size is never unreachable.
+fn place_window(
+    viewport: egui::ViewportBuilder,
+    saved: Option<settings::WindowGeometry>,
+) -> egui::ViewportBuilder {
+    let Some(saved) = saved.filter(|saved| saved.width > 0.0 && saved.height > 0.0) else {
+        return viewport.with_inner_size(DEFAULT_WINDOW_SIZE);
+    };
+    let viewport = viewport
+        .with_inner_size([saved.width, saved.height])
+        .with_maximized(saved.maximized);
+    if on_a_display(&saved) {
+        viewport.with_position([saved.x, saved.y])
+    } else {
+        viewport
+    }
+}
+
+/// Whether the window's top-left corner is inside one of this session's
+/// displays.
+///
+/// The corner rather than the whole rect: a window hanging off the right edge
+/// is one the user can still see and move, while one whose title bar is past
+/// every monitor is not. An empty list — Wayland, where enumeration is the
+/// portal's job — answers `true`, since refusing to restore on the ground
+/// that nothing could be enumerated would be worse than trusting the file.
+fn on_a_display(saved: &settings::WindowGeometry) -> bool {
+    let monitors = capture::displays();
+    monitors.is_empty()
+        || monitors.iter().any(|monitor| {
+            let area = monitor;
+            saved.x >= area.x as f32
+                && saved.y >= area.y as f32
+                && saved.x < area.x as f32 + area.width as f32
+                && saved.y < area.y as f32 + area.height as f32
+        })
 }
 
 /// Restricts wgpu to Direct3D 12 on Windows.
