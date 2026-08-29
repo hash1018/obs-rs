@@ -55,6 +55,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use media_pp::color::Color;
+use media_pp::elements::VideoCodec;
 
 use crate::snapshots::SceneItemSnapshot;
 
@@ -76,6 +77,28 @@ pub(super) type BackendError = Box<dyn Error + Send + Sync>;
 /// backend must take, which is why it can be unused on one.
 #[allow(dead_code)]
 pub(super) const BACKGROUND: Color = Color::BLACK;
+
+/// Which of `VideoCodec`'s H.264 entries a software choice maps to.
+///
+/// `Nvenc` never reaches here — it is not a software encoder and has no
+/// `VideoCodec` at all — so it is folded into the one this crate would rather
+/// have if it somehow did.
+pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> VideoCodec {
+    match encoder {
+        crate::settings::RecordingEncoder::X264 => VideoCodec::H264,
+        crate::settings::RecordingEncoder::OpenH264 | crate::settings::RecordingEncoder::Nvenc => {
+            VideoCodec::OpenH264
+        }
+    }
+}
+
+/// The rate the encoder probe opens at.
+///
+/// Only the frame-rate metadata an encoder is configured with, and no encoder
+/// refuses a size because of it — so this is a plausible number rather than a
+/// meaningful one, and probing at the rate a recording would really use would
+/// tell us nothing extra.
+pub(super) const PROBE_FPS: u32 = 60;
 
 /// Frames the recording branch may fall behind by before the compositor is
 /// made to wait — at 60 fps, about an eighth of a second of slack for an

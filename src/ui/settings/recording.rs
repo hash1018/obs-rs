@@ -9,7 +9,9 @@ use eframe::egui;
 use time::OffsetDateTime;
 
 use crate::i18n::{LocalizationManager, TextKey};
-use crate::settings::{AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE};
+use crate::settings::{
+    AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE, RecordingEncoder,
+};
 
 /// Room for "Browse…" in either language, fixed so the field beside it does
 /// not change width when the language does.
@@ -23,6 +25,7 @@ pub(super) fn show(
     draft: &mut AppSettings,
     recording: bool,
     picking: bool,
+    encoders: &[RecordingEncoder],
     i18n: &LocalizationManager,
 ) -> bool {
     if recording {
@@ -92,6 +95,41 @@ pub(super) fn show(
                     .truncate(),
             )
             .on_hover_text(&example);
+            ui.end_row();
+
+            ui.label(i18n.text(TextKey::SettingsRecordingEncoder));
+            ui.vertical(|ui| {
+                egui::ComboBox::from_id_salt("settings_encoder")
+                    .selected_text(draft.recording.encoder.label())
+                    .show_ui(ui, |ui| {
+                        // Every encoder, not only the ones that opened —
+                        // "libx264 is not in this build" is worth reading, and
+                        // an entry that silently vanished would leave someone
+                        // looking for it with nothing to find.
+                        for encoder in RecordingEncoder::ALL {
+                            let available = encoders.contains(&encoder);
+                            ui.add_enabled_ui(available, |ui| {
+                                let label = if available {
+                                    encoder.label().to_owned()
+                                } else {
+                                    format!(
+                                        "{} — {}",
+                                        encoder.label(),
+                                        i18n.text(TextKey::SettingsEncoderUnavailable)
+                                    )
+                                };
+                                ui.selectable_value(&mut draft.recording.encoder, encoder, label);
+                            });
+                        }
+                    });
+                if draft.recording.encoder.is_software() {
+                    ui.label(
+                        egui::RichText::new(i18n.text(TextKey::SettingsEncoderSoftwareCost))
+                            .color(ui.visuals().warn_fg_color)
+                            .small(),
+                    );
+                }
+            });
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsRecordingBitRate));

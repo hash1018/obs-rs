@@ -16,8 +16,9 @@ use media_pp::{
     elements::{
         AppSink, ChangeGate, CudaCodec, CudaDevice, CudaEncoder, CudaEncoderOptions,
         CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
-        CudaVideoCompositorHandle, CudaVideoLayerHandle, Mp4Muxer, SubmitError, TeeBuilder,
-        TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
+        CudaDownload, CudaVideoCompositorHandle, CudaVideoLayerHandle, Mp4Muxer, SubmitError,
+        SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
+        VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     graph::BranchId,
@@ -26,12 +27,32 @@ use media_pp::{
 };
 
 use crate::domain::{SourceKind, SourceSettings};
+use crate::settings::{RecordingEncoder, RecordingSettings};
 use crate::snapshots::SceneItemSnapshot;
 
 use super::{
-    BACKGROUND, BackendError, OpenSource,
-    RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, flat_bgra, input_name, unsupported_kind,
+    BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH,
+    RECORDING_SEND_TIMEOUT, flat_bgra, input_name, software_codec, unsupported_kind,
 };
+
+/// One opened encoder, and which kind of chain it needs in front of it.
+enum RecordEncoder {
+    /// Takes the compositor's frames as they are.
+    Hardware(CudaEncoder),
+    /// Needs them copied back from the GPU and converted first.
+    Software(SwEncoder),
+}
+
+impl RecordEncoder {
+    /// What the muxer has to be told about the track before its header is
+    /// written.
+    fn parameters(&self) -> ffmpeg::codec::Parameters {
+        match self {
+            Self::Hardware(encoder) => encoder.parameters(),
+            Self::Software(encoder) => encoder.parameters(),
+        }
+    }
+}
 
 use nv12::Nv12Target;
 use shared::SharedNv12;
@@ -50,6 +71,9 @@ pub(in crate::engine) struct Backend {
     /// atomic because starting one builds a file and an encoder, and two
     /// concurrent starts must not both get that far.
     recording: Mutex<Option<BranchId>>,
+    /// Which encoders this machine can open, worked out on first ask — see
+    /// [`Backend::available_encoders`].
+    encoders: std::sync::OnceLock<Vec<RecordingEncoder>>,
     /// Reached from the UI through [`Backend::set_preview_visible`] — see
     /// [`PreviewSurface`].
     surface: Arc<PreviewSurface>,
@@ -184,6 +208,7 @@ impl Backend {
             preview,
             tee,
             recording: Mutex::new(None),
+            encoders: std::sync::OnceLock::new(),
             surface,
         })
     }
@@ -255,20 +280,7 @@ impl Backend {
 
         let [width, height] = self.size;
         let time_base = ffmpeg::Rational::new(1, fps as i32);
-        let encoder = CudaEncoder::new(
-            "record-encode",
-            &self.device,
-            CudaEncoderOptions {
-                codec: CudaCodec::H264,
-                input_format: CudaFrameFormat::Nv12,
-                width,
-                height,
-                time_base,
-                frame_rate: ffmpeg::Rational::new(fps as i32, 1),
-                bit_rate: settings.bit_rate_bits(),
-                gop_size: fps * settings.keyframe_seconds_clamped(),
-            },
-        )?;
+        let encoder = self.open_encoder(fps, settings)?;
 
         // The file's tracks are fixed before its header is written, which is
         // why audio cannot be added to a recording already running — the same
@@ -280,7 +292,7 @@ impl Backend {
             .pop()
             .ok_or("the muxer produced no track sink")?;
 
-        let branch = self
+        let mut branch = self
             .tee
             .branch()
             .ok_or("the compositor's Tee is gone")?
@@ -288,8 +300,31 @@ impl Backend {
                 "record-queue",
                 RECORDING_QUEUE_DEPTH,
                 OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
-            )
-            .pipe(encoder)
+            );
+        branch = match encoder {
+            RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
+            // A software encoder is not on the GPU and does not take NV12, so
+            // the frames have to come back across the bus and be converted
+            // before it sees them. That is the cost the choice carries, and it
+            // is why the hardware path is the default.
+            RecordEncoder::Software(encoder) => branch
+                .pipe(CudaDownload::new(
+                    "record-download",
+                    &self.device,
+                    CudaFrameFormat::Nv12,
+                    width,
+                    height,
+                ))
+                .pipe(SwScaler::new(
+                    "record-convert",
+                    ffmpeg::format::Pixel::YUV420P,
+                    width,
+                    height,
+                    ffmpeg::software::scaling::Flags::BILINEAR,
+                ))
+                .pipe(encoder),
+        };
+        let branch = branch
             // The compositor has been running since the application started, and
             // its timeline says so. Without this the file is written as
             // beginning that far in, and a player shows the lead-in as empty.
@@ -297,6 +332,76 @@ impl Backend {
             .to(sink)?;
         *recording = Some(self.tee.attach(branch)?);
         Ok(())
+    }
+
+    /// Opens whichever encoder the settings name.
+    fn open_encoder(
+        &self,
+        fps: u32,
+        settings: &RecordingSettings,
+    ) -> Result<RecordEncoder, BackendError> {
+        let [width, height] = self.size;
+        let time_base = ffmpeg::Rational::new(1, fps as i32);
+        let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
+        let bit_rate = settings.bit_rate_bits();
+        let gop_size = fps * settings.keyframe_seconds_clamped();
+        match settings.encoder {
+            RecordingEncoder::Nvenc => Ok(RecordEncoder::Hardware(CudaEncoder::new(
+                "record-encode",
+                &self.device,
+                CudaEncoderOptions {
+                    codec: CudaCodec::H264,
+                    input_format: CudaFrameFormat::Nv12,
+                    width,
+                    height,
+                    time_base,
+                    frame_rate,
+                    bit_rate,
+                    gop_size,
+                },
+            )?)),
+            other => Ok(RecordEncoder::Software(SwEncoder::new(
+                "record-encode",
+                SwEncoderOptions {
+                    codec: software_codec(other),
+                    width,
+                    height,
+                    time_base,
+                    frame_rate,
+                    bit_rate,
+                    gop_size,
+                },
+            )?)),
+        }
+    }
+
+    /// Which H.264 encoders this machine can actually open, in the order the
+    /// list should offer them.
+    ///
+    /// Probed by opening each one, not by asking whether FFmpeg knows the
+    /// name. A build can carry `h264_nvenc` on a machine with no NVIDIA
+    /// encoder, and `libx264` is missing from a good many builds — this
+    /// machine's included — so neither question is answered by the encoder
+    /// list alone.
+    ///
+    /// Probed once. Opening NVENC is not free, and the answer cannot change
+    /// while the application is running.
+    pub(in crate::engine) fn available_encoders(&self) -> &[RecordingEncoder] {
+        self.encoders.get_or_init(|| {
+            RecordingEncoder::ALL
+                .into_iter()
+                .filter(|encoder| {
+                    let probe = RecordingSettings {
+                        encoder: *encoder,
+                        ..RecordingSettings::default()
+                    };
+                    // The Canvas's own size, not a token one: an encoder that
+                    // opens at 320x240 and refuses 4K would be offered and
+                    // then fail at the moment it was used.
+                    self.open_encoder(PROBE_FPS, &probe).is_ok()
+                })
+                .collect()
+        })
     }
 
     /// Ends the recording and finalizes its file.

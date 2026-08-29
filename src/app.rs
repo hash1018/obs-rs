@@ -148,6 +148,11 @@ impl ObsApp {
         // the same answer the status bar's clock does.
         self.snapshots.status.recording_elapsed = engine.recording();
         self.snapshots.status.recording_error = engine.recording_error();
+        if self.snapshots.status.encoders.is_empty()
+            && let Some(encoders) = engine.encoders()
+        {
+            self.snapshots.status.encoders = encoders.as_ref().clone();
+        }
 
         // A minimised window is nobody looking at the Preview, and the engine
         // can stop putting frames where nobody will sample them. Only the

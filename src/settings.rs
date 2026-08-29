@@ -74,6 +74,10 @@ impl From<egui::ThemePreference> for Theme {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RecordingSettings {
+    /// Which H.264 encoder writes the file. Not every one of them can be
+    /// opened on every machine, which is why the engine probes and publishes
+    /// the list this is chosen from.
+    pub encoder: RecordingEncoder,
     /// Where files are written. Empty means the platform default — see
     /// [`RecordingSettings::directory_or_default`], which is what resolves it.
     ///
@@ -93,10 +97,66 @@ pub struct RecordingSettings {
 impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
+            encoder: RecordingEncoder::default(),
             directory: String::new(),
             name_prefix: crate::paths::APPLICATION.to_owned(),
             bit_rate_mbps: DEFAULT_BIT_RATE_MBPS,
             keyframe_seconds: DEFAULT_KEYFRAME_SECONDS,
+        }
+    }
+}
+
+/// Which H.264 encoder a recording is written with.
+///
+/// Only H.264 for now, which is why nothing here names a codec: the choice is
+/// between the ways to produce it, not between formats.
+///
+/// # Hardware and software are not interchangeable
+///
+/// [`RecordingEncoder::Nvenc`] takes the compositor's own frames as they are —
+/// already on the GPU, already in the format NVENC wants — so a recording
+/// costs an encode and nothing else. Everything else here is a software
+/// encoder, and reaching one means copying every frame back from the GPU and
+/// converting it to `YUV420P` first. At 1080p60 that is unlikely to keep up,
+/// and the recording branch's queue reports the overload on the bus rather
+/// than dropping frames quietly.
+///
+/// It is offered regardless. A machine with no NVENC — an AMD or Intel GPU on
+/// Windows, where the compositor runs anyway — would otherwise have no way to
+/// record at all, and a smaller Canvas or a lower rate is a real answer there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingEncoder {
+    /// `h264_nvenc`, fed the compositor's frames directly.
+    #[default]
+    Nvenc,
+    /// `libopenh264` — Cisco's encoder, whose licence terms are why it is the
+    /// software H.264 encoder most FFmpeg builds carry.
+    OpenH264,
+    /// `libx264`. Absent from a good many FFmpeg builds, this machine's
+    /// included, which is exactly why the list is probed rather than assumed.
+    X264,
+}
+
+impl RecordingEncoder {
+    pub const ALL: [Self; 3] = [Self::Nvenc, Self::OpenH264, Self::X264];
+
+    /// Whether reaching this encoder means copying frames back from the GPU
+    /// and converting them.
+    pub fn is_software(self) -> bool {
+        !matches!(self, Self::Nvenc)
+    }
+
+    /// What to call it in a list.
+    ///
+    /// Not translated: these are the names FFmpeg itself uses, and someone
+    /// comparing them against `ffmpeg -encoders` or a forum post needs to see
+    /// the same string.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nvenc => "NVENC (h264_nvenc)",
+            Self::OpenH264 => "OpenH264 (libopenh264)",
+            Self::X264 => "x264 (libx264)",
         }
     }
 }
@@ -219,6 +279,44 @@ mod tests {
             toml::from_str::<AppSettings>(&encoded).unwrap().locale,
             Locale::KoKr
         );
+    }
+
+    /// The encoder is written under its own name, so a settings file says
+    /// which one was chosen rather than which position it held in a list.
+    #[test]
+    fn encoder_uses_expected_toml_value() {
+        for (encoder, written) in [
+            (RecordingEncoder::Nvenc, "nvenc"),
+            (RecordingEncoder::OpenH264, "open-h264"),
+            (RecordingEncoder::X264, "x264"),
+        ] {
+            let settings = AppSettings {
+                recording: RecordingSettings {
+                    encoder,
+                    ..RecordingSettings::default()
+                },
+                ..AppSettings::default()
+            };
+
+            let encoded = toml::to_string(&settings).expect("encode");
+            assert!(
+                encoded.contains(&format!("encoder = \"{written}\"\n")),
+                "{encoder:?} was written as something else: {encoded}"
+            );
+            assert_eq!(
+                toml::from_str::<AppSettings>(&encoded).unwrap().recording.encoder,
+                encoder
+            );
+        }
+    }
+
+    /// Only the hardware one takes the compositor's frames as they are; the
+    /// rest decide whether a download and a conversion go in front of them.
+    #[test]
+    fn only_nvenc_is_not_a_software_encoder() {
+        assert!(!RecordingEncoder::Nvenc.is_software());
+        assert!(RecordingEncoder::OpenH264.is_software());
+        assert!(RecordingEncoder::X264.is_software());
     }
 
     /// The theme is written as this application's own name for it, not as

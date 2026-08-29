@@ -18,4 +18,8 @@ pub struct StatusSnapshot {
     /// Actual compositor output rate, not the egui repaint rate.
     pub active_fps: Option<f32>,
     pub target_fps: Option<f32>,
+    /// Which H.264 encoders this machine can record with. Empty until the
+    /// engine has probed, which the Settings dialog shows as such rather than
+    /// as "none".
+    pub encoders: Vec<crate::settings::RecordingEncoder>,
 }

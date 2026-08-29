@@ -75,6 +75,10 @@ impl Backend {
         Err("no compositor backend is written for this platform yet".into())
     }
 
+    pub(in crate::engine) fn available_encoders(&self) -> &[crate::settings::RecordingEncoder] {
+        &[]
+    }
+
     pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
         Err("no compositor backend is written for this platform yet".into())
     }

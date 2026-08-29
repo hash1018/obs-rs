@@ -103,6 +103,8 @@ struct Published {
     /// written only once a recording has actually started, so a start that
     /// failed leaves the UI showing what is true.
     recording_since: Arc<ArcSwapOption<Instant>>,
+    /// Which encoders the backend can open — see `EngineManager::encoders`.
+    encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     /// Why the last attempt to start a recording failed, if it did.
     ///
     /// A failed start is otherwise silent: nothing appears, no clock runs,
@@ -117,6 +119,10 @@ pub struct EngineManager {
     active_fps: Arc<AtomicU32>,
     recording_since: Arc<ArcSwapOption<Instant>>,
     recording_error: Arc<ArcSwapOption<String>>,
+    /// Which H.264 encoders the backend can open. Published once, after the
+    /// backend has been built — probing needs its device, and the answer
+    /// cannot change while the application runs.
+    encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     commands: Sender<EngineCommand>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -136,6 +142,7 @@ impl EngineManager {
         let recording_since = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
+        let encoders = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
 
         let worker = thread::Builder::new().name("engine".to_owned()).spawn({
@@ -143,6 +150,7 @@ impl EngineManager {
             let active_fps = Arc::clone(&active_fps);
             let recording_since = Arc::clone(&recording_since);
             let recording_error = Arc::clone(&recording_error);
+            let encoders = Arc::clone(&encoders);
             let stop = Arc::clone(&stop);
             move || {
                 let published = Published {
@@ -150,6 +158,7 @@ impl EngineManager {
                     active_fps,
                     recording_since,
                     recording_error,
+                    encoders,
                 };
                 let setup = EngineSetup {
                     size,
@@ -170,6 +179,7 @@ impl EngineManager {
             active_fps,
             recording_since,
             recording_error,
+            encoders,
             commands,
             stop,
             worker: Some(worker),
@@ -265,6 +275,12 @@ impl EngineManager {
     ///
     /// Cleared when the next attempt is made, so this always describes the
     /// most recent one rather than accumulating.
+    /// Which H.264 encoders this machine can record with, or `None` before
+    /// the engine has finished probing.
+    pub fn encoders(&self) -> Option<Arc<Vec<crate::settings::RecordingEncoder>>> {
+        self.encoders.load_full()
+    }
+
     pub fn recording_error(&self) -> Option<Arc<String>> {
         self.recording_error.load_full()
     }
@@ -314,6 +330,13 @@ fn run(
         }
     };
     let backend = Backend::start(&render_state, size, TARGET_FPS, PREVIEW_FPS, publish)?;
+
+    // Probed here rather than on demand: it needs the backend's own device,
+    // and the dialog that shows the list must not be the thing that waits for
+    // an encoder to open.
+    published
+        .encoders
+        .store(Some(Arc::new(backend.available_encoders().to_vec())));
 
     // Nothing has been composited yet, and an empty Scene never will be, so
     // the Preview branch starts asleep and is woken by the first Source.

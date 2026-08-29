@@ -147,6 +147,7 @@ pub(in crate::ui) fn show(
     ctx: &egui::Context,
     state: &mut SettingsDialogState,
     recording: bool,
+    encoders: &[crate::settings::RecordingEncoder],
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -213,6 +214,7 @@ pub(in crate::ui) fn show(
                                         &mut state.draft,
                                         recording,
                                         picking,
+                                        encoders,
                                         i18n,
                                     );
                                 }

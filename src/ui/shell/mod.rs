@@ -36,6 +36,7 @@ pub fn show(
         ui.ctx(),
         &mut state.settings,
         resources.snapshots.status.recording_elapsed.is_some(),
+        &resources.snapshots.status.encoders,
         resources.i18n,
         actions,
     );
