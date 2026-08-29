@@ -49,24 +49,9 @@ pub fn show(
                     });
 
                     ui.menu_button(i18n.text(TextKey::MenuTheme), |ui| {
-                        theme_option(
-                            ui,
-                            actions,
-                            Theme::System,
-                            i18n.text(TextKey::ThemeSystem),
-                        );
-                        theme_option(
-                            ui,
-                            actions,
-                            Theme::Light,
-                            i18n.text(TextKey::ThemeLight),
-                        );
-                        theme_option(
-                            ui,
-                            actions,
-                            Theme::Dark,
-                            i18n.text(TextKey::ThemeDark),
-                        );
+                        theme_option(ui, actions, Theme::System, i18n.text(TextKey::ThemeSystem));
+                        theme_option(ui, actions, Theme::Light, i18n.text(TextKey::ThemeLight));
+                        theme_option(ui, actions, Theme::Dark, i18n.text(TextKey::ThemeDark));
                     });
 
                     ui.menu_button(i18n.text(TextKey::MenuLanguage), |ui| {
@@ -121,10 +106,7 @@ fn theme_option(
     theme: Theme,
     label: impl Into<egui::WidgetText>,
 ) {
-    let current: Theme = ui
-        .ctx()
-        .options(|options| options.theme_preference)
-        .into();
+    let current: Theme = ui.ctx().options(|options| options.theme_preference).into();
     if ui.selectable_label(current == theme, label).clicked() {
         actions.push(UiAction::SetTheme(theme));
         ui.close();

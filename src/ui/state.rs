@@ -35,4 +35,3 @@ impl UiState {
         self.settings.open_with(settings);
     }
 }
-

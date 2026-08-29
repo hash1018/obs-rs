@@ -224,10 +224,9 @@ impl RecordingSettings {
     /// Clamped to what this application will encode at, so a hand-edited
     /// settings file cannot ask an encoder for something it will refuse.
     pub fn bit_rate_bits(&self) -> usize {
-        let mbps = self.bit_rate_mbps.clamp(
-            *BIT_RATE_MBPS_RANGE.start(),
-            *BIT_RATE_MBPS_RANGE.end(),
-        );
+        let mbps = self
+            .bit_rate_mbps
+            .clamp(*BIT_RATE_MBPS_RANGE.start(), *BIT_RATE_MBPS_RANGE.end());
         mbps as usize * 1_000_000
     }
 
@@ -347,7 +346,10 @@ mod tests {
                 "{encoder:?} was written as something else: {encoded}"
             );
             assert_eq!(
-                toml::from_str::<AppSettings>(&encoded).unwrap().recording.encoder,
+                toml::from_str::<AppSettings>(&encoded)
+                    .unwrap()
+                    .recording
+                    .encoder,
                 encoder
             );
         }
@@ -376,7 +378,10 @@ mod tests {
             encoded.contains("theme = \"light\"\n"),
             "unexpected encoding: {encoded}"
         );
-        assert_eq!(toml::from_str::<AppSettings>(&encoded).unwrap().theme, Theme::Light);
+        assert_eq!(
+            toml::from_str::<AppSettings>(&encoded).unwrap().theme,
+            Theme::Light
+        );
     }
 
     /// Dark is what this application has always started in, and persisting
@@ -424,7 +429,10 @@ mod tests {
             ..RecordingSettings::default()
         };
 
-        assert_eq!(settings.directory_or_default(), crate::paths::recordings_dir());
+        assert_eq!(
+            settings.directory_or_default(),
+            crate::paths::recordings_dir()
+        );
         assert_eq!(settings.prefix_or_default(), crate::paths::APPLICATION);
     }
 

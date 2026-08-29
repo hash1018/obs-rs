@@ -104,11 +104,8 @@ pub(super) fn show(
             // from its end, and one that reflowed the grid as it was typed
             // would move every row under it.
             let example = example_path(&draft.recording);
-            ui.add(
-                egui::Label::new(egui::RichText::new(&example).monospace().weak())
-                    .truncate(),
-            )
-            .on_hover_text(&example);
+            ui.add(egui::Label::new(egui::RichText::new(&example).monospace().weak()).truncate())
+                .on_hover_text(&example);
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsRecordingEncoder));

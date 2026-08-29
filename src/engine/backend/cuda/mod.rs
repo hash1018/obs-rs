@@ -14,12 +14,11 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, ChangeGate, CudaCodec, CudaDevice, CudaEncoder, CudaEncoderOptions,
-        FrameRateLimiter, PauseGate, PauseGateHandle,
+        AppSink, ChangeGate, CudaCodec, CudaDevice, CudaDownload, CudaEncoder, CudaEncoderOptions,
         CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
-        CudaDownload, CudaVideoCompositorHandle, CudaVideoLayerHandle, Mp4Muxer, SubmitError,
-        SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
-        VideoCompositorOptions, VideoLayer,
+        CudaVideoCompositorHandle, CudaVideoLayerHandle, FrameRateLimiter, Mp4Muxer, PauseGate,
+        PauseGateHandle, SubmitError, SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle,
+        TimestampOrigin, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     graph::BranchId,
@@ -32,8 +31,8 @@ use crate::settings::{RecordingEncoder, RecordingSettings};
 use crate::snapshots::SceneItemSnapshot;
 
 use super::{
-    BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH,
-    RECORDING_SEND_TIMEOUT, flat_bgra, input_name, software_codec, unsupported_kind,
+    BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
+    flat_bgra, input_name, software_codec, unsupported_kind,
 };
 
 /// The running recording: which branch it is, and the control that stops it
@@ -225,8 +224,6 @@ impl Backend {
     pub(in crate::engine) fn set_preview_visible(&self, visible: bool) {
         self.surface.set_visible(visible);
     }
-
-
 
     pub(in crate::engine) fn stop(&self) {
         self.preview.stop();
