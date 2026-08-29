@@ -8,11 +8,7 @@ use std::{
     collections::HashSet,
     env, fs, io,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
-    },
+    sync::mpsc::{self, Receiver, Sender},
     thread,
     time::Duration,
 };
@@ -444,32 +440,34 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
 }
 
 pub fn watch_audio_devices(on_change: impl Fn() + Send + 'static) -> Option<AudioDeviceWatch> {
-    let stop = Arc::new(AtomicBool::new(false));
+    // A channel rather than a flag and a sleep: dropping the sender wakes the
+    // thread out of its wait at once, so closing the application does not
+    // have to sit through an interval that has only just started.
+    let (stop, stopped) = mpsc::channel::<()>();
     let worker = thread::Builder::new()
         .name("audio-devices".to_owned())
-        .spawn({
-            let stop = Arc::clone(&stop);
-            move || {
-                // The set this started from, so the first change is reported
-                // and the state it started in is not.
-                let mut known = device_identity();
-                while !stop.load(Ordering::Relaxed) {
-                    thread::sleep(POLL_INTERVAL);
-                    if stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let current = device_identity();
-                    if current != known {
-                        known = current;
-                        on_change();
-                    }
+        .spawn(move || {
+            // The set this started from, so the first change is reported and
+            // the state it started in is not.
+            let mut known = device_identity();
+            // `Timeout` is another interval to look again; `Disconnected` is
+            // the watch being dropped, and ends the loop. Nothing is ever
+            // sent.
+            while matches!(
+                stopped.recv_timeout(POLL_INTERVAL),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                let current = device_identity();
+                if current != known {
+                    known = current;
+                    on_change();
                 }
             }
         })
         .inspect_err(|error| eprintln!("could not watch audio devices: {error}"))
         .ok()?;
     Some(AudioDeviceWatch {
-        stop,
+        stop: Some(stop),
         worker: Some(worker),
     })
 }
@@ -492,17 +490,21 @@ fn device_identity() -> Vec<(String, bool)> {
 
 /// Keeps the polling thread running.
 pub struct AudioDeviceWatch {
-    stop: Arc<AtomicBool>,
-    /// `Option` only so `Drop` can take the handle to join it.
+    /// `Option` so `Drop` can take it. Nothing is sent on it; dropping it is
+    /// the signal.
+    stop: Option<mpsc::Sender<()>>,
+    /// `Option` for the same reason: `Drop` has to take the handle to join.
     worker: Option<thread::JoinHandle<()>>,
 }
 
 impl Drop for AudioDeviceWatch {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        // Taken here rather than left to the field drop that runs after this
+        // returns. The loop ends when this sender goes, so joining while it
+        // is still alive would be waiting for a thread that is waiting for
+        // it — the same deadlock `AudioManager` had.
+        self.stop = None;
         if let Some(worker) = self.worker.take() {
-            // Up to one interval, because the thread checks the flag either
-            // side of its sleep rather than waiting on a condition variable.
             let _ = worker.join();
         }
     }
