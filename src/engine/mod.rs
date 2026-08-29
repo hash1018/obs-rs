@@ -512,10 +512,20 @@ fn apply_command(
             // timestamps it is being handed would change meaning underneath
             // it. The setting is kept either way, and takes at the next
             // change once the recording has stopped.
-            if recording.running.is_none() && settings.fps != backend.frame_rate() {
+            let changed = recording.running.is_none() && settings.fps != backend.frame_rate();
+            if changed {
                 backend.set_frame_rate(settings.fps);
             }
             recording.settings = *settings;
+            if changed {
+                // The captures have to follow. Each took its rate when it
+                // opened and has no way to be told otherwise, so a compositor
+                // moved to 60 would be filling half its ticks by repeating
+                // what a 30 fps capture last gave it, and one moved to 30
+                // would leave its captures doing twice the work for frames
+                // nothing composites.
+                reopen_sources(backend, project, open, scene);
+            }
             false
         }
         EngineCommand::StartRecording => {
@@ -684,6 +694,38 @@ enum SourceState {
     /// A retry loop here would reopen the portal dialog on every snapshot,
     /// which is a stream of modal windows rather than an error message.
     Failed,
+}
+
+/// Stops every running Source and lets [`reconcile`] open it again.
+///
+/// For a capture's own rate, which it takes at `open` and cannot be told
+/// afterwards — no capture source in `media-pp` carries a control handle, and
+/// giving all three one is a larger change than this is worth until the gap
+/// below proves visible.
+///
+/// The gap is one reconcile: each Source is stopped and immediately reopened,
+/// so the compositor keeps showing the last picture it was given until the
+/// first new frame arrives. That is the same path a Scene change already
+/// takes, at a moment the user asked for something.
+///
+/// A Source that failed to open is left alone. Retrying it here would mean a
+/// portal dialog every time a setting is applied, which is what
+/// [`SourceState::Failed`] exists to prevent.
+fn reopen_sources(
+    backend: &Backend,
+    project: Option<&ProjectDispatcher>,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    scene: &SourcesSnapshot,
+) {
+    open.retain(|_, state| match state {
+        SourceState::Open(source) => {
+            source.source.stop();
+            backend.remove_source(&source.name);
+            false
+        }
+        SourceState::Failed => true,
+    });
+    reconcile(backend, project, open, scene);
 }
 
 /// Brings the running Sources in line with what the project now holds.
