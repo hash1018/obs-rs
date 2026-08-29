@@ -143,6 +143,33 @@ fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
     }
 }
 
+/// Splits a dock pane into the list's area and this strip's, handing back a
+/// `Ui` bounded to the list's half.
+///
+/// Necessary because the two otherwise disagree about the same space. The
+/// strip is a `Panel::bottom` anchored to the pane's bottom edge, while a
+/// `ScrollArea` told not to auto-shrink takes the whole height of the `Ui` it
+/// is given — so in a pane squeezed below what both need, the list is drawn
+/// under the buttons. `ScrollArea::max_height` does not bind against
+/// `auto_shrink(false)` and was measured not to: a list limited to ten pixels
+/// still drew two full rows.
+///
+/// So the split is made here instead, by geometry: the returned `Ui` cannot
+/// reach past what is left, and is clipped to it as well, so a scroll area
+/// inside it sees the real viewport and scrolls rather than overflowing.
+pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
+    let mut rect = ui.available_rect_before_wrap().intersect(ui.max_rect());
+    rect.max.y = (rect.max.y - HEIGHT).max(rect.min.y);
+    let mut list = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(id)
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    list.set_clip_rect(rect);
+    list
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

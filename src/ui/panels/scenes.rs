@@ -38,12 +38,15 @@ pub(in crate::ui) fn show(
         state.rename = None;
     }
 
+    // Taken before the strip is shown, so the list gets a `Ui` that cannot
+    // reach the buttons — see `toolbar::reserve_list`.
+    let mut list = toolbar::reserve_list(ui, "scenes_list_area");
     show_toolbar(ui, snapshot, i18n, actions);
 
     egui::ScrollArea::vertical()
         .id_salt("scenes_list")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show(&mut list, |ui| {
             for scene in &snapshot.items {
                 let selected = snapshot.selected_scene_id == Some(scene.id);
                 let row_width = ui.available_width();

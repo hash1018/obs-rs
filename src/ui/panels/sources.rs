@@ -56,7 +56,11 @@ pub(in crate::ui) fn show(
     }
     state.known_item_count = snapshot.items.len();
 
+    // Taken before the strip is shown, so the list gets a `Ui` that cannot
+    // reach the buttons — see `toolbar::reserve_list`.
+    let mut list = toolbar::reserve_list(ui, "sources_list_area");
     show_toolbar(ui, state, editor, snapshot, i18n, actions);
+    let ui = &mut list;
 
     if snapshot.items.is_empty() {
         let fallback_name = i18n.text(TextKey::SourceSelectedScene);

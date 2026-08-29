@@ -64,13 +64,47 @@ pub(in crate::ui) fn show(
         return;
     }
 
-    // Whatever is left after the labels above and the button below, so a
-    // taller dock is a taller meter rather than a taller gap.
+    // Given its own `Ui`, bounded and clipped to this pane. A scroll area
+    // told not to auto-shrink takes the whole height of what it is handed,
+    // and in a squeezed pane that is more than the pane has — so it believed
+    // everything fit, showed no scrollbar, and let the dock's clipping cut a
+    // channel off mid-fader. Handing it the real rectangle is what makes it
+    // scroll instead.
+    let viewport = ui.available_rect_before_wrap().intersect(ui.max_rect());
+    let mut area = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("audio_mixer_viewport")
+            .max_rect(viewport)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    area.set_clip_rect(viewport);
+    let ui = &mut area;
+    // A solid bar rather than egui's default floating one, which is drawn
+    // over the content only while the pointer is inside it. In a dock this
+    // narrow that means a channel visibly cut off with nothing to say it can
+    // be scrolled to — it was scrolling all along and looked like it could
+    // not.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+
+    // Whatever the pane has left after the labels above and the button
+    // below, so a taller dock is a taller meter rather than a taller gap —
+    // and floored, so a shorter one scrolls instead of squeezing the scale
+    // until its labels collide.
     let channel_height = (ui.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
 
-    egui::ScrollArea::horizontal()
+    // Both directions. Sideways is for more sources than fit; downwards is
+    // for a dock shorter than one channel's floor, where the alternative is
+    // a fader cut off halfway with no way to reach its mute button.
+    egui::ScrollArea::both()
         .id_salt("audio_mixer_channels")
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
+        .max_height(viewport.height())
+        // Always drawn, not only under the pointer. egui's default bars
+        // float into view on hover, which for a squeezed dock means a
+        // channel that is visibly cut off with nothing to say it can be
+        // scrolled to — the reason this looked like it had no scrolling at
+        // all rather than like it had some.
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for source in &snapshot.items {
