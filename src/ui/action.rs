@@ -1,5 +1,3 @@
-use eframe::egui;
-
 use crate::i18n::Locale;
 use crate::{
     domain::{SceneId, SceneItemId, Transform},
@@ -16,7 +14,7 @@ pub enum UiAction {
     /// ends, but the picture has to follow the pointer meanwhile.
     DragSceneItem(SceneItemId, Transform),
     SetFullscreen(bool),
-    SetTheme(egui::ThemePreference),
+    SetTheme(crate::settings::Theme),
     SetLocale(Locale),
     /// Begin recording the composited frames. Where the file goes is the
     /// engine's to decide, so this carries nothing.

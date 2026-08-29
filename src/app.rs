@@ -49,14 +49,16 @@ const REPAINT_NOW: Duration = Duration::from_nanos(1);
 
 impl ObsApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let ui_state = UiState::default();
-        cc.egui_ctx.set_theme(ui_state.theme());
-        install_locale_fonts(&cc.egui_ctx);
         let settings_store = SettingsStore::for_current_user();
         let settings = settings_store.load().unwrap_or_else(|error| {
             eprintln!("could not load app settings: {error}");
             AppSettings::default()
         });
+        // Before the first pass draws, so the window never appears in one
+        // palette and switches to another.
+        cc.egui_ctx.set_theme(settings.theme);
+        install_locale_fonts(&cc.egui_ctx);
+        let ui_state = UiState::default();
         if let Err(error) = settings_store.save(&settings) {
             eprintln!("could not save app settings: {error}");
         }
@@ -183,6 +185,9 @@ impl ObsApp {
         if settings.locale != self.settings.locale {
             self.localization.set_locale(settings.locale);
         }
+        if settings.theme != self.settings.theme {
+            ctx.set_theme(settings.theme);
+        }
         // Read when a recording starts, so this reaches the next one rather
         // than any that is running.
         if let Some(engine) = &self.engine {
@@ -266,7 +271,13 @@ impl ObsApp {
                 self.ui_state.open_settings(&self.settings);
             }
             UiAction::ApplySettings(settings) => self.apply_settings(ctx, *settings),
-            UiAction::SetTheme(theme) => ctx.set_theme(theme),
+            UiAction::SetTheme(theme) => {
+                // Through the same path the dialog takes, so the menu's
+                // immediate change is also the one that gets remembered.
+                let mut settings = self.settings.clone();
+                settings.theme = theme;
+                self.apply_settings(ctx, settings);
+            }
             UiAction::SetLocale(locale) => {
                 self.localization.set_locale(locale);
                 self.settings.locale = locale;

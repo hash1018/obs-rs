@@ -1,6 +1,7 @@
 use eframe::egui;
 
 use crate::i18n::{Locale, LocalizationManager, TextKey};
+use crate::settings::Theme;
 
 use super::{UiAction, UiState, docking::DockPanel};
 
@@ -50,23 +51,20 @@ pub fn show(
                     ui.menu_button(i18n.text(TextKey::MenuTheme), |ui| {
                         theme_option(
                             ui,
-                            state,
                             actions,
-                            egui::ThemePreference::System,
+                            Theme::System,
                             i18n.text(TextKey::ThemeSystem),
                         );
                         theme_option(
                             ui,
-                            state,
                             actions,
-                            egui::ThemePreference::Light,
+                            Theme::Light,
                             i18n.text(TextKey::ThemeLight),
                         );
                         theme_option(
                             ui,
-                            state,
                             actions,
-                            egui::ThemePreference::Dark,
+                            Theme::Dark,
                             i18n.text(TextKey::ThemeDark),
                         );
                     });
@@ -111,17 +109,23 @@ fn dock_option(
     }
 }
 
+/// One theme entry, marked when it is the one in force.
+///
+/// The mark is read from egui rather than from any copy this module keeps.
+/// `set_theme` writes exactly this, so it is the one answer that cannot drift
+/// from what the window is actually drawing — which a second copy here did,
+/// once the Settings dialog gained a way to change it too.
 fn theme_option(
     ui: &mut egui::Ui,
-    state: &mut UiState,
     actions: &mut Vec<UiAction>,
-    theme: egui::ThemePreference,
+    theme: Theme,
     label: impl Into<egui::WidgetText>,
 ) {
-    if ui
-        .selectable_value(&mut state.theme, theme, label)
-        .changed()
-    {
+    let current: Theme = ui
+        .ctx()
+        .options(|options| options.theme_preference)
+        .into();
+    if ui.selectable_label(current == theme, label).clicked() {
         actions.push(UiAction::SetTheme(theme));
         ui.close();
     }

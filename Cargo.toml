@@ -33,6 +33,7 @@ serde = { version = "1", features = ["derive"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 toml = "0.9"
 unic-langid = "0.9.6"
+rfd = "0.17.2"
 
 # The pipeline library this application is built on. Taken by path rather
 # than from crates.io: it is developed alongside obs-rs in the same tree, and

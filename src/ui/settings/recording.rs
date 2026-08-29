@@ -11,12 +11,20 @@ use time::OffsetDateTime;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE};
 
+/// Room for "Browse…" in either language, fixed so the field beside it does
+/// not change width when the language does.
+const BROWSE_WIDTH: f32 = 84.0;
+
+/// Returns whether the folder picker was asked for. Reported rather than
+/// opened here, because opening one needs the dialog's own state — this page
+/// is handed nothing but the draft.
 pub(super) fn show(
     ui: &mut egui::Ui,
     draft: &mut AppSettings,
     recording: bool,
+    picking: bool,
     i18n: &LocalizationManager,
-) {
+) -> bool {
     if recording {
         // Stated, not enforced by disabling the fields: the settings are for
         // the *next* recording, so editing them now is a reasonable thing to
@@ -29,16 +37,38 @@ pub(super) fn show(
         ui.add_space(8.0);
     }
 
+    let mut browse = false;
     egui::Grid::new("settings_recording")
         .num_columns(2)
         .spacing([12.0, 8.0])
         .show(ui, |ui| {
             ui.label(i18n.text(TextKey::SettingsRecordingDirectory));
-            ui.add(
-                egui::TextEdit::singleline(&mut draft.recording.directory)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(i18n.text(TextKey::SettingsRecordingDirectoryHint)),
-            );
+            ui.horizontal(|ui| {
+                // The field is sized from what is left after the button
+                // rather than allowed to grow, so the button cannot be pushed
+                // off the end of the row by a long path.
+                let field = ui.available_width() - BROWSE_WIDTH - ui.spacing().item_spacing.x;
+                ui.add_sized(
+                    [field.max(80.0), ui.spacing().interact_size.y],
+                    egui::TextEdit::singleline(&mut draft.recording.directory)
+                        .hint_text(i18n.text(TextKey::SettingsRecordingDirectoryHint)),
+                );
+                // Disabled while one is open: the desktop's picker is a
+                // separate window, and a second would sit behind the first
+                // with nothing to say it was there.
+                if ui
+                    .add_enabled_ui(!picking, |ui| {
+                        ui.add_sized(
+                            [BROWSE_WIDTH, ui.spacing().interact_size.y],
+                            egui::Button::new(i18n.text(TextKey::ActionBrowse)),
+                        )
+                    })
+                    .inner
+                    .clicked()
+                {
+                    browse = true;
+                }
+            });
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsRecordingNamePrefix));
@@ -80,6 +110,7 @@ pub(super) fn show(
             );
             ui.end_row();
         });
+    browse
 }
 
 /// The file the next recording would be written to, as a whole path.

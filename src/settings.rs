@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
 
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::Locale;
@@ -13,7 +14,50 @@ use crate::i18n::Locale;
 #[serde(default)]
 pub struct AppSettings {
     pub locale: Locale,
+    pub theme: Theme,
     pub recording: RecordingSettings,
+}
+
+/// Which palette the window draws in.
+///
+/// This crate's own enum rather than `egui::ThemePreference`, which is not
+/// serialisable — and would not be worth storing directly anyway, since what
+/// is written to a settings file should be named by this application rather
+/// than by whichever version of a UI library it happens to use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    /// Follow whatever the desktop is set to.
+    System,
+    Light,
+    /// The default this application has always started in, kept so that
+    /// persisting the setting does not change what a first run looks like.
+    #[default]
+    Dark,
+}
+
+impl Theme {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+}
+
+impl From<Theme> for egui::ThemePreference {
+    fn from(theme: Theme) -> Self {
+        match theme {
+            Theme::System => Self::System,
+            Theme::Light => Self::Light,
+            Theme::Dark => Self::Dark,
+        }
+    }
+}
+
+impl From<egui::ThemePreference> for Theme {
+    fn from(preference: egui::ThemePreference) -> Self {
+        match preference {
+            egui::ThemePreference::System => Self::System,
+            egui::ThemePreference::Light => Self::Light,
+            egui::ThemePreference::Dark => Self::Dark,
+        }
+    }
 }
 
 /// What a recording is written as, and where.
@@ -175,6 +219,32 @@ mod tests {
             toml::from_str::<AppSettings>(&encoded).unwrap().locale,
             Locale::KoKr
         );
+    }
+
+    /// The theme is written as this application's own name for it, not as
+    /// whatever the UI library happens to call the variant.
+    #[test]
+    fn theme_uses_expected_toml_value() {
+        let settings = AppSettings {
+            theme: Theme::Light,
+            ..AppSettings::default()
+        };
+
+        let encoded = toml::to_string(&settings).expect("encode");
+        assert!(
+            encoded.contains("theme = \"light\"\n"),
+            "unexpected encoding: {encoded}"
+        );
+        assert_eq!(toml::from_str::<AppSettings>(&encoded).unwrap().theme, Theme::Light);
+    }
+
+    /// Dark is what this application has always started in, and persisting
+    /// the setting must not change what a first run looks like.
+    #[test]
+    fn a_file_without_a_theme_still_starts_dark() {
+        let settings: AppSettings = toml::from_str("locale = \"en-US\"\n").expect("load");
+
+        assert_eq!(settings.theme, Theme::Dark);
     }
 
     /// A settings file written before recording was configurable has no

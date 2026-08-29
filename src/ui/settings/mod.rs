@@ -18,6 +18,9 @@
 mod general;
 mod recording;
 
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+
 use eframe::egui;
 
 use crate::i18n::{LocalizationManager, TextKey};
@@ -52,6 +55,13 @@ pub(in crate::ui) struct SettingsDialogState {
     page: SettingsPage,
     /// Seeded by [`SettingsDialogState::open_with`]; meaningless while closed.
     draft: AppSettings,
+    /// A folder picker that is open, waiting to say what was chosen.
+    ///
+    /// The dialog it shows is the desktop's own and stays up until the user
+    /// answers, so it is run on a thread of its own — asking for it from the
+    /// pass that drew the button would freeze this window for as long as the
+    /// picker was open.
+    folder_picker: Option<Receiver<Option<PathBuf>>>,
 }
 
 impl SettingsDialogState {
@@ -63,6 +73,62 @@ impl SettingsDialogState {
     pub(in crate::ui) fn open_with(&mut self, settings: &AppSettings) {
         self.draft = settings.clone();
         self.open = true;
+    }
+
+    /// Whether a folder picker is up, which is what keeps a second one from
+    /// being opened on top of the first.
+    fn picking_folder(&self) -> bool {
+        self.folder_picker.is_some()
+    }
+
+    /// Opens the desktop's folder picker, starting where the field points.
+    fn pick_folder(&mut self, wake_ui: impl Fn() + Send + 'static) {
+        if self.picking_folder() {
+            return;
+        }
+        let start = self.draft.recording.directory_or_default();
+        let (sender, receiver) = mpsc::channel();
+        // Detached: the dialog outlives this pass, and dropping the receiver
+        // when the window closes is what tells the thread nobody is waiting.
+        let spawned = std::thread::Builder::new()
+            .name("folder-picker".to_owned())
+            .spawn(move || {
+                let mut dialog = rfd::FileDialog::new();
+                if start.is_dir() {
+                    dialog = dialog.set_directory(&start);
+                }
+                let picked = dialog.pick_folder();
+                if sender.send(picked).is_ok() {
+                    wake_ui();
+                }
+            });
+        if let Err(error) = spawned {
+            eprintln!("could not open the folder picker: {error}");
+            return;
+        }
+        self.folder_picker = Some(receiver);
+    }
+
+    /// Takes the picker's answer, if it has one.
+    ///
+    /// A cancelled picker is still an answer — it ends the wait and puts the
+    /// button back — so what distinguishes the two is `Some(None)`.
+    fn poll_folder_picker(&mut self) {
+        let Some(receiver) = &self.folder_picker else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(picked) => {
+                if let Some(path) = picked {
+                    self.draft.recording.directory = path.display().to_string();
+                }
+                self.folder_picker = None;
+            }
+            // The thread is gone without answering, which nothing can be done
+            // about except stop waiting for it.
+            Err(mpsc::TryRecvError::Disconnected) => self.folder_picker = None,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
     }
 }
 
@@ -87,8 +153,11 @@ pub(in crate::ui) fn show(
     if !state.open {
         return;
     }
+    state.poll_folder_picker();
+    let picking = state.picking_folder();
 
     let mut open = true;
+    let mut browse = false;
     let mut apply = false;
     let mut close = false;
     egui::Window::new(i18n.text(TextKey::SettingsTitle))
@@ -135,11 +204,19 @@ pub(in crate::ui) fn show(
                             .max_height(PAGE_HEIGHT)
                             .auto_shrink([false, false])
                             .show(ui, |ui| match state.page {
-                                SettingsPage::General => general::show(ui, &mut state.draft, i18n),
-                                SettingsPage::Recording => {
-                                    recording::show(ui, &mut state.draft, recording, i18n)
+                                SettingsPage::General => {
+                                    general::show(ui, &mut state.draft, i18n);
                                 }
-                        });
+                                SettingsPage::Recording => {
+                                    browse = recording::show(
+                                        ui,
+                                        &mut state.draft,
+                                        recording,
+                                        picking,
+                                        i18n,
+                                    );
+                                }
+                            });
                     });
                 });
             });
@@ -158,6 +235,10 @@ pub(in crate::ui) fn show(
             });
         });
 
+    if browse {
+        let ctx = ctx.clone();
+        state.pick_folder(move || ctx.request_repaint());
+    }
     if apply {
         actions.push(UiAction::ApplySettings(Box::new(state.draft.clone())));
     }
