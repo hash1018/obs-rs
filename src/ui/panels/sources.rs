@@ -71,14 +71,11 @@ pub(in crate::ui) fn show(
             ui.weak(i18n.text_with(TextKey::SourceEmpty, &args));
         });
     } else {
-        egui::ScrollArea::vertical()
-            .id_salt("sources_list")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for item in &snapshot.items {
-                    show_source_row(ui, editor, item, i18n, actions);
-                }
-            });
+        toolbar::list_scroll(ui, "sources_list", |ui| {
+            for item in &snapshot.items {
+                show_source_row(ui, editor, item, i18n, actions);
+            }
+        });
     }
 
     show_add_dialog(ui.ctx(), state, snapshot, i18n, actions);

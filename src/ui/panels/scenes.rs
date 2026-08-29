@@ -43,39 +43,36 @@ pub(in crate::ui) fn show(
     let mut list = toolbar::reserve_list(ui, "scenes_list_area");
     show_toolbar(ui, snapshot, i18n, actions);
 
-    egui::ScrollArea::vertical()
-        .id_salt("scenes_list")
-        .auto_shrink([false, false])
-        .show(&mut list, |ui| {
-            for scene in &snapshot.items {
-                let selected = snapshot.selected_scene_id == Some(scene.id);
-                let row_width = ui.available_width();
-                if state
-                    .rename
-                    .as_ref()
-                    .is_some_and(|rename| rename.scene_id == scene.id)
-                {
-                    show_rename_editor(ui, state, snapshot, scene.id, row_width, i18n, actions);
-                    continue;
-                }
-
-                let response = ui.add_sized(
-                    [row_width, SCENE_ROW_HEIGHT],
-                    egui::Button::new(&scene.name).selected(selected),
-                );
-                if response.clicked() {
-                    actions.push(scene_action(SceneCommand::Select(scene.id)));
-                }
-                if response.double_clicked() {
-                    state.rename = Some(RenameState {
-                        scene_id: scene.id,
-                        name: scene.name.clone(),
-                        request_focus: true,
-                        error: None,
-                    });
-                }
+    toolbar::list_scroll(&mut list, "scenes_list", |ui| {
+        for scene in &snapshot.items {
+            let selected = snapshot.selected_scene_id == Some(scene.id);
+            let row_width = ui.available_width();
+            if state
+                .rename
+                .as_ref()
+                .is_some_and(|rename| rename.scene_id == scene.id)
+            {
+                show_rename_editor(ui, state, snapshot, scene.id, row_width, i18n, actions);
+                continue;
             }
-        });
+
+            let response = ui.add_sized(
+                [row_width, SCENE_ROW_HEIGHT],
+                egui::Button::new(&scene.name).selected(selected),
+            );
+            if response.clicked() {
+                actions.push(scene_action(SceneCommand::Select(scene.id)));
+            }
+            if response.double_clicked() {
+                state.rename = Some(RenameState {
+                    scene_id: scene.id,
+                    name: scene.name.clone(),
+                    request_focus: true,
+                    error: None,
+                });
+            }
+        }
+    });
 }
 
 fn show_rename_editor(

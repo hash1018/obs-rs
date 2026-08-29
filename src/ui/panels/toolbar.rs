@@ -155,8 +155,11 @@ fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
 /// still drew two full rows.
 ///
 /// So the split is made here instead, by geometry: the returned `Ui` cannot
-/// reach past what is left, and is clipped to it as well, so a scroll area
-/// inside it sees the real viewport and scrolls rather than overflowing.
+/// reach past what is left, and is clipped to it as well.
+///
+/// The clip alone is not scrolling, though — it hides the overflow rather
+/// than making it reachable. What bounds the scroll area is
+/// [`list_scroll_area`], and a list has to be built with both.
 pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
     let mut rect = ui.available_rect_before_wrap().intersect(ui.max_rect());
     rect.max.y = (rect.max.y - HEIGHT).max(rect.min.y);
@@ -173,6 +176,37 @@ pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
     // has one more to scroll to — which is exactly how it read.
     list.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     list
+}
+
+/// The scroll area a dock's list belongs in, sized to the `Ui`
+/// [`reserve_list`] handed back.
+///
+/// The configuration is the point. `auto_shrink(false)` on an axis makes a
+/// scroll area take the whole of that axis *and grow past it* when the
+/// content is longer, so it never believes it has overflow and never draws a
+/// bar — the rows past the end are simply clipped away, which reads as a list
+/// that has lost them. Shrinking vertically and capping the height is what
+/// makes it scroll instead, and the cap is why the width still fills.
+pub(super) fn list_scroll<R>(
+    list: &mut egui::Ui,
+    id: &'static str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) {
+    let size = egui::vec2(list.available_width(), list.max_rect().height());
+    list.allocate_ui(size, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(id)
+            // Zero, not egui's default of 64. That default is a floor on the
+            // height at which an area is willing to scroll at all: below it
+            // the area expands to its content instead, decides everything
+            // fits, and draws no bar — so a dock left with less than 64
+            // points for its list silently dropped every row past the first
+            // rather than scrolling to them. Measured: a viewport of 64
+            // inside a `Ui` 26 tall, holding 59 of content.
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, false])
+            .show(ui, add);
+    });
 }
 
 #[cfg(test)]

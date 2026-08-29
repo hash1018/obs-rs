@@ -79,6 +79,10 @@ pub(in crate::ui) fn show(
 
     let scrolled = egui::ScrollArea::both()
         .id_salt("audio_mixer_channels")
+        // Zero, not egui's default of 64 — see `toolbar::list_scroll` for
+        // what that default does to a dock squeezed below it.
+        .min_scrolled_height(0.0)
+        .min_scrolled_width(0.0)
         .auto_shrink([false, true])
         .show(&mut channels, |ui| {
             ui.spacing_mut().item_spacing.x = COLUMN_GAP;
