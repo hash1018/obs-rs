@@ -10,8 +10,6 @@ pub enum SourceKind {
     VideoCapture,
     Image,
     Color,
-    AudioInput,
-    AudioOutput,
 }
 
 impl SourceKind {
@@ -22,8 +20,6 @@ impl SourceKind {
             Self::VideoCapture => "video_capture",
             Self::Image => "image",
             Self::Color => "color",
-            Self::AudioInput => "audio_input",
-            Self::AudioOutput => "audio_output",
         }
     }
 
@@ -34,8 +30,6 @@ impl SourceKind {
             "video_capture" => Some(Self::VideoCapture),
             "image" => Some(Self::Image),
             "color" => Some(Self::Color),
-            "audio_input" => Some(Self::AudioInput),
-            "audio_output" => Some(Self::AudioOutput),
             _ => None,
         }
     }
