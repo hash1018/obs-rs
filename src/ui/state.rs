@@ -23,12 +23,13 @@ pub struct UiState {
 impl UiState {
     /// Starts with the arrangement a settings file described.
     ///
-    /// Only the docks come from it. Everything else here is this run's own
-    /// state — an open dialog, a drag in progress — and starting a session
-    /// inside one of those is not something to restore.
-    pub fn with_docks(docks: &crate::ui::WorkspaceDocks) -> Self {
+    /// Only what the user arranged comes from it. Everything else here is
+    /// this run's own state — an open dialog, a drag in progress — and
+    /// starting a session inside one of those is not something to restore.
+    pub fn restored(docks: &crate::ui::WorkspaceDocks, zoom: &crate::ui::PreviewZoom) -> Self {
         Self {
             dock_layout: DockLayout::restored(docks),
+            preview: PreviewViewState::restored(zoom),
             ..Self::default()
         }
     }
@@ -36,6 +37,11 @@ impl UiState {
     /// The dock arrangement as it stands, for the settings file.
     pub fn docks(&self) -> crate::ui::WorkspaceDocks {
         self.dock_layout.placement()
+    }
+
+    /// The Preview zoom as it stands, for the settings file.
+    pub fn preview_zoom(&self) -> crate::ui::PreviewZoom {
+        self.preview.zoom()
     }
 
     /// Asks whether to quit while a recording is running.

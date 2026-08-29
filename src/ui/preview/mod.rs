@@ -17,6 +17,7 @@ use viewport_transform::{ViewportTransform, fit_aspect_ratio};
 
 const PREVIEW_MARGIN: i8 = 18;
 pub(super) use state::PreviewViewState;
+pub use state::PreviewZoom;
 
 pub(super) fn show(
     ui: &mut egui::Ui,

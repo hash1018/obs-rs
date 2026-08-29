@@ -9,7 +9,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::Locale;
-use crate::ui::WorkspaceDocks;
+use crate::ui::{PreviewZoom, WorkspaceDocks};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -34,6 +34,7 @@ pub struct WorkspaceLayout {
     /// first run to the platform's own idea of where a window goes.
     pub window: Option<WindowGeometry>,
     pub docks: WorkspaceDocks,
+    pub preview: PreviewZoom,
 }
 
 /// Where the window was, in the desktop's own coordinates.

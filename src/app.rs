@@ -83,8 +83,9 @@ impl ObsApp {
         // palette and switches to another.
         cc.egui_ctx.set_theme(settings.theme);
         install_locale_fonts(&cc.egui_ctx);
-        // The docks come back arranged; nothing else about the session does.
-        let ui_state = UiState::with_docks(&settings.workspace.docks);
+        // The docks and the Preview zoom come back as they were left; nothing
+        // else about the session does.
+        let ui_state = UiState::restored(&settings.workspace.docks, &settings.workspace.preview);
         if let Err(error) = settings_store.save(&settings) {
             eprintln!("could not save app settings: {error}");
         }
@@ -305,6 +306,7 @@ impl ObsApp {
             ..window
         });
         self.settings.workspace.docks = self.ui_state.docks();
+        self.settings.workspace.preview = self.ui_state.preview_zoom();
         if let Err(error) = self.settings_store.save(&self.settings) {
             eprintln!("could not save the workspace layout: {error}");
         }

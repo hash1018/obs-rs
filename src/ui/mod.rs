@@ -16,6 +16,7 @@ use crate::snapshots::Snapshots;
 
 pub use action::UiAction;
 pub use docking::WorkspaceDocks;
+pub use preview::PreviewZoom;
 pub use state::UiState;
 
 pub(super) struct UiResources<'a> {
