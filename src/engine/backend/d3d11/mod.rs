@@ -17,7 +17,7 @@ use media_pp::{
         AppSink, ChangeGate, D3d11FrameRenderer, D3d11NvencCodec, D3d11NvencEncoder,
         D3d11NvencEncoderOptions, D3d11NvencInputFormat, D3d11Renderer, D3d11VideoCompositor,
         D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle, Mp4Muxer,
-        SubmitError, TeeBuilder, TeeHandle, VideoCompositorOptions, VideoLayer,
+        SubmitError, TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -286,6 +286,10 @@ impl Backend {
                 OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
             )
             .pipe(encoder)
+            // The compositor has been running since the application started, and
+            // its timeline says so. Without this the file is written as
+            // beginning that far in, and a player shows the lead-in as empty.
+            .pipe(TimestampOrigin::new("record-origin"))
             .to(sink)?;
         *recording = Some(self.tee.attach(branch)?);
         Ok(())

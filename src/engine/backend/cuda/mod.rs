@@ -17,7 +17,7 @@ use media_pp::{
         AppSink, ChangeGate, CudaCodec, CudaDevice, CudaEncoder, CudaEncoderOptions,
         CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
         CudaVideoCompositorHandle, CudaVideoLayerHandle, Mp4Muxer, SubmitError, TeeBuilder,
-        TeeHandle, VideoCompositorOptions, VideoLayer,
+        TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     graph::BranchId,
@@ -269,6 +269,10 @@ impl Backend {
                 OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
             )
             .pipe(encoder)
+            // The compositor has been running since the application started, and
+            // its timeline says so. Without this the file is written as
+            // beginning that far in, and a player shows the lead-in as empty.
+            .pipe(TimestampOrigin::new("record-origin"))
             .to(sink)?;
         *recording = Some(self.tee.attach(branch)?);
         Ok(())
