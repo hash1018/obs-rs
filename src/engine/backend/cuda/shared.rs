@@ -253,17 +253,30 @@ impl SharedNv12 {
 
     /// Whether the frame just copied has a tail that was never written.
     ///
-    /// Rapidly resizing a layer makes the compositor emit, roughly once in
-    /// six hundred frames, a frame whose last rows are untouched — the shape
-    /// of a linear write that stopped part way. Those bytes are zero, and
-    /// zero is not a colour this pipeline produces: BT.709 limited-range
-    /// black is Y=16 with both chroma at 128, and every Source arrives
-    /// converted. So all three at zero means nothing wrote there.
+    /// Zero is not a colour this pipeline produces: BT.709 limited-range black
+    /// is Y=16 with both chroma at 128, and every Source arrives converted. So
+    /// all three at zero means nothing wrote there, and dropping the frame
+    /// costs one Preview refresh out of hundreds where showing it is a flash
+    /// of green, which is what zeroed NV12 resolves to.
     ///
-    /// Dropping the frame costs one Preview refresh out of hundreds and is
-    /// invisible; showing it is a flash of green, since that is what zeroed
-    /// NV12 resolves to. The defect itself is upstream in `media-pp` and
-    /// unfound — this only keeps it off the screen.
+    /// # The defect this was written for has been fixed
+    ///
+    /// It was `scale_cuda`: its interpolating kernels answer a size whose
+    /// output matches the input in exactly one dimension with an entirely zero
+    /// surface, which the compositor's blit then copied into the composite.
+    /// Dragging a layer sweeps the scaled size continuously, so it passes
+    /// through that case on the way — which is why this only ever appeared
+    /// while resizing, and at about one frame in six hundred. `media-pp` scales
+    /// through an intermediate size in that case now (`scale_graph::detour`),
+    /// and its own tests cover it.
+    ///
+    /// This check stays anyway. It is the only thing that can tell a partly
+    /// written composite from a real picture, it costs the six kilobytes below
+    /// on a wait that was already happening, and it reports the first
+    /// occurrence rather than papering over it — so a future defect of the same
+    /// shape degrades one Preview frame and says so, instead of flashing
+    /// green. It is not a substitute for fixing one: a recording branch has no
+    /// such guard and cannot skip a frame.
     ///
     /// The last rows are the one part of the frame that still comes back to
     /// the CPU, because they are the only part anything here has to read: six
@@ -294,9 +307,10 @@ impl SharedNv12 {
             report_once(
                 &TAIL_UNWRITTEN,
                 format_args!(
-                    "a composited frame arrived partly unwritten and was dropped; this \
-                     happens while a layer is resized quickly and is not yet understood. \
-                     The Preview skips such frames."
+                    "a composited frame arrived partly unwritten and was dropped. The \
+                     known cause of this — `scale_cuda` answering certain sizes with a \
+                     blank surface — is fixed in media-pp, so seeing it means a new one. \
+                     The Preview skips such frames; a recording would not."
                 ),
             );
         }
