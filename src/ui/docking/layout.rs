@@ -151,6 +151,19 @@ impl DockRegion {
     }
 }
 
+/// What to give a dock joining a region that already holds others: the mean
+/// of what is there, or the default's own weight for an empty one.
+///
+/// The default's 1.0 beside saved fractions would normalize to more than half
+/// the region, so a dock appearing for the first time would open larger than
+/// everything the user had arranged.
+fn typical_weight(region: &DockRegion) -> f32 {
+    if region.weights.is_empty() {
+        return 1.0;
+    }
+    region.weights.values().sum::<f32>() / region.weights.len() as f32
+}
+
 impl DockLayout {
     /// What was arranged, in the shape the settings file keeps it.
     ///
@@ -194,56 +207,73 @@ impl DockLayout {
     /// written still appear, in the region it was given, instead of being
     /// silently absent because an older layout had never heard of it.
     pub(in crate::ui) fn restored(saved: &WorkspaceDocks) -> Self {
-        let mut layout = Self::default();
-        // Everything the file speaks for, worked out before any region is
-        // touched. Incrementally would be wrong: a dock the user moved to a
-        // later region still has to be taken out of the earlier one the
-        // default put it in, and at that point the file has not reached it
-        // yet.
-        let mentioned: HashSet<DockPanel> = saved
-            .regions
-            .iter()
-            .flat_map(|region| region.panels.iter().map(|placement| placement.panel))
+        let Self {
+            regions: defaults,
+            mut states,
+            ..
+        } = Self::default();
+        let mut regions: HashMap<_, _> = REGIONS
+            .into_iter()
+            .map(|id| (id, DockRegion::new([])))
             .collect();
-        // First mention wins. A file naming one dock twice, or in two
+        let mut region_sizes = HashMap::new();
+        // First placement wins. A file naming one dock twice, or in two
         // regions, must not put two of it on screen.
         let mut placed = HashSet::new();
 
         for saved_region in &saved.regions {
-            if !layout.regions.contains_key(&saved_region.region) {
+            let Some(region) = regions.get_mut(&saved_region.region) else {
                 continue;
-            }
-            let mut panels = Vec::new();
-            let mut weights = HashMap::new();
+            };
             for placement in &saved_region.panels {
-                if !layout.states.contains_key(&placement.panel) || !placed.insert(placement.panel)
-                {
+                let Some(state) = states.get_mut(&placement.panel) else {
+                    continue;
+                };
+                if !placed.insert(placement.panel) {
                     continue;
                 }
-                panels.push(placement.panel);
+                region.panels.push(placement.panel);
                 // The same floor `normalized_weights` applies, so a zero or
                 // a negative in a hand-edited file cannot divide by nothing.
-                weights.insert(placement.panel, placement.weight.max(0.01));
-                layout.state_mut(placement.panel).open = placement.open;
+                region
+                    .weights
+                    .insert(placement.panel, placement.weight.max(0.01));
+                state.open = placement.open;
             }
             if let Some(size) = saved_region
                 .size
                 .filter(|size| size.is_finite() && *size > 0.0)
             {
-                layout.region_sizes.insert(saved_region.region, size);
+                region_sizes.insert(saved_region.region, size);
             }
-            let region = layout
-                .regions
-                .get_mut(&saved_region.region)
-                .expect("checked above");
-            // Kept, not replaced: what the file left out is appended below,
-            // in the order the default gave it.
-            region.panels.retain(|panel| !mentioned.contains(panel));
-            let unmentioned = std::mem::replace(&mut region.panels, panels);
-            region.panels.extend(unmentioned);
-            region.weights.extend(weights);
         }
-        layout
+
+        // Whatever the file did not place goes back where the default layout
+        // puts it. That is what lets a dock added since the file was written
+        // still appear — and it is also the floor under a file that names a
+        // region twice, or one region emptily, which would otherwise leave a
+        // window with no docks at all and then be saved over the good file on
+        // the way out.
+        for (id, default_region) in &defaults {
+            let region = regions.get_mut(id).expect("every region is seeded above");
+            for panel in &default_region.panels {
+                if !placed.insert(*panel) {
+                    continue;
+                }
+                region.panels.push(*panel);
+                // Sized like the docks already beside it rather than at the
+                // default's own 1.0, which normalizes to more than half a
+                // region and would make a newly added dock the largest thing
+                // in it.
+                region.weights.insert(*panel, typical_weight(region));
+            }
+        }
+
+        Self {
+            regions,
+            states,
+            region_sizes,
+        }
     }
 
     /// Records what a region was actually drawn at, so closing the
@@ -632,5 +662,84 @@ mod tests {
         for weight in restored.normalized_weights(DockRegionId::Left, &panels) {
             assert!(weight.is_finite() && weight > 0.0, "weight was {weight}");
         }
+    }
+
+    /// A file naming one region twice must not lose the docks the other entry
+    /// placed there.
+    ///
+    /// It did: the second entry replaced the region's panel list outright,
+    /// so an empty duplicate emptied the region — and since the arrangement
+    /// is written back on exit, the next close saved that emptiness over the
+    /// good file. A window with no docks and no way to get them back.
+    #[test]
+    fn a_region_named_twice_keeps_what_the_first_entry_placed() {
+        let full = DockLayout::default().placement();
+        let mut saved = full.clone();
+        // The shape a hand-edited file produced: the real entry, and an empty
+        // one for the same region after it.
+        saved.regions.push(RegionPlacement {
+            region: DockRegionId::Left,
+            size: Some(300.0),
+            panels: Vec::new(),
+        });
+
+        let restored = DockLayout::restored(&saved);
+
+        assert_eq!(
+            restored.visible_panels(DockRegionId::Left),
+            vec![
+                DockPanel::Scenes,
+                DockPanel::Sources,
+                DockPanel::AudioMixer,
+                DockPanel::Controls,
+            ]
+        );
+    }
+
+    /// And a file that places nothing at all falls back to the default
+    /// arrangement rather than to an empty window.
+    #[test]
+    fn a_file_that_places_nothing_comes_back_as_the_default() {
+        let empty = WorkspaceDocks {
+            regions: vec![RegionPlacement {
+                region: DockRegionId::Left,
+                size: None,
+                panels: Vec::new(),
+            }],
+        };
+
+        let restored = DockLayout::restored(&empty);
+
+        assert_eq!(
+            restored.visible_panels(DockRegionId::Left),
+            DockLayout::default().visible_panels(DockRegionId::Left)
+        );
+    }
+
+    /// A dock appearing for the first time should open at a size like the
+    /// ones beside it, not at the default weight of 1.0 — which against saved
+    /// quarters normalizes to more than half the region.
+    #[test]
+    fn a_dock_the_file_never_heard_of_opens_at_a_normal_size() {
+        let mut older = DockLayout::default().placement();
+        for region in &mut older.regions {
+            region
+                .panels
+                .retain(|placement| placement.panel != DockPanel::Controls);
+        }
+
+        let restored = DockLayout::restored(&older);
+
+        let panels = restored.visible_panels(DockRegionId::Left);
+        let weights = restored.normalized_weights(DockRegionId::Left, &panels);
+        let index = panels
+            .iter()
+            .position(|panel| *panel == DockPanel::Controls)
+            .expect("the dock the file omitted is back");
+        assert!(
+            weights[index] < 0.5,
+            "a newly added dock took {} of the region",
+            weights[index]
+        );
     }
 }
