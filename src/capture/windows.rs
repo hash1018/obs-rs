@@ -9,7 +9,7 @@
 use std::ffi::c_void;
 
 use windows::Win32::{
-    Foundation::{CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, RECT},
+    Foundation::{CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, PROPERTYKEY, RECT},
     Graphics::{
         Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW},
@@ -23,6 +23,13 @@ use windows::Win32::{
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
         WS_EX_TOOLWINDOW,
     },
+};
+use windows::Win32::{
+    Media::Audio::{
+        DEVICE_STATE, EDataFlow, ERole, IMMDeviceEnumerator, IMMNotificationClient,
+        IMMNotificationClient_Impl, MMDeviceEnumerator,
+    },
+    System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx},
 };
 use windows::core as windows_core;
 
@@ -298,6 +305,111 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
             is_default: device.is_default,
         })
         .collect()
+}
+
+/// Watches WASAPI for endpoints appearing, going, or changing which one is
+/// default, calling `on_change` each time.
+///
+/// The callback arrives on a system thread of Windows' choosing, and several
+/// times for what a person did once: plugging a microphone in raises an add,
+/// a state change, and — if it becomes the default — a default change. So
+/// `on_change` must be cheap and idempotent; it is a wake-up, not an event.
+///
+/// Dropping the returned watch unregisters. Doing so is not optional: the
+/// callback holds whatever the closure captured, and an endpoint enumerator
+/// that is never told to let go keeps calling into it.
+pub fn watch_audio_devices(
+    on_change: impl Fn() + Send + Sync + 'static,
+) -> Result<AudioDeviceWatch, windows::core::Error> {
+    // `MULTITHREADED` because nothing here pumps a message loop, and an
+    // apartment that never does is one COM calls can deadlock against.
+    // `S_FALSE` means this thread was already initialized, which is not an
+    // error — `RPC_E_CHANGED_MODE` would be, and is left to propagate.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()? };
+    let enumerator: IMMDeviceEnumerator =
+        unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
+    let client: IMMNotificationClient = EndpointWatch {
+        on_change: Box::new(on_change),
+    }
+    .into();
+    unsafe { enumerator.RegisterEndpointNotificationCallback(&client)? };
+    Ok(AudioDeviceWatch { enumerator, client })
+}
+
+/// Keeps a WASAPI endpoint notification registration alive.
+///
+/// Both fields are held for `Drop`'s sake rather than read: the enumerator is
+/// what can unregister, and the client is the exact interface pointer it has
+/// to be given to do so.
+pub struct AudioDeviceWatch {
+    enumerator: IMMDeviceEnumerator,
+    client: IMMNotificationClient,
+}
+
+impl Drop for AudioDeviceWatch {
+    fn drop(&mut self) {
+        // Nothing to do about a failure here, and nothing that reads an
+        // error: this runs while the owner is going away.
+        let _ = unsafe {
+            self.enumerator
+                .UnregisterEndpointNotificationCallback(&self.client)
+        };
+    }
+}
+
+/// The COM object Windows calls back into.
+///
+/// Every method reports the same thing — that the set of endpoints is not
+/// what it was — because that is all a caller here acts on. Which endpoint
+/// and how it changed is deliberately dropped: the answer is always to
+/// enumerate again, and a watcher that tried to track the difference itself
+/// would be keeping a second copy of what the enumeration already says.
+#[windows_core::implement(IMMNotificationClient)]
+struct EndpointWatch {
+    on_change: Box<dyn Fn() + Send + Sync>,
+}
+
+#[allow(non_snake_case)]
+impl IMMNotificationClient_Impl for EndpointWatch_Impl {
+    fn OnDeviceStateChanged(
+        &self,
+        _device_id: &windows_core::PCWSTR,
+        _new_state: DEVICE_STATE,
+    ) -> windows_core::Result<()> {
+        (self.on_change)();
+        Ok(())
+    }
+
+    fn OnDeviceAdded(&self, _device_id: &windows_core::PCWSTR) -> windows_core::Result<()> {
+        (self.on_change)();
+        Ok(())
+    }
+
+    fn OnDeviceRemoved(&self, _device_id: &windows_core::PCWSTR) -> windows_core::Result<()> {
+        (self.on_change)();
+        Ok(())
+    }
+
+    fn OnDefaultDeviceChanged(
+        &self,
+        _flow: EDataFlow,
+        _role: ERole,
+        _default_device_id: &windows_core::PCWSTR,
+    ) -> windows_core::Result<()> {
+        (self.on_change)();
+        Ok(())
+    }
+
+    /// A property changing is not an endpoint appearing or going — a volume
+    /// or a renamed device raises this — so it is the one notification that
+    /// is not passed on.
+    fn OnPropertyValueChanged(
+        &self,
+        _device_id: &windows_core::PCWSTR,
+        _key: &PROPERTYKEY,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

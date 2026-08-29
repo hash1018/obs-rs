@@ -2433,6 +2433,7 @@ dependencies = [
  "unic-langid",
  "wgpu",
  "windows",
+ "windows-core",
  "winit",
  "x11rb",
 ]

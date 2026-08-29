@@ -20,9 +20,16 @@
 //! instead of a Windows-shaped list leaking into the rest of the app.
 //!
 //! Audio is the easy case and lives here too — see [`audio_devices`]. It has
-//! no portal, no permission prompt and no fork: every platform answers with a
-//! list. It is the one thing in this module that reads through `media-pp`,
-//! which already enumerates both backends for its own capture sources.
+//! no portal and no permission prompt: every platform answers with a list,
+//! and both read it through `media-pp`, which already enumerates each backend
+//! for its own capture sources.
+//!
+//! Being *told* the list changed does fork, though — see
+//! [`watch_audio_devices`]. Windows raises endpoint notifications a process
+//! can subscribe to, so it does; PipeWire's equivalent would mean a second
+//! connection and loop of this crate's own, so Linux re-enumerates on a timer
+//! instead. Both answer the same question, and neither is `media-pp`'s: it
+//! captures the endpoint it is handed and has no opinion on which exist.
 
 // Display-target enumeration is wired into the Sources dock. Window targets
 // are retained for the upcoming Window Capture picker, so part of this shared
@@ -129,6 +136,52 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
         Vec::new()
     }
 }
+
+/// Calls `on_change` whenever the set of audio endpoints is not what it was —
+/// one plugged in, one gone, or a different one now default.
+///
+/// A wake-up rather than an event: it says to look again, not what changed.
+/// It can arrive several times for what a person did once, and it arrives on
+/// a thread this crate does not own, so the callback must be cheap and safe
+/// to run twice.
+///
+/// `None` means this platform will not report changes and the caller sees
+/// whatever was there when it last enumerated. The reason is reported where
+/// it is known.
+///
+/// Watching stops when the returned value is dropped, and it has to be held
+/// for exactly as long as the callback should keep firing.
+pub fn watch_audio_devices(
+    on_change: impl Fn() + Send + Sync + 'static,
+) -> Option<AudioDeviceWatch> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::watch_audio_devices(on_change)
+            .inspect_err(|error| eprintln!("could not watch audio devices: {error}"))
+            .ok()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::watch_audio_devices(on_change)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = on_change;
+        None
+    }
+}
+
+/// What holds an endpoint watch open. Dropping it stops the notifications.
+///
+/// Each platform's own type, aliased rather than wrapped: the two have
+/// nothing in common but their lifetime, and there is nothing to ask them
+/// once they exist.
+#[cfg(target_os = "windows")]
+pub type AudioDeviceWatch = windows::AudioDeviceWatch;
+#[cfg(target_os = "linux")]
+pub type AudioDeviceWatch = linux::AudioDeviceWatch;
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub struct AudioDeviceWatch;
 
 /// A monitor's place in the virtual desktop. Signed origin: a display left of
 /// or above the primary one has negative coordinates.

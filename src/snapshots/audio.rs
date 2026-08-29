@@ -27,4 +27,15 @@ pub struct AudioSourceSnapshot {
     /// here rather than added later so the dock's layout is the one it will
     /// keep, and so the value has somewhere to arrive.
     pub peak_db: Option<f32>,
+    /// Whether a capture is running behind this source.
+    ///
+    /// `false` means the machine has no endpoint it could be opened on — an
+    /// unplugged microphone, or a kind of device this machine has none of.
+    /// The mixer dock leaves such a source out entirely rather than drawing a
+    /// channel that can never move, and puts it back when the device arrives.
+    ///
+    /// The project still holds it either way: this is about what is running,
+    /// not about what the user asked for. It defaults to shown, so a source
+    /// is hidden only once something has positively said it is not running.
+    pub running: bool,
 }

@@ -62,7 +62,17 @@ pub(in crate::ui) fn show(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    if snapshot.items.is_empty() {
+    // Only what is actually running. A source whose device is not plugged
+    // in has no channel here at all rather than a dead one — see
+    // `AudioSourceSnapshot::running`. Collected once because the mute strip
+    // below places its buttons by column index, so the two have to be
+    // walking the same sequence.
+    let channels: Vec<&AudioSourceSnapshot> = snapshot
+        .items
+        .iter()
+        .filter(|source| source.running)
+        .collect();
+    if channels.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.weak(i18n.text(TextKey::AudioEmpty));
         });
@@ -74,20 +84,20 @@ pub(in crate::ui) fn show(
     // `reserve_list` is what bounds the scrolling half — see its own docs on
     // why a scroll area cannot be trusted to stay inside the space left for
     // it.
-    let mut channels = toolbar::reserve_list(ui, "audio_mixer_channels_area");
-    let channel_height = (channels.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
+    let mut list = toolbar::reserve_list(ui, "audio_mixer_channels_area");
+    let channel_height = (list.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
 
     // The same settings every other dock scrolls with — only the axes differ,
     // because this is the one whose content can also outgrow its width.
     let scrolled = toolbar::scrolls_like_a_dock(
-        &mut channels,
+        &mut list,
         egui::ScrollArea::both().id_salt("audio_mixer_channels"),
     )
     .auto_shrink([false, true])
-    .show(&mut channels, |ui| {
+    .show(&mut list, |ui| {
         ui.spacing_mut().item_spacing.x = COLUMN_GAP;
         ui.horizontal_top(|ui| {
-            for source in &snapshot.items {
+            for source in &channels {
                 // Scoped per source: every column holds the same widgets,
                 // so without this they would collide on ids derived from
                 // their position alone.
@@ -102,7 +112,7 @@ pub(in crate::ui) fn show(
         ui.add_space(toolbar::BOTTOM_GAP);
     });
 
-    show_mute_strip(ui, snapshot, scrolled.state.offset.x, i18n, actions);
+    show_mute_strip(ui, &channels, scrolled.state.offset.x, i18n, actions);
 }
 
 /// The mute buttons, in a strip below the channels rather than inside them.
@@ -118,14 +128,14 @@ pub(in crate::ui) fn show(
 /// `Ui` happened to have.
 fn show_mute_strip(
     ui: &mut egui::Ui,
-    snapshot: &AudioSnapshot,
+    channels: &[&AudioSourceSnapshot],
     offset_x: f32,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     toolbar::strip(ui, "audio_mixer_mutes", |ui| {
         let origin = ui.max_rect();
-        for (index, source) in snapshot.items.iter().enumerate() {
+        for (index, source) in channels.iter().enumerate() {
             let left = origin.left() + index as f32 * (SOURCE_WIDTH + COLUMN_GAP) - offset_x;
             let rect = egui::Rect::from_min_size(
                 egui::pos2(left, origin.center().y - MUTE_HEIGHT / 2.0),

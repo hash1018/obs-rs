@@ -292,6 +292,7 @@ fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot
             gain_db: source.gain_db,
             muted: source.muted,
             peak_db: None,
+            running: true,
         })
         .collect();
     Ok(AudioSnapshot { items })

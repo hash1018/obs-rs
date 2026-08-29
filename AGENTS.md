@@ -27,7 +27,7 @@ When additional read-only UI inputs are required, extend `UiResources` instead o
 
 Capture is deliberately split in two, and both halves need writing:
 
-- `src/capture/<os>.rs` — what the user can pick. Enumerate targets, or return `SourcePicker::SystemDialog` where the system owns that choice. No `media-pp` in the screen-capture half; `audio_devices` is the documented exception.
+- `src/capture/<os>.rs` — what the user can pick. Enumerate targets, or return `SourcePicker::SystemDialog` where the system owns that choice. No `media-pp` in the screen-capture half; `audio_devices` and `watch_audio_devices` are the documented exceptions.
 - `src/engine/backend/<name>` — the compositor, the capture Sources that feed it, and how its frames reach wgpu. These three are one unit and cannot be mixed: `media-pp` compares memory domains when a branch is built, so a D3D11 capture cannot feed a CUDA compositor and no element converts between them. `engine/backend/mod.rs` documents what a backend must provide; `unsupported.rs` is what a platform gets until it has one, and it compiles.
 
 Linux (`engine/backend/cuda`) and Windows (`engine/backend/d3d11`) are written; macOS is what remains, and `media-pp` has no capture or compositor for it yet. Nothing in `src/engine` above the backend should need changing for a new one.

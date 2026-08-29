@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
@@ -43,7 +44,7 @@ pub struct ObsApp {
     /// the next launch is a smaller cost than doing that sixty times a
     /// second. Refreshing on device change is what a hotplug notification
     /// would be for, and neither backend offers one here yet.
-    audio_devices: Vec<AudioDeviceTarget>,
+    audio_devices: Arc<Vec<AudioDeviceTarget>>,
 }
 
 /// What the engine's wake asks egui to wait before repainting — which is
@@ -129,7 +130,7 @@ impl ObsApp {
             settings,
             settings_store,
             ui_actions: Vec::new(),
-            audio_devices: crate::capture::audio_devices(),
+            audio_devices: Arc::new(crate::capture::audio_devices()),
             // Without it the mixer draws what the project holds and nothing
             // is captured, which is what this application did until now.
             audio: AudioManager::spawn(move || audio_repaint_ctx.request_repaint())
@@ -260,17 +261,28 @@ impl ObsApp {
         self.ui_state.confirm_exit();
     }
 
-    /// Fills in each mixer channel's level.
+    /// Fills in each mixer channel's level, and whether it has anything
+    /// behind it at all.
     ///
     /// Read every pass rather than pushed with the snapshot: a peak changes
     /// with the audio, not with the project, and the project publishes only
-    /// when something is edited.
+    /// when something is edited. Whether a source is running changes with
+    /// neither — it changes when a device is plugged in — so it arrives the
+    /// same way.
     fn poll_audio_levels(&mut self) {
         let Some(manager) = &self.audio else {
             return;
         };
         for source in &mut self.snapshots.audio.items {
             source.peak_db = manager.peak_db(source.id);
+            // Left as it was until something has actually been published, so
+            // the docks do not blink empty on the first pass.
+            if let Some(running) = manager.is_running(source.id) {
+                source.running = running;
+            }
+        }
+        if let Some(devices) = manager.devices() {
+            self.audio_devices = devices;
         }
     }
 

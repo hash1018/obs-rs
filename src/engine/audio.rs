@@ -60,6 +60,7 @@ use media_pp::{
     pipeline::Pipeline,
 };
 
+use crate::capture::AudioDeviceTarget;
 use crate::domain::{AudioSourceId, AudioSourceKind};
 use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
@@ -95,6 +96,15 @@ impl Levels {
     pub(super) fn peak_db(&self, id: AudioSourceId) -> Option<f32> {
         let bits = self.peaks.get(&id)?.load(Ordering::Relaxed);
         (bits != 0).then(|| f32::from_bits(bits))
+    }
+
+    /// Whether this source has a capture running behind it.
+    ///
+    /// Its counter exists exactly while it does: `AudioEngine` inserts one
+    /// when a source opens and removes it when the source closes, so asking
+    /// whether the counter is here is asking whether the capture is.
+    pub(super) fn is_running(&self, id: AudioSourceId) -> bool {
+        self.peaks.contains_key(&id)
     }
 }
 
@@ -162,28 +172,41 @@ impl AudioEngine {
         &self.levels
     }
 
-    /// Brings the running sources in line with what the project holds.
+    /// Brings the running sources in line with what the project holds and
+    /// what the machine currently has plugged in.
     ///
     /// Gain and mute are handle calls on a source that is already open. A
     /// device change, or a source appearing or going, touches only that
-    /// source.
-    pub(super) fn apply(&mut self, snapshot: &AudioSnapshot) {
-        let Some(mixer) = &self.mixer else {
+    /// source. Called again on every endpoint change too, which is what
+    /// opens a source whose device has just arrived — and closes one whose
+    /// device has just left.
+    pub(super) fn apply(&mut self, snapshot: &AudioSnapshot, devices: &[AudioDeviceTarget]) {
+        if self.mixer.is_none() {
             return;
-        };
+        }
 
         // Gone from the project: close it and take its registration back.
         let wanted: Vec<AudioSourceId> = snapshot.items.iter().map(|source| source.id).collect();
-        self.sources.retain(|id, open| {
-            if wanted.contains(id) {
-                return true;
-            }
-            mixer.handle.remove_source(&open.name);
-            false
-        });
-        self.levels.peaks.retain(|id, _| wanted.contains(id));
+        let dropped: Vec<AudioSourceId> = self
+            .sources
+            .keys()
+            .copied()
+            .filter(|id| !wanted.contains(id))
+            .collect();
+        for id in dropped {
+            self.close(id);
+        }
 
         for source in &snapshot.items {
+            // Nothing to open it on. Closing rather than leaving it running
+            // is what an unplugged microphone needs: the capture behind it
+            // has lost its endpoint, and the mixer dock hides a source that
+            // is not running — so one left in the map would show a channel
+            // with a meter that can never move again.
+            if !device_available(devices, source) {
+                self.close(source.id);
+                continue;
+            }
             match self.sources.get(&source.id) {
                 // Already open on the endpoint asked for: the fader and the
                 // mute button are all that can have changed.
@@ -196,20 +219,33 @@ impl AudioEngine {
         }
     }
 
-    /// Closes this source if it was open and opens it again on the endpoint
-    /// the project now names.
-    fn reopen(&mut self, source: &AudioSourceSnapshot) {
+    /// Stops one source and takes its mixer registration back, leaving the
+    /// project's own entry alone — this is about what is running, not about
+    /// what the user asked for.
+    ///
+    /// Removing its counter is what tells the dock the channel is gone, so
+    /// every path that stops a source goes through here rather than dropping
+    /// it out of the map directly.
+    fn close(&mut self, id: AudioSourceId) {
         let Some(mixer) = &self.mixer else {
             return;
         };
-        let name = format!("audio-{}", source.id.0);
-        // Dropped before the new one opens: two captures of one endpoint is
-        // something both backends allow and neither is what was asked for.
-        if let Some(previous) = self.sources.remove(&source.id) {
-            drop(previous);
-            mixer.handle.remove_source(&name);
+        if let Some(open) = self.sources.remove(&id) {
+            mixer.handle.remove_source(&open.name);
         }
-        self.levels.peaks.remove(&source.id);
+        self.levels.peaks.remove(&id);
+    }
+
+    /// Closes this source if it was open and opens it again on the endpoint
+    /// the project now names.
+    fn reopen(&mut self, source: &AudioSourceSnapshot) {
+        let name = format!("audio-{}", source.id.0);
+        // Closed before the new one opens: two captures of one endpoint is
+        // something both backends allow and neither is what was asked for.
+        self.close(source.id);
+        let Some(mixer) = &self.mixer else {
+            return;
+        };
 
         match open_source(&mixer.handle, &name, source) {
             Ok((open, peak)) => {
@@ -219,13 +255,27 @@ impl AudioEngine {
             Err(error) => {
                 // One source that cannot open must not cost the others
                 // theirs — a missing microphone is not a reason to lose
-                // desktop audio. Its meter stays empty, which is what says
-                // so.
+                // desktop audio. The mixer dock leaves its channel out until
+                // it opens, which is what says so.
                 eprintln!("could not open audio source {}: {error}", source.name);
                 mixer.handle.remove_source(&name);
             }
         }
     }
+}
+
+/// Whether opening this source could find an endpoint at all.
+///
+/// The same question [`pick`] answers, asked of a list instead of by opening
+/// one: the endpoint it stored if that is still there, and otherwise the
+/// default for its kind, which is what `pick` falls back to. The two have to
+/// agree — this deciding a source is unopenable that `pick` would have opened
+/// is a channel missing from the dock for no reason.
+fn device_available(devices: &[AudioDeviceTarget], source: &AudioSourceSnapshot) -> bool {
+    devices.iter().any(|device| {
+        device.kind == source.kind
+            && (source.device.as_deref() == Some(device.id.as_str()) || device.is_default)
+    })
 }
 
 /// The mixer, alone in a pipeline of its own.
@@ -423,6 +473,20 @@ fn pick<T>(
         .ok_or_else(|| "this machine reports no default audio device of that kind".into())
 }
 
+/// What reaches the audio thread.
+///
+/// Two things move the graph, and they are not the same event: the project
+/// saying what should be running, and the machine saying what it can be run
+/// on. Either alone is not enough to decide anything — a source is open when
+/// the project asks for it *and* an endpoint exists to open it on.
+enum AudioCommand {
+    /// What the project now holds.
+    Project(Box<AudioSnapshot>),
+    /// An endpoint appeared, went, or became the default. Says to look
+    /// again, not what changed — see [`crate::capture::watch_audio_devices`].
+    DevicesChanged,
+}
+
 /// Owns the audio graph on a thread of its own.
 ///
 /// Separate from `EngineManager` rather than folded into it: building a
@@ -432,26 +496,66 @@ fn pick<T>(
 pub struct AudioManager {
     /// `Option` only so `Drop` can close the channel by taking it, which is
     /// what ends the worker's loop.
-    commands: Option<Sender<AudioSnapshot>>,
+    commands: Option<Sender<AudioCommand>>,
     /// Republished on every rebuild, because the set of sources it covers
     /// changes with them. `None` until the first graph is built.
     levels: Arc<ArcSwapOption<Levels>>,
+    /// Every endpoint the machine currently has, for the device pickers.
+    ///
+    /// Published from here rather than enumerated by the UI because this is
+    /// the side that is told when the answer changes. A list taken once at
+    /// startup is missing whatever was plugged in since.
+    devices: Arc<ArcSwapOption<Vec<AudioDeviceTarget>>>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl AudioManager {
     pub fn spawn(wake_ui: impl Fn() + Send + 'static) -> std::io::Result<Self> {
-        let (commands, command_rx) = mpsc::channel::<AudioSnapshot>();
+        let (commands, command_rx) = mpsc::channel::<AudioCommand>();
         let levels = Arc::new(ArcSwapOption::empty());
+        let devices = Arc::new(ArcSwapOption::empty());
         let worker = thread::Builder::new().name("audio".to_owned()).spawn({
             let levels = Arc::clone(&levels);
+            let published_devices = Arc::clone(&devices);
+            let watch_commands = commands.clone();
             move || {
                 let mut engine = AudioEngine::new();
-                // Ends when the sender drops, which is this manager being
+                let mut known_devices = crate::capture::audio_devices();
+                published_devices.store(Some(Arc::new(known_devices.clone())));
+                // Held for the life of the loop: dropping it stops the
+                // notifications, and the callback it owns is what sends the
+                // command below.
+                let _watch = crate::capture::watch_audio_devices(move || {
+                    let _ = watch_commands.send(AudioCommand::DevicesChanged);
+                });
+                // The project's own snapshot, kept because an endpoint
+                // change has to be answered with it — what to run is still
+                // the project's answer, and the machine only changed what
+                // can be run.
+                let mut project: Option<AudioSnapshot> = None;
+
+                // Ends when every sender drops, which is this manager being
                 // dropped — and dropping the engine with it stops every
                 // capture and the mixer.
-                while let Ok(snapshot) = command_rx.recv() {
-                    engine.apply(&snapshot);
+                while let Ok(first) = command_rx.recv() {
+                    // Coalesced before anything is acted on. Windows raises
+                    // several notifications for one plug, and a fader being
+                    // dragged sends a snapshot per frame; both collapse to
+                    // the one state they all describe.
+                    let mut devices_changed = false;
+                    for command in std::iter::once(first).chain(command_rx.try_iter()) {
+                        match command {
+                            AudioCommand::Project(snapshot) => project = Some(*snapshot),
+                            AudioCommand::DevicesChanged => devices_changed = true,
+                        }
+                    }
+                    if devices_changed {
+                        known_devices = crate::capture::audio_devices();
+                        published_devices.store(Some(Arc::new(known_devices.clone())));
+                    }
+                    if let Some(project) = &project {
+                        engine.apply(project, &known_devices);
+                    }
                     // Cloned, not taken: an apply that changed nothing must
                     // leave the engine holding the counters it is still
                     // writing into.
@@ -463,6 +567,7 @@ impl AudioManager {
         Ok(Self {
             commands: Some(commands),
             levels,
+            devices,
             worker: Some(worker),
         })
     }
@@ -470,7 +575,7 @@ impl AudioManager {
     /// Tells the audio graph what the project now holds.
     pub fn apply(&self, snapshot: &AudioSnapshot) {
         if let Some(commands) = &self.commands {
-            let _ = commands.send(snapshot.clone());
+            let _ = commands.send(AudioCommand::Project(Box::new(snapshot.clone())));
         }
     }
 
@@ -478,6 +583,21 @@ impl AudioManager {
     /// measuring it.
     pub fn peak_db(&self, id: AudioSourceId) -> Option<f32> {
         self.levels.load_full()?.peak_db(id)
+    }
+
+    /// Whether this source has a capture running behind it.
+    ///
+    /// `None` while nothing has been published yet — not "no", because the
+    /// two mean opposite things to a dock deciding what to draw, and the
+    /// first pass would otherwise hide every channel for a frame.
+    pub fn is_running(&self, id: AudioSourceId) -> Option<bool> {
+        Some(self.levels.load_full()?.is_running(id))
+    }
+
+    /// Every audio endpoint the machine currently has, or `None` before the
+    /// first enumeration.
+    pub fn devices(&self) -> Option<Arc<Vec<AudioDeviceTarget>>> {
+        self.devices.load_full()
     }
 }
 
@@ -490,5 +610,103 @@ impl Drop for AudioManager {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(kind: AudioSourceKind, device: Option<&str>) -> AudioSourceSnapshot {
+        AudioSourceSnapshot {
+            id: AudioSourceId(1),
+            name: "test".to_owned(),
+            kind,
+            device: device.map(str::to_owned),
+            gain_db: 0.0,
+            muted: false,
+            peak_db: None,
+            running: true,
+        }
+    }
+
+    fn device(id: &str, kind: AudioSourceKind, is_default: bool) -> AudioDeviceTarget {
+        AudioDeviceTarget {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            kind,
+            is_default,
+        }
+    }
+
+    /// A source that named nothing follows the default, so it is openable
+    /// exactly while one of its kind exists.
+    #[test]
+    fn a_source_with_no_device_needs_a_default_of_its_kind() {
+        let mic = device("mic", AudioSourceKind::Input, true);
+        let speakers = device("speakers", AudioSourceKind::Output, true);
+
+        assert!(device_available(
+            &[mic.clone(), speakers.clone()],
+            &source(AudioSourceKind::Input, None)
+        ));
+        // Only playback endpoints: an input source has nothing to open.
+        assert!(!device_available(
+            &[speakers],
+            &source(AudioSourceKind::Input, None)
+        ));
+        assert!(!device_available(
+            &[],
+            &source(AudioSourceKind::Input, None)
+        ));
+    }
+
+    /// The stored endpoint counts whether or not it is the default one —
+    /// that is the whole point of having stored it.
+    #[test]
+    fn a_stored_device_counts_without_being_the_default() {
+        let devices = [
+            device("built-in", AudioSourceKind::Input, true),
+            device("usb", AudioSourceKind::Input, false),
+        ];
+        assert!(device_available(
+            &devices,
+            &source(AudioSourceKind::Input, Some("usb"))
+        ));
+    }
+
+    /// `pick` falls back to the default when the stored endpoint is gone, so
+    /// this has to call that source openable. The two disagreeing is a
+    /// channel missing from the dock that would have opened fine.
+    #[test]
+    fn a_stored_device_that_is_gone_falls_back_like_pick_does() {
+        let devices = [device("built-in", AudioSourceKind::Input, true)];
+        assert!(device_available(
+            &devices,
+            &source(AudioSourceKind::Input, Some("unplugged"))
+        ));
+
+        // ...and with nothing of that kind left, neither of them can.
+        let devices = [device("speakers", AudioSourceKind::Output, true)];
+        assert!(!device_available(
+            &devices,
+            &source(AudioSourceKind::Input, Some("unplugged"))
+        ));
+    }
+
+    /// A machine can report endpoints while calling none of them default.
+    /// `pick` fails there unless the stored one matches, and this has to say
+    /// the same.
+    #[test]
+    fn endpoints_with_no_default_are_only_openable_by_name() {
+        let devices = [device("usb", AudioSourceKind::Input, false)];
+        assert!(device_available(
+            &devices,
+            &source(AudioSourceKind::Input, Some("usb"))
+        ));
+        assert!(!device_available(
+            &devices,
+            &source(AudioSourceKind::Input, None)
+        ));
     }
 }

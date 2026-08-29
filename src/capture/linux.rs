@@ -8,8 +8,13 @@ use std::{
     collections::HashSet,
     env, fs, io,
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
+    time::Duration,
 };
 
 use ashpd::desktop::{
@@ -363,6 +368,17 @@ async fn try_pick_system_display() -> ashpd::Result<DisplayCaptureSettings> {
     })
 }
 
+/// Watches for PipeWire nodes appearing or going, calling `on_change` each
+/// time the set is not what it was.
+///
+/// A poll rather than a registry subscription. PipeWire does publish node
+/// events, but reaching them means this process opening a second connection
+/// and running a loop of its own beside the one `media-pp` already has —
+/// where re-enumerating is a round trip every couple of seconds and answers
+/// the only question asked of it. If the enumeration ever costs enough to
+/// notice, the subscription is what replaces this.
+///
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,4 +441,69 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
             is_default: device.is_default,
         })
         .collect()
+}
+
+pub fn watch_audio_devices(on_change: impl Fn() + Send + 'static) -> Option<AudioDeviceWatch> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = thread::Builder::new()
+        .name("audio-devices".to_owned())
+        .spawn({
+            let stop = Arc::clone(&stop);
+            move || {
+                // The set this started from, so the first change is reported
+                // and the state it started in is not.
+                let mut known = device_identity();
+                while !stop.load(Ordering::Relaxed) {
+                    thread::sleep(POLL_INTERVAL);
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let current = device_identity();
+                    if current != known {
+                        known = current;
+                        on_change();
+                    }
+                }
+            }
+        })
+        .inspect_err(|error| eprintln!("could not watch audio devices: {error}"))
+        .ok()?;
+    Some(AudioDeviceWatch {
+        stop,
+        worker: Some(worker),
+    })
+}
+
+/// How long a device can be plugged in before the mixer notices. Long enough
+/// that the enumeration is free, short enough that plugging something in and
+/// looking at the dock feels like one action.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// What the poll compares. Node names and which one is default, in
+/// enumeration order — everything the mixer decides anything from, and
+/// nothing else, so a description changing does not read as a device
+/// arriving.
+fn device_identity() -> Vec<(String, bool)> {
+    audio_devices()
+        .into_iter()
+        .map(|device| (device.id, device.is_default))
+        .collect()
+}
+
+/// Keeps the polling thread running.
+pub struct AudioDeviceWatch {
+    stop: Arc<AtomicBool>,
+    /// `Option` only so `Drop` can take the handle to join it.
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for AudioDeviceWatch {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            // Up to one interval, because the thread checks the flag either
+            // side of its sleep rather than waiting on a condition variable.
+            let _ = worker.join();
+        }
+    }
 }
