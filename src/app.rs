@@ -138,9 +138,23 @@ impl ObsApp {
         // A minimised window is nobody looking at the Preview, and the engine
         // can stop putting frames where nobody will sample them. Only the
         // change is sent: this runs every pass, and the engine's queue is not
-        // the place to say the same thing sixty times a second. `None` is a
-        // platform that does not report it, which is not a reason to hide the
-        // Preview from someone who can see it.
+        // the place to say the same thing sixty times a second.
+        //
+        // This never reads `None`, and the `unwrap_or` is defensive rather
+        // than a case that arrives: `egui_winit` already writes
+        // `Some(window.is_minimized().unwrap_or(false))`, so a platform that
+        // cannot answer reaches here as "not minimised" — which is the right
+        // answer anyway, since hiding the Preview from someone who can see it
+        // is the worse mistake.
+        //
+        // On Wayland that is every window: winit answers `None` there
+        // ("clients don't know whether they are minimized or not" — the
+        // protocol does not say), so this saving is unreachable on a Wayland
+        // session and the Preview keeps drawing while minimised. X11 —
+        // including XWayland — reports it and takes the saving. Verified by
+        // running both: under XWayland a minimised window skipped 84
+        // consecutive presents over eight seconds and drew none, and restoring
+        // it copied the picture held from while it was down before resuming.
         let visible = !ctx.input(|input| input.viewport().minimized.unwrap_or(false));
         if self.preview_visible != visible {
             self.preview_visible = visible;
