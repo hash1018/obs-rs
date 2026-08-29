@@ -99,13 +99,21 @@ So when the cause of a problem turns out to be in `media-pp`, fix it in
 frame; a workaround on this side would have hidden it and left every caller
 of that library paying for it.
 
-One defect is still open, and `engine::backend::cuda::nv12` works around it
-rather than fixing it: resizing a layer quickly makes the compositor emit,
-about once in six hundred frames, a frame whose last rows were never
-written. The Preview drops those frames, which a Preview can afford and a
-recording cannot — so this needs solving before an encoder branch exists.
-What has been ruled out is in that commit message; the reproduction needs no
-capture and no portal, only a layer whose rectangle changes every frame.
+The last one to go that way was the green flash: resizing a layer quickly
+made the compositor emit, about once in six hundred frames, a frame whose
+last rows were never written. `engine::backend::cuda::nv12` dropped those
+frames as a workaround while the cause was unknown, and said it needed
+solving before an encoder branch existed, since a recording cannot skip a
+frame the way a Preview can. The cause was `scale_cuda`, whose interpolating
+kernels answer a size matching the input in exactly one dimension with an
+entirely zero surface — a dragged layer sweeps through that size on the way
+— and media-pp `6af3fc9` scales through an intermediate size to avoid it.
+
+That check stays, deliberately: it is the only thing that can tell a partly
+written composite from a real picture, and a future defect of the same shape
+should degrade one Preview frame and announce itself rather than flash green.
+It is not a substitute for fixing such a defect, and an encoder branch will
+have no guard like it.
 
 Some things genuinely belong on this side: how a Source is chosen, how a
 Scene is stored, what the Preview draws. The test is whether the behaviour is
