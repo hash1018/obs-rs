@@ -167,6 +167,11 @@ pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
             .layout(egui::Layout::top_down(egui::Align::LEFT)),
     );
     list.set_clip_rect(rect);
+    // A solid bar rather than egui's default floating one, which is drawn
+    // over the content only while the pointer is inside it. A dock too short
+    // for its list then looks like it is missing a row rather than like it
+    // has one more to scroll to — which is exactly how it read.
+    list.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     list
 }
 

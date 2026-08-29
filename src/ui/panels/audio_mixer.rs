@@ -24,6 +24,7 @@ use crate::project::{AudioCommand, ProjectCommand};
 use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
 use super::super::UiAction;
+use super::toolbar;
 
 /// One source's column: a fader, a meter, the scale between them, and a name
 /// wide enough not to wrap onto a second line — which would push the channel
@@ -33,9 +34,13 @@ const SOURCE_WIDTH: f32 = 112.0;
 const METER_WIDTH: f32 = 9.0;
 /// Room for "-60", the longest label on the scale.
 const SCALE_WIDTH: f32 = 22.0;
-/// What a column spends on everything that is not the channel: the name, the
-/// readout, the mute button, and the gaps between them.
-const FIXED_ROW_HEIGHT: f32 = 76.0;
+/// What a column spends above the channel: the name and the gain readout,
+/// with the gaps around them. The mute button is not in here — it lives in
+/// the strip below, outside the scrolling half.
+const FIXED_ROW_HEIGHT: f32 = 50.0;
+/// Between two columns, agreed on by the channels and the strip of mute
+/// buttons under them so that a button stays beneath its own channel.
+const COLUMN_GAP: f32 = 4.0;
 /// The shortest a channel may be squeezed to. Below this the scale's labels
 /// collide and the fader stops being worth dragging.
 const MIN_CHANNEL_HEIGHT: f32 = 96.0;
@@ -64,48 +69,19 @@ pub(in crate::ui) fn show(
         return;
     }
 
-    // Given its own `Ui`, bounded and clipped to this pane. A scroll area
-    // told not to auto-shrink takes the whole height of what it is handed,
-    // and in a squeezed pane that is more than the pane has — so it believed
-    // everything fit, showed no scrollbar, and let the dock's clipping cut a
-    // channel off mid-fader. Handing it the real rectangle is what makes it
-    // scroll instead.
-    let viewport = ui.available_rect_before_wrap().intersect(ui.max_rect());
-    let mut area = ui.new_child(
-        egui::UiBuilder::new()
-            .id_salt("audio_mixer_viewport")
-            .max_rect(viewport)
-            .layout(egui::Layout::top_down(egui::Align::LEFT)),
-    );
-    area.set_clip_rect(viewport);
-    let ui = &mut area;
-    // A solid bar rather than egui's default floating one, which is drawn
-    // over the content only while the pointer is inside it. In a dock this
-    // narrow that means a channel visibly cut off with nothing to say it can
-    // be scrolled to — it was scrolling all along and looked like it could
-    // not.
-    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+    // The same split every dock here makes: what can overflow scrolls, and
+    // the buttons sit in a strip of their own below it, always reachable.
+    // `reserve_list` is what bounds the scrolling half — see its own docs on
+    // why a scroll area cannot be trusted to stay inside the space left for
+    // it.
+    let mut channels = toolbar::reserve_list(ui, "audio_mixer_channels_area");
+    let channel_height = (channels.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
 
-    // Whatever the pane has left after the labels above and the button
-    // below, so a taller dock is a taller meter rather than a taller gap —
-    // and floored, so a shorter one scrolls instead of squeezing the scale
-    // until its labels collide.
-    let channel_height = (ui.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
-
-    // Both directions. Sideways is for more sources than fit; downwards is
-    // for a dock shorter than one channel's floor, where the alternative is
-    // a fader cut off halfway with no way to reach its mute button.
-    egui::ScrollArea::both()
+    let scrolled = egui::ScrollArea::both()
         .id_salt("audio_mixer_channels")
         .auto_shrink([false, true])
-        .max_height(viewport.height())
-        // Always drawn, not only under the pointer. egui's default bars
-        // float into view on hover, which for a squeezed dock means a
-        // channel that is visibly cut off with nothing to say it can be
-        // scrolled to — the reason this looked like it had no scrolling at
-        // all rather than like it had some.
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-        .show(ui, |ui| {
+        .show(&mut channels, |ui| {
+            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
             ui.horizontal_top(|ui| {
                 for source in &snapshot.items {
                     // Scoped per source: every column holds the same widgets,
@@ -117,6 +93,45 @@ pub(in crate::ui) fn show(
                 }
             });
         });
+
+    show_mute_strip(ui, snapshot, scrolled.state.offset.x, i18n, actions);
+}
+
+/// The mute buttons, in a strip below the channels rather than inside them.
+///
+/// Outside the scrolling half so they stay reachable however short the dock
+/// is, which is what the Scenes and Sources docks already do with their own
+/// toolbars.
+///
+/// Placed by arithmetic rather than laid out, because each one has to stay
+/// under its own channel: the strip is given the channels' horizontal scroll
+/// offset and puts every button where its column is, which is also why the
+/// two agree on [`COLUMN_GAP`] instead of taking whatever spacing their own
+/// `Ui` happened to have.
+fn show_mute_strip(
+    ui: &mut egui::Ui,
+    snapshot: &AudioSnapshot,
+    offset_x: f32,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    toolbar::strip(ui, "audio_mixer_mutes", |ui| {
+        let origin = ui.max_rect();
+        for (index, source) in snapshot.items.iter().enumerate() {
+            let left = origin.left() + index as f32 * (SOURCE_WIDTH + COLUMN_GAP) - offset_x;
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(left, origin.center().y - MUTE_HEIGHT / 2.0),
+                egui::vec2(SOURCE_WIDTH, MUTE_HEIGHT),
+            );
+            // A column scrolled out of view has no button to draw; the strip
+            // clips anything that only half is, so a partly visible one is
+            // still correct.
+            if rect.right() < origin.left() || rect.left() > origin.right() {
+                continue;
+            }
+            show_mute(ui, rect, source, i18n, actions);
+        }
+    });
 }
 
 fn show_channel(
@@ -138,7 +153,6 @@ fn show_channel(
                 show_meter(ui, source, channel_height);
                 show_scale(ui, channel_height);
             });
-            show_mute(ui, source, i18n, actions);
         });
     });
 }
@@ -295,8 +309,19 @@ fn show_scale(ui: &mut egui::Ui, height: f32) {
     }
 }
 
+/// A speaker, crossed out when muted.
+///
+/// An icon rather than the word, for the same reason the dock's other
+/// buttons are: a channel is a narrow column, and "Unmute" in it is most of
+/// the width spent saying what a struck-through speaker says at a glance.
+/// Drawn from geometry like `toolbar`'s own, so it needs no asset and follows
+/// the theme's interaction colours.
+///
+/// The word is still there on hover, which is also what makes the button say
+/// which way it goes: the icon shows the state, the tooltip names the action.
 fn show_mute(
     ui: &mut egui::Ui,
+    rect: egui::Rect,
     source: &AudioSourceSnapshot,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
@@ -306,12 +331,73 @@ fn show_mute(
     } else {
         TextKey::AudioMute
     };
-    let button = egui::Button::new(i18n.text(label)).selected(source.muted);
-    if ui.add_sized([SOURCE_WIDTH, MUTE_HEIGHT], button).clicked() {
+    let button = egui::Button::new("").selected(source.muted);
+    let response = ui.put(rect, button);
+    paint_speaker(ui, &response, source.muted);
+    if response.on_hover_text(i18n.text(label)).clicked() {
         actions.push(audio_action(AudioCommand::SetMuted(
             source.id,
             !source.muted,
         )));
+    }
+}
+
+fn paint_speaker(ui: &egui::Ui, response: &egui::Response, muted: bool) {
+    let center = response.rect.center();
+    // A muted channel is a state to notice rather than a control to read, so
+    // it takes the theme's error colour instead of its text one.
+    let stroke = if muted {
+        egui::Stroke::new(1.5, ui.visuals().error_fg_color)
+    } else {
+        ui.style().interact(response).fg_stroke
+    };
+    let painter = ui.painter();
+
+    // The body: a small box with a cone opening to the right.
+    let box_left = center.x - 6.0;
+    let box_right = center.x - 3.0;
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(box_left, center.y - 2.0),
+            egui::pos2(box_right, center.y + 2.0),
+        ),
+        0.0,
+        stroke.color,
+    );
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(box_right, center.y - 2.0),
+            egui::pos2(center.x + 1.0, center.y - 5.0),
+            egui::pos2(center.x + 1.0, center.y + 5.0),
+            egui::pos2(box_right, center.y + 2.0),
+        ],
+        stroke.color,
+        egui::Stroke::NONE,
+    ));
+
+    if muted {
+        // Struck through rather than simply missing its waves: an icon that
+        // differs from the other state only by what is absent is one nobody
+        // can read without seeing both.
+        painter.line_segment(
+            [
+                center + egui::vec2(3.0, -4.0),
+                center + egui::vec2(8.0, 4.0),
+            ],
+            stroke,
+        );
+        return;
+    }
+    // Two arcs standing in for sound leaving it, drawn as short strokes
+    // because a real arc at this size reads as a smudge.
+    for (offset, height) in [(4.0, 2.5), (7.0, 4.5)] {
+        painter.line_segment(
+            [
+                center + egui::vec2(offset, -height),
+                center + egui::vec2(offset, height),
+            ],
+            stroke,
+        );
     }
 }
 
