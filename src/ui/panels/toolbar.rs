@@ -205,9 +205,19 @@ pub(super) fn list_scroll<R>(
             // inside a `Ui` 26 tall, holding 59 of content.
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])
-            .show(ui, add);
+            .show(ui, |ui| {
+                add(ui);
+                // Scrolled to the end, the last row would otherwise sit on
+                // the strip's edge with nothing between them.
+                ui.add_space(LIST_BOTTOM_GAP);
+            });
     });
 }
+
+/// Left below a list so scrolling to the end stops short of the button strip
+/// rather than against it. The same gap the audio mixer leaves under its own
+/// channels.
+const LIST_BOTTOM_GAP: f32 = 8.0;
 
 #[cfg(test)]
 mod tests {
