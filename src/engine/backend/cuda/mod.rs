@@ -15,7 +15,7 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, ChangeGate, CudaCodec, CudaDevice, CudaEncoder, CudaEncoderOptions,
-        FrameRateLimiter,
+        FrameRateLimiter, PauseGate, PauseGateHandle,
         CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
         CudaDownload, CudaVideoCompositorHandle, CudaVideoLayerHandle, Mp4Muxer, SubmitError,
         SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
@@ -35,6 +35,13 @@ use super::{
     BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH,
     RECORDING_SEND_TIMEOUT, flat_bgra, input_name, software_codec, unsupported_kind,
 };
+
+/// The running recording: which branch it is, and the control that stops it
+/// taking frames without stopping anything else.
+struct RecordingBranch {
+    branch: BranchId,
+    pause: PauseGateHandle,
+}
 
 /// One opened encoder, and which kind of chain it needs in front of it.
 enum RecordEncoder {
@@ -71,7 +78,7 @@ pub(in crate::engine) struct Backend {
     /// The recording branch while one is running. `Mutex` rather than an
     /// atomic because starting one builds a file and an encoder, and two
     /// concurrent starts must not both get that far.
-    recording: Mutex<Option<BranchId>>,
+    recording: Mutex<Option<RecordingBranch>>,
     /// Which encoders this machine can open, worked out on first ask — see
     /// [`Backend::available_encoders`].
     encoders: std::sync::OnceLock<Vec<RecordingEncoder>>,
@@ -299,10 +306,15 @@ impl Backend {
                 RECORDING_QUEUE_DEPTH,
                 OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
             );
-        // Only when it has something to do. At the compositor's own rate the
-        // limiter would forward every frame and re-stamp each one to the
-        // number it already had, and `TimestampOrigin` after the encoder is
-        // what moves that timeline to zero instead.
+        // The gate first, so a paused span is gone before anything downstream
+        // has to reason about it — including a limiter, whose own spacing
+        // would otherwise be measured across the gap.
+        let (gate, pause) = PauseGate::new("record-pause");
+        branch = branch.pipe(gate);
+        // The limiter only when it has something to do. At the compositor's
+        // own rate it would forward every frame and re-stamp each one to the
+        // number it already had; `TimestampOrigin` after the encoder is what
+        // moves that timeline to zero instead.
         if recorded_fps < fps {
             branch = branch.pipe(FrameRateLimiter::new(
                 "record-rate",
@@ -339,7 +351,25 @@ impl Backend {
             // beginning that far in, and a player shows the lead-in as empty.
             .pipe(TimestampOrigin::new("record-origin"))
             .to(sink)?;
-        *recording = Some(self.tee.attach(branch)?);
+        *recording = Some(RecordingBranch {
+            branch: self.tee.attach(branch)?,
+            pause,
+        });
+        Ok(())
+    }
+
+    /// Stops or resumes writing frames to the running recording.
+    ///
+    /// The file stays open and the paused span leaves no trace in it — see
+    /// `FrameRateLimiter`'s own docs. Nothing upstream is stopped: pausing by
+    /// holding the branch would backpressure the `Tee` and freeze the Preview
+    /// with it.
+    pub(in crate::engine) fn pause_recording(&self, paused: bool) -> Result<(), BackendError> {
+        let recording = self.recording.lock().expect("recording state poisoned");
+        let Some(recording) = recording.as_ref() else {
+            return Err("no recording is running".into());
+        };
+        recording.pause.set_paused(paused);
         Ok(())
     }
 
@@ -427,10 +457,10 @@ impl Backend {
     /// this returns rather than at the instant it does.
     pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
         let mut recording = self.recording.lock().expect("recording state poisoned");
-        let Some(branch) = recording.take() else {
+        let Some(recording) = recording.take() else {
             return Err("no recording is running".into());
         };
-        self.tee.finish_branch(branch)?;
+        self.tee.finish_branch(recording.branch)?;
         Ok(())
     }
 

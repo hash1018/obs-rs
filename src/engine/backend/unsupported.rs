@@ -77,6 +77,11 @@ impl Backend {
         &[]
     }
 
+    pub(in crate::engine) fn pause_recording(&self, paused: bool) -> Result<(), BackendError> {
+        let _ = paused;
+        Err("no recording is running".into())
+    }
+
     pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
         Err("no compositor backend is written for this platform yet".into())
     }

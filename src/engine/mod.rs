@@ -75,6 +75,9 @@ enum EngineCommand {
     StartRecording,
     /// Finish the running recording, closing its file.
     StopRecording,
+    /// Stop or resume writing frames to the running recording, leaving its
+    /// file open and taking no time out of the compositor.
+    PauseRecording(bool),
     /// What the *next* recording is written as. A running one is unaffected:
     /// an mp4's header is written before its first frame, so none of this can
     /// be renegotiated after it has started.
@@ -103,6 +106,12 @@ struct Published {
     /// written only once a recording has actually started, so a start that
     /// failed leaves the UI showing what is true.
     recording_since: Arc<ArcSwapOption<Instant>>,
+    /// When the running recording was paused, if it is.
+    ///
+    /// An instant rather than a flag because the clock is read from it:
+    /// while paused it is what the elapsed time is measured *to*, so the
+    /// figure stops moving without the UI being told again on every pass.
+    recording_paused_at: Arc<ArcSwapOption<Instant>>,
     /// Which encoders the backend can open — see `EngineManager::encoders`.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     /// Why the last attempt to start a recording failed, if it did.
@@ -118,6 +127,12 @@ pub struct EngineManager {
     /// `f32` bits, so the UI can read the rate without a lock.
     active_fps: Arc<AtomicU32>,
     recording_since: Arc<ArcSwapOption<Instant>>,
+    /// When the running recording was paused, if it is.
+    ///
+    /// An instant rather than a flag because the clock is read from it:
+    /// while paused it is what the elapsed time is measured *to*, so the
+    /// figure stops moving without the UI being told again on every pass.
+    recording_paused_at: Arc<ArcSwapOption<Instant>>,
     recording_error: Arc<ArcSwapOption<String>>,
     /// Which H.264 encoders the backend can open. Published once, after the
     /// backend has been built — probing needs its device, and the answer
@@ -140,6 +155,7 @@ impl EngineManager {
         let frame = Arc::new(ArcSwapOption::empty());
         let active_fps = Arc::new(AtomicU32::new(0));
         let recording_since = Arc::new(ArcSwapOption::empty());
+        let recording_paused_at = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
@@ -149,6 +165,7 @@ impl EngineManager {
             let frame = Arc::clone(&frame);
             let active_fps = Arc::clone(&active_fps);
             let recording_since = Arc::clone(&recording_since);
+            let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
             let encoders = Arc::clone(&encoders);
             let stop = Arc::clone(&stop);
@@ -157,6 +174,7 @@ impl EngineManager {
                     frame,
                     active_fps,
                     recording_since,
+                    recording_paused_at,
                     recording_error,
                     encoders,
                 };
@@ -178,6 +196,7 @@ impl EngineManager {
             frame,
             active_fps,
             recording_since,
+            recording_paused_at,
             recording_error,
             encoders,
             commands,
@@ -250,6 +269,14 @@ impl EngineManager {
         let _ = self.commands.send(EngineCommand::StartRecording);
     }
 
+    /// Stops or resumes the running recording.
+    ///
+    /// The clock the status bar shows stops with it: what it counts is how
+    /// long the file is, and a paused recording is not getting any longer.
+    pub fn set_recording_paused(&self, paused: bool) {
+        let _ = self.commands.send(EngineCommand::PauseRecording(paused));
+    }
+
     pub fn stop_recording(&self) {
         let _ = self.commands.send(EngineCommand::StopRecording);
     }
@@ -265,10 +292,20 @@ impl EngineManager {
     ///
     /// Derived from the instant the engine published rather than counted
     /// here, so the two cannot disagree about whether a recording exists.
+    /// How long the running recording's file is, which is not how long ago
+    /// it was started: a paused span is not in the file and must not be in
+    /// the figure either.
     pub fn recording(&self) -> Option<Duration> {
-        self.recording_since
-            .load_full()
-            .map(|since| since.elapsed())
+        let since = self.recording_since.load_full()?;
+        Some(match self.recording_paused_at.load_full() {
+            Some(paused_at) => paused_at.saturating_duration_since(*since),
+            None => since.elapsed(),
+        })
+    }
+
+    /// Whether the running recording is paused.
+    pub fn recording_paused(&self) -> bool {
+        self.recording_paused_at.load().is_some()
     }
 
     /// Why the last attempt to start a recording failed, if it did.
@@ -428,6 +465,8 @@ fn apply_command(
             // describes this attempt rather than an older one, and a retry
             // that works leaves nothing behind.
             published.recording_error.store(None);
+            // A previous run's pause must not carry into this one.
+            published.recording_paused_at.store(None);
             // The instant is published only on success, so a UI that shows a
             // recording running is showing one that is.
             match start_recording(backend, recording_settings) {
@@ -440,11 +479,38 @@ fn apply_command(
             }
             false
         }
+        EngineCommand::PauseRecording(paused) => {
+            if let Err(error) = backend.pause_recording(paused) {
+                eprintln!("could not pause the recording: {error}");
+                return false;
+            }
+            // The clock counts how long the file is. Pausing stops it where
+            // it is; resuming moves the start forward by however long the
+            // pause lasted, so the same subtraction keeps working without the
+            // UI being told anything on every pass.
+            match (paused, published.recording_paused_at.load_full()) {
+                (true, None) => published
+                    .recording_paused_at
+                    .store(Some(Arc::new(Instant::now()))),
+                (false, Some(paused_at)) => {
+                    if let Some(since) = published.recording_since.load_full() {
+                        let elapsed = paused_at.elapsed();
+                        published
+                            .recording_since
+                            .store(Some(Arc::new(*since + elapsed)));
+                    }
+                    published.recording_paused_at.store(None);
+                }
+                _ => {}
+            }
+            false
+        }
         EngineCommand::StopRecording => {
             // Cleared whatever the backend says: a stop that failed has still
             // ended this recording as far as anything here can act on it, and
             // leaving the clock running would say otherwise.
             published.recording_since.store(None);
+            published.recording_paused_at.store(None);
             if let Err(error) = backend.stop_recording() {
                 eprintln!("could not stop recording cleanly: {error}");
             }

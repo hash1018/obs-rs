@@ -6,6 +6,9 @@ use crate::resources::GpuUsage;
 #[derive(Default)]
 pub struct StatusSnapshot {
     pub recording_elapsed: Option<Duration>,
+    /// Whether the running recording is paused. Its clock stops with it —
+    /// what that counts is how long the file is.
+    pub recording_paused: bool,
     /// Why the last attempt to start a recording failed, if it did.
     ///
     /// Kept until the next attempt rather than cleared on a timer: a

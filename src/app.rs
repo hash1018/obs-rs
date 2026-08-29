@@ -147,6 +147,7 @@ impl ObsApp {
         // whether a recording actually started, and the Controls dock reads
         // the same answer the status bar's clock does.
         self.snapshots.status.recording_elapsed = engine.recording();
+        self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
         if self.snapshots.status.encoders.is_empty()
             && let Some(encoders) = engine.encoders()
@@ -262,6 +263,11 @@ impl ObsApp {
             UiAction::StartRecording => {
                 if let Some(engine) = &self.engine {
                     engine.start_recording();
+                }
+            }
+            UiAction::SetRecordingPaused(paused) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_recording_paused(paused);
                 }
             }
             UiAction::StopRecording => {

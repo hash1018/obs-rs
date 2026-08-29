@@ -36,7 +36,16 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     ui.separator();
                     ui.monospace(format_optional_percent("CPU", status.cpu_percent));
                     ui.separator();
-                    ui.monospace(format_recording_time(status.recording_elapsed));
+                    // Marked rather than left to a clock that has merely
+                    // stopped moving: a still figure and a stalled
+                    // application look the same for the first few seconds.
+                    let clock = format_recording_time(status.recording_elapsed);
+                    if status.recording_paused {
+                        ui.monospace(egui::RichText::new(clock).color(ui.visuals().warn_fg_color))
+                            .on_hover_text(i18n.text(TextKey::StatusRecordingPaused));
+                    } else {
+                        ui.monospace(clock);
+                    }
                 });
             });
         });

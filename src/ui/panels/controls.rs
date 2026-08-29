@@ -36,6 +36,21 @@ pub(in crate::ui) fn show(
         });
     }
 
+    // Only while one is running: a pause button over no recording has
+    // nothing to pause, and one that is always there but usually dead is
+    // worse than one that appears when it means something.
+    if recording {
+        ui.add_space(BUTTON_SPACING);
+        let label = if status.recording_paused {
+            TextKey::ControlResumeRecording
+        } else {
+            TextKey::ControlPauseRecording
+        };
+        if button(ui, i18n, label).clicked() {
+            actions.push(UiAction::SetRecordingPaused(!status.recording_paused));
+        }
+    }
+
     ui.add_space(BUTTON_SPACING);
     if button(ui, i18n, TextKey::ControlSettings).clicked() {
         actions.push(UiAction::OpenSettings);

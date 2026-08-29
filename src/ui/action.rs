@@ -19,6 +19,9 @@ pub enum UiAction {
     /// Begin recording the composited frames. Where the file goes is the
     /// engine's to decide, so this carries nothing.
     StartRecording,
+    /// Stop or resume writing to the running recording, leaving its file
+    /// open. The paused span does not end up in it.
+    SetRecordingPaused(bool),
     /// Finish the running recording and close its file.
     StopRecording,
     /// Show the Settings dialog, seeded from what is currently set.
