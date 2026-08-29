@@ -167,7 +167,7 @@ fn show_channel(
             show_name(ui, source, devices, i18n, actions);
             ui.monospace(format_gain(source.gain_db));
             ui.horizontal(|ui| {
-                show_fader(ui, source, actions);
+                show_fader(ui, source, channel_height, actions);
                 show_meter(ui, source, channel_height);
                 show_scale(ui, channel_height);
             });
@@ -248,7 +248,17 @@ fn show_name(
 /// The fader stays live while muted rather than greying out: muting is not
 /// meant to lose the level somebody set, and a fader that cannot be moved
 /// until unmuted makes setting it a two-step job.
-fn show_fader(ui: &mut egui::Ui, source: &AudioSourceSnapshot, actions: &mut Vec<UiAction>) {
+fn show_fader(
+    ui: &mut egui::Ui,
+    source: &AudioSourceSnapshot,
+    height: f32,
+    actions: &mut Vec<UiAction>,
+) {
+    // A vertical `Slider` takes its length from `slider_width` — the name is
+    // the horizontal case's. Without this it stays at egui's default while
+    // the meter and the scale beside it grow with the dock, and a channel
+    // made taller ends up with a fader half the height of its own gauge.
+    ui.spacing_mut().slider_width = height;
     let mut gain_db = source.gain_db;
     let fader = ui.add(
         egui::Slider::new(&mut gain_db, MIN_GAIN_DB..=MAX_GAIN_DB)
