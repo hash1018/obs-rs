@@ -4,7 +4,7 @@ use eframe::egui;
 
 use crate::capture::AudioDeviceTarget;
 use crate::domain::SceneCanvas;
-use crate::engine::EngineManager;
+use crate::engine::{AudioManager, EngineManager};
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
@@ -21,6 +21,9 @@ pub struct ObsApp {
     project_manager: Option<ProjectManager>,
     resources: Option<ResourceManager>,
     engine: Option<EngineManager>,
+    /// The audio graph. Separate from the engine because it neither needs a
+    /// GPU nor should be lost when one is missing — see `engine::audio`.
+    audio: Option<AudioManager>,
     #[cfg(target_os = "linux")]
     system_display_picker: Option<SystemDisplayPicker>,
     localization: LocalizationManager,
@@ -78,6 +81,7 @@ impl ObsApp {
         let engine_repaint_ctx = cc.egui_ctx.clone();
         let resource_repaint_ctx = cc.egui_ctx.clone();
         let project_repaint_ctx = cc.egui_ctx.clone();
+        let audio_repaint_ctx = cc.egui_ctx.clone();
         #[cfg(target_os = "linux")]
         let picker_repaint_ctx = cc.egui_ctx.clone();
 
@@ -126,6 +130,11 @@ impl ObsApp {
             settings_store,
             ui_actions: Vec::new(),
             audio_devices: crate::capture::audio_devices(),
+            // Without it the mixer draws what the project holds and nothing
+            // is captured, which is what this application did until now.
+            audio: AudioManager::spawn(move || audio_repaint_ctx.request_repaint())
+                .inspect_err(|error| eprintln!("could not start audio: {error}"))
+                .ok(),
             exiting: false,
             // What the engine starts believing, so the first pass says
             // something only if the window came up minimised.
@@ -146,9 +155,10 @@ impl ObsApp {
                 } => {
                     self.snapshots.scenes = scenes;
                     self.snapshots.sources = sources;
-                    // Nothing to reconcile against yet: the mixer is what the
-                    // project holds, and no pipeline is built from it.
                     self.snapshots.audio = audio;
+                    if let Some(manager) = &self.audio {
+                        manager.apply(&self.snapshots.audio);
+                    }
                     if let Some(engine) = &self.engine {
                         engine.apply(&self.snapshots.sources);
                     }
@@ -248,6 +258,20 @@ impl ObsApp {
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         self.ui_state.confirm_exit();
+    }
+
+    /// Fills in each mixer channel's level.
+    ///
+    /// Read every pass rather than pushed with the snapshot: a peak changes
+    /// with the audio, not with the project, and the project publishes only
+    /// when something is edited.
+    fn poll_audio_levels(&mut self) {
+        let Some(manager) = &self.audio else {
+            return;
+        };
+        for source in &mut self.snapshots.audio.items {
+            source.peak_db = manager.peak_db(source.id);
+        }
     }
 
     fn poll_resource_usage(&mut self) {
@@ -364,6 +388,7 @@ impl eframe::App for ObsApp {
         self.poll_project();
         self.poll_engine(ctx);
         self.poll_resource_usage();
+        self.poll_audio_levels();
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();
     }

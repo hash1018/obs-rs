@@ -12,7 +12,10 @@
 //! `Send + Sync` and internally reference-counted, so the engine shares
 //! eframe's device rather than opening a second one.
 
+mod audio;
 mod backend;
+
+pub use audio::AudioManager;
 
 use std::collections::HashMap;
 use std::sync::{
