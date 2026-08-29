@@ -129,9 +129,16 @@ impl ObsApp {
         };
         if let Some(update) = manager.latest() {
             match update {
-                ProjectUpdate::Snapshot { scenes, sources } => {
+                ProjectUpdate::Snapshot {
+                    scenes,
+                    sources,
+                    audio,
+                } => {
                     self.snapshots.scenes = scenes;
                     self.snapshots.sources = sources;
+                    // Nothing to reconcile against yet: the mixer is what the
+                    // project holds, and no pipeline is built from it.
+                    self.snapshots.audio = audio;
                     if let Some(engine) = &self.engine {
                         engine.apply(&self.snapshots.sources);
                     }

@@ -6,6 +6,7 @@ use eframe::egui;
 pub(in crate::ui) enum DockPanel {
     Scenes,
     Sources,
+    AudioMixer,
     Controls,
 }
 
@@ -43,7 +44,12 @@ impl Default for DockLayout {
             regions: HashMap::from([
                 (
                     DockRegionId::Left,
-                    DockRegion::new([DockPanel::Scenes, DockPanel::Sources, DockPanel::Controls]),
+                    DockRegion::new([
+                        DockPanel::Scenes,
+                        DockPanel::Sources,
+                        DockPanel::AudioMixer,
+                        DockPanel::Controls,
+                    ]),
                 ),
                 (DockRegionId::Right, DockRegion::new([])),
                 (DockRegionId::Bottom, DockRegion::new([])),
@@ -51,6 +57,7 @@ impl Default for DockLayout {
             states: HashMap::from([
                 (DockPanel::Scenes, DockState::open()),
                 (DockPanel::Sources, DockState::open()),
+                (DockPanel::AudioMixer, DockState::open()),
                 (DockPanel::Controls, DockState::open()),
             ]),
         }
@@ -70,6 +77,10 @@ impl DockPanel {
     pub(super) fn min_size(self) -> egui::Vec2 {
         match self {
             Self::Scenes | Self::Sources => egui::vec2(180.0, 120.0),
+            // Two sources' rows — name, meter and fader each — plus the title
+            // bar, so the two a project opens with are both reachable without
+            // dragging a splitter first.
+            Self::AudioMixer => egui::vec2(180.0, 150.0),
             // Its buttons plus the title bar above them, rather than the
             // list panels' figure: this dock has a height it is complete at,
             // and a splitter should not be able to clip a button in half.
@@ -161,7 +172,15 @@ impl DockLayout {
         };
         let first_min = first_min_fraction * minimum_scale;
         let second_min = second_min_fraction * minimum_scale;
-        let next_first = (first_weight + delta_fraction).clamp(first_min, pair_total - second_min);
+        // Never below `first_min`, which the subtraction can land just under:
+        // when the two minimums fill the pair exactly there is one legal
+        // split and both bounds are it, so a single ulp of rounding is enough
+        // to put `max` below `min` — and `f32::clamp` panics on that rather
+        // than picking either. Reachable by dragging as soon as a region
+        // holds four panels, where each starts at a quarter and any two of
+        // them come to a half.
+        let upper = (pair_total - second_min).max(first_min);
+        let next_first = (first_weight + delta_fraction).clamp(first_min, upper);
 
         let region = self.region_mut(region);
         for (panel, weight) in panels.into_iter().zip(normalized) {
@@ -251,13 +270,23 @@ mod tests {
         let mut layout = DockLayout::default();
         assert_eq!(
             layout.visible_panels(DockRegionId::Left),
-            vec![DockPanel::Scenes, DockPanel::Sources, DockPanel::Controls]
+            vec![
+                DockPanel::Scenes,
+                DockPanel::Sources,
+                DockPanel::AudioMixer,
+                DockPanel::Controls
+            ]
         );
 
         layout.move_panel(DockPanel::Scenes, DockRegionId::Left, 1);
         assert_eq!(
             layout.visible_panels(DockRegionId::Left),
-            vec![DockPanel::Sources, DockPanel::Scenes, DockPanel::Controls]
+            vec![
+                DockPanel::Sources,
+                DockPanel::Scenes,
+                DockPanel::AudioMixer,
+                DockPanel::Controls
+            ]
         );
     }
 
@@ -268,7 +297,11 @@ mod tests {
 
         assert_eq!(
             layout.visible_panels(DockRegionId::Left),
-            vec![DockPanel::Sources, DockPanel::Controls]
+            vec![
+                DockPanel::Sources,
+                DockPanel::AudioMixer,
+                DockPanel::Controls
+            ]
         );
     }
 
@@ -304,5 +337,28 @@ mod tests {
             layout.normalized_weights(DockRegionId::Left, &[DockPanel::Scenes, DockPanel::Sources]);
         assert!(weights[0] >= 0.2);
         assert!(weights[1] >= 0.3);
+    }
+
+    /// Two minimums that exactly fill the pair leave one legal split, so both
+    /// clamp bounds are the same number — and a single ulp of rounding is
+    /// enough to put the upper one below the lower, which `f32::clamp`
+    /// answers with a panic. Four panels in a region is where it starts being
+    /// reachable: each holds a quarter, so any two of them come to a half.
+    #[test]
+    fn a_pair_its_minimums_exactly_fill_can_still_be_dragged() {
+        let mut layout = DockLayout::default();
+
+        layout.resize_pair(
+            DockRegionId::Left,
+            DockPanel::Scenes,
+            DockPanel::Sources,
+            -1.0,
+            0.2,
+            0.3,
+        );
+
+        let weights =
+            layout.normalized_weights(DockRegionId::Left, &[DockPanel::Scenes, DockPanel::Sources]);
+        assert!(weights.iter().all(|weight| weight.is_finite()));
     }
 }

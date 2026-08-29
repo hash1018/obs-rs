@@ -225,6 +225,7 @@ fn show_panel(
         content.i18n.text(match panel {
             DockPanel::Scenes => TextKey::DockScenes,
             DockPanel::Sources => TextKey::DockSources,
+            DockPanel::AudioMixer => TextKey::DockAudioMixer,
             DockPanel::Controls => TextKey::DockControls,
         }),
         egui::TextStyle::Heading.resolve(child.style()),
@@ -248,6 +249,14 @@ fn show_panel(
                 content.sources_state,
                 content.editor,
                 &content.snapshots.sources,
+                content.i18n,
+                content.actions,
+            );
+        }
+        DockPanel::AudioMixer => {
+            panels::audio_mixer::show(
+                &mut child,
+                &content.snapshots.audio,
                 content.i18n,
                 content.actions,
             );

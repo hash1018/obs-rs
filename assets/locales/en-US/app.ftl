@@ -16,7 +16,14 @@ about-description = Live capture and recording, built with media-pp.
 
 dock-scenes = Scenes
 dock-sources = Sources
+dock-audio-mixer = Audio Mixer
 dock-controls = Controls
+audio-empty = No audio sources
+audio-mute = Mute
+audio-unmute = Unmute
+audio-kind-output = Output
+audio-kind-input = Input
+audio-device-default = Default
 control-start-recording = Start Recording
 control-pause-recording = Pause Recording
 control-resume-recording = Resume Recording

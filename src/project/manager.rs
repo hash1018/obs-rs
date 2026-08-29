@@ -2,10 +2,13 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
 use crate::domain::{Scene, SceneItem, Source};
-use crate::persistence::{PersistenceResult, ProjectDatabase, SceneStore, SourceStore};
-use crate::snapshots::{SceneItemSnapshot, SceneSnapshot, ScenesSnapshot, SourcesSnapshot};
+use crate::persistence::{AudioStore, PersistenceResult, ProjectDatabase, SceneStore, SourceStore};
+use crate::snapshots::{
+    AudioSnapshot, AudioSourceSnapshot, SceneItemSnapshot, SceneSnapshot, ScenesSnapshot,
+    SourcesSnapshot,
+};
 
-use super::{ProjectCommand, SceneCommand, SourceCommand};
+use super::{AudioCommand, ProjectCommand, SceneCommand, SourceCommand};
 
 enum ManagerMessage {
     Execute(ProjectCommand),
@@ -16,6 +19,7 @@ pub enum ProjectUpdate {
     Snapshot {
         scenes: ScenesSnapshot,
         sources: SourcesSnapshot,
+        audio: AudioSnapshot,
     },
     Error(String),
 }
@@ -120,7 +124,18 @@ fn handle_project_command(
     match command {
         ProjectCommand::Scene(command) => handle_scene_command(database, command),
         ProjectCommand::Source(command) => handle_source_command(database, command),
+        ProjectCommand::Audio(command) => handle_audio_command(database, command),
     }
+}
+
+fn handle_audio_command(
+    database: &mut ProjectDatabase,
+    command: AudioCommand,
+) -> PersistenceResult<()> {
+    database.transaction(|transaction| match command {
+        AudioCommand::SetGainDb(id, gain_db) => AudioStore::set_gain_db(transaction, id, gain_db),
+        AudioCommand::SetMuted(id, muted) => AudioStore::set_muted(transaction, id, muted),
+    })
 }
 
 fn handle_source_command(
@@ -251,10 +266,32 @@ fn sources_snapshot(
 
 fn project_snapshot(
     database: &ProjectDatabase,
-) -> PersistenceResult<(ScenesSnapshot, SourcesSnapshot)> {
+) -> PersistenceResult<(ScenesSnapshot, SourcesSnapshot, AudioSnapshot)> {
     let scenes = scene_snapshot(database)?;
     let sources = sources_snapshot(database, &scenes)?;
-    Ok((scenes, sources))
+    let audio = audio_snapshot(database)?;
+    Ok((scenes, sources, audio))
+}
+
+/// Read whole rather than diffed against the last one: there are a handful of
+/// audio sources, and a fader moving is not a reason to work out which.
+///
+/// `peak_db` is `None` for every one of them — the meter is drawn from
+/// whatever measures the audio, and nothing does yet.
+fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot> {
+    let items = AudioStore::list(database.connection())?
+        .into_iter()
+        .map(|source| AudioSourceSnapshot {
+            id: source.id,
+            name: source.name,
+            kind: source.kind,
+            device: source.device,
+            gain_db: source.gain_db,
+            muted: source.muted,
+            peak_db: None,
+        })
+        .collect();
+    Ok(AudioSnapshot { items })
 }
 
 fn publish_snapshot(
@@ -263,7 +300,11 @@ fn publish_snapshot(
     wake_ui: &impl Fn(),
 ) {
     let update = match project_snapshot(database) {
-        Ok((scenes, sources)) => ProjectUpdate::Snapshot { scenes, sources },
+        Ok((scenes, sources, audio)) => ProjectUpdate::Snapshot {
+            scenes,
+            sources,
+            audio,
+        },
         Err(error) => ProjectUpdate::Error(error.to_string()),
     };
     let _ = update_tx.send(update);
@@ -342,13 +383,13 @@ mod tests {
             })
             .unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(sources.scene_id, Some(first_scene));
         assert_eq!(sources.items.len(), 1);
         assert_eq!(sources.items[0].name, "Display Capture");
 
         handle_scene_command(&mut database, SceneCommand::Add).unwrap();
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(sources.items.is_empty());
         assert_eq!(sources.scene_name.as_deref(), Some("Scene 2"));
     }
@@ -363,7 +404,7 @@ mod tests {
 
         handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
         handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(sources.items.len(), 2);
         assert_eq!(sources.items[0].name, "Color Source 2");
         assert_eq!(sources.items[1].name, "Color Source");
@@ -385,7 +426,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(sources.items[0].transform, transform);
     }
 
@@ -411,7 +452,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(sources.items.len(), 1);
         assert_eq!(sources.items[0].name, "Display Capture");
         // The picker reported an ultrawide, so the item starts at that shape
@@ -463,7 +504,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         let targets: Vec<_> = sources
             .items
             .iter()
@@ -511,7 +552,7 @@ mod tests {
             ["Color Source 3", "Color Source 2", "Color Source"]
         );
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         let back = sources.items[2].id;
         handle_source_command(&mut database, SourceCommand::MoveUp(back)).unwrap();
         assert_eq!(
@@ -537,7 +578,7 @@ mod tests {
 
         handle_source_command(&mut database, SourceCommand::SetVisible(front, false)).unwrap();
         handle_source_command(&mut database, SourceCommand::SetLocked(front, true)).unwrap();
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(!sources.items[0].visible);
         assert!(sources.items[0].locked);
     }
@@ -556,14 +597,14 @@ mod tests {
         // Removing the middle item leaves its z_index unused, so the two that
         // remain are no longer adjacent numbers. Looking a neighbour up by
         // `z_index + 1` would find nothing and silently do nothing.
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         handle_source_command(&mut database, SourceCommand::Delete(sources.items[1].id)).unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(sources.items.len(), 2);
         handle_source_command(&mut database, SourceCommand::MoveUp(sources.items[1].id)).unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(
             sources
                 .items
@@ -609,7 +650,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         let monitor = sources.items[0].id;
         let portal = sources.items[1].id;
 
@@ -624,7 +665,7 @@ mod tests {
         )
         .unwrap();
 
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert_eq!(
             sources.items[1].settings,
             crate::domain::SourceSettings::DisplayCapture(crate::domain::DisplayCaptureSettings {
@@ -663,14 +704,14 @@ mod tests {
         // The engine keeps a Source open while its item is merely out of view
         // and closes one that is gone, so the snapshot has to distinguish
         // "not in this Scene" from "not in the project".
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         let shown = sources.items[0].id;
         assert!(!sources.items.iter().any(|item| item.id == hidden));
         assert!(sources.live_items.contains(&hidden));
         assert!(sources.live_items.contains(&shown));
 
         handle_source_command(&mut database, SourceCommand::Delete(hidden)).unwrap();
-        let (_, sources) = project_snapshot(&database).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(!sources.live_items.contains(&hidden));
         assert!(sources.live_items.contains(&shown));
     }

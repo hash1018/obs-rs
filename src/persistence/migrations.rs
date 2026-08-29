@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -157,6 +157,37 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
                 ADD COLUMN height INTEGER CHECK (height IS NULL OR height > 0);
 
             PRAGMA user_version = 6;",
+        )?;
+    }
+    if current_version < 7 {
+        // Audio does not hang off a Scene. A microphone belongs to whoever is
+        // broadcasting, and switching Scenes must not cut it — so these are
+        // their own rows rather than `sources` reached through `scene_items`.
+        //
+        // The two everyone has are seeded, the way a first run already gets
+        // "Scene 1": a mixer with nothing in it teaches the reader nothing,
+        // and these are the two entries an audio mixer is expected to open
+        // with. `device` is null, meaning whichever device the system calls
+        // its default — which follows the user changing it, rather than
+        // pinning whatever was default the day the project was made.
+        transaction.execute_batch(
+            "CREATE TABLE audio_sources (
+                id       INTEGER PRIMARY KEY,
+                name     TEXT NOT NULL UNIQUE,
+                kind     TEXT NOT NULL,
+                device   TEXT,
+                gain_db  REAL NOT NULL DEFAULT 0,
+                muted    INTEGER NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL
+            );
+
+            CREATE INDEX audio_sources_position_idx ON audio_sources(position);
+
+            INSERT INTO audio_sources (name, kind, device, gain_db, muted, position)
+            VALUES ('Desktop Audio', 'output', NULL, 0, 0, 0),
+                   ('Microphone',    'input',  NULL, 0, 0, 1);
+
+            PRAGMA user_version = 7;",
         )?;
     }
     transaction.commit()?;

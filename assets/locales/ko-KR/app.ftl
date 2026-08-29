@@ -16,7 +16,14 @@ about-description = media-pp로 만든 실시간 캡처 및 녹화 프로그램�
 
 dock-scenes = 장면
 dock-sources = 소스
+dock-audio-mixer = 오디오 믹서
 dock-controls = 제어
+audio-empty = 오디오 소스가 없습니다
+audio-mute = 음소거
+audio-unmute = 음소거 해제
+audio-kind-output = 출력
+audio-kind-input = 입력
+audio-device-default = 기본 장치
 control-start-recording = 녹화 시작
 control-pause-recording = 녹화 일시정지
 control-resume-recording = 녹화 재개
