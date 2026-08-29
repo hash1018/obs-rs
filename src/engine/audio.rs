@@ -31,10 +31,11 @@
 //! what the fader let through rather than what arrived at it — pulling one
 //! down empties its meter, and so does muting.
 //!
-//! It takes two steps rather than one `pipe` chain because a `Tee` is not a
-//! `Source`: its outputs live behind a lock instead of in `src_pads`, so
-//! nothing can follow it in a `ChainBuilder` and it cannot be a `pipe` stage.
-//! `Context::attach` takes any `Source` though, and an `AudioVolume` is one.
+//! A `Tee` is not a `Source` — its outputs live behind a lock instead of in
+//! `src_pads` — so nothing can follow it in a chain and it cannot be a `pipe`
+//! stage. It is what a chain *ends* at, which is what `ChainBuilder::to_branch`
+//! takes: the fan-out and the stages in front of it commit as one subgraph, so
+//! the recorded topology puts the branching on the fader that really does it.
 //!
 //! # What a change costs
 //!
@@ -257,7 +258,7 @@ fn open_source(
     let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
     let capture = open_capture(name, source.kind, source.device.as_deref())?;
 
-    let (mut volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
+    let (volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
     let _ = volume_handle.set_gain_db(source.gain_db);
     volume_handle.set_muted(source.muted);
 
@@ -274,25 +275,20 @@ fn open_source(
 
     let tee_name = format!("{name}-tee");
     let pipeline = Pipeline::new(name, capture, move |source_element, context| {
-        // The `Tee` hangs off the *fader's* pad, not the capture's, so what
-        // both branches carry is what the fader let through — a meter that
+        // The `Tee` hangs off the *fader*, not the capture, so what both
+        // branches carry is what the fader let through — a meter that
         // measures the level rather than the one before it.
-        //
-        // Two steps rather than one `pipe` chain, because a `Tee` is not a
-        // `Source`: its outputs live behind a lock instead of in `src_pads`,
-        // so nothing can follow it in a `ChainBuilder` and it cannot be a
-        // `pipe` stage. `Context::attach` takes any `Source` though, and an
-        // `AudioVolume` is one — so the tee is attached to it first, and the
-        // capture is then wired to the fader it already feeds.
         let meter_branch = context.branch().to(Box::new(meter))?;
         let mix_branch = context.branch().to(mixer_input)?;
         let tee = TeeBuilder::new(tee_name, context.clone())
             .branch(meter_branch)
             .branch(mix_branch)
             .build()?;
-        context.attach(&mut volume, 0, tee)?;
-
-        let faded = context.branch().to(Box::new(volume))?;
+        // `to_branch` rather than `to`, because a `Tee` is a finished branch
+        // rather than a `Sink` — it is what a chain ends *at*. Attaching it
+        // to the fader's pad on its own would link the same buffers but
+        // record the fan-out as the capture's; see `ChainBuilder::to_branch`.
+        let faded = context.branch().pipe(volume).to_branch(tee)?;
         context.attach(source_element, 0, faded)?;
         Ok(())
     })?;
