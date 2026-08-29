@@ -485,6 +485,13 @@ enum AudioCommand {
     /// An endpoint appeared, went, or became the default. Says to look
     /// again, not what changed — see [`crate::capture::watch_audio_devices`].
     DevicesChanged,
+    /// Ends the worker's loop.
+    ///
+    /// Every sender dropping cannot do it: the endpoint watch owns a sender
+    /// of its own, and the watch lives on the worker's own stack — so the
+    /// channel stays open exactly as long as the loop that would close it,
+    /// and `recv` blocks forever. Being told is the way out.
+    Shutdown,
 }
 
 /// Owns the audio graph on a thread of its own.
@@ -534,20 +541,25 @@ impl AudioManager {
                 // can be run.
                 let mut project: Option<AudioSnapshot> = None;
 
-                // Ends when every sender drops, which is this manager being
-                // dropped — and dropping the engine with it stops every
-                // capture and the mixer.
+                // Ends when the manager says so — see `AudioCommand::Shutdown`.
+                // Dropping the engine on the way out stops every capture and
+                // the mixer, and dropping the watch stops the notifications.
                 while let Ok(first) = command_rx.recv() {
                     // Coalesced before anything is acted on. Windows raises
                     // several notifications for one plug, and a fader being
                     // dragged sends a snapshot per frame; both collapse to
                     // the one state they all describe.
                     let mut devices_changed = false;
+                    let mut ending = false;
                     for command in std::iter::once(first).chain(command_rx.try_iter()) {
                         match command {
                             AudioCommand::Project(snapshot) => project = Some(*snapshot),
                             AudioCommand::DevicesChanged => devices_changed = true,
+                            AudioCommand::Shutdown => ending = true,
                         }
+                    }
+                    if ending {
+                        break;
                     }
                     if devices_changed {
                         known_devices = crate::capture::audio_devices();
@@ -603,10 +615,15 @@ impl AudioManager {
 
 impl Drop for AudioManager {
     fn drop(&mut self) {
-        // The worker's loop ends when this sender goes, so nothing else has
-        // to be signalled — but it is joined, because dropping the engine it
-        // owns is what stops the captures.
-        self.commands = None;
+        // Told, not merely let go of. The worker owns the endpoint watch,
+        // which owns a sender for this same channel — so dropping this one
+        // leaves `recv` waiting on a sender only the worker could release,
+        // and the join below would never return.
+        if let Some(commands) = self.commands.take() {
+            let _ = commands.send(AudioCommand::Shutdown);
+        }
+        // Joined rather than detached, because dropping the engine it owns
+        // is what stops the captures and the mixer.
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -615,6 +632,8 @@ impl Drop for AudioManager {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn source(kind: AudioSourceKind, device: Option<&str>) -> AudioSourceSnapshot {
@@ -708,5 +727,38 @@ mod tests {
             &devices,
             &source(AudioSourceKind::Input, None)
         ));
+    }
+
+    /// Dropping the manager has to stop its worker and return.
+    ///
+    /// It did not, once: the endpoint watch holds a `Sender` for the same
+    /// channel the worker is receiving on, and the watch lives on the
+    /// worker's own stack — so dropping the manager's sender left one alive
+    /// that only the worker could release, `recv` never returned, and the
+    /// `join` in `Drop` hung the application on exit.
+    ///
+    /// Run on a thread of its own with a deadline rather than inline,
+    /// because the failure being caught is a hang: inline, this test would
+    /// not fail, it would stop.
+    #[test]
+    fn dropping_the_manager_returns_rather_than_hanging() {
+        let (finished, done) = mpsc::channel();
+        thread::Builder::new()
+            .name("audio-drop-under-test".to_owned())
+            .spawn(move || {
+                // The mixer starts either way; captures do not, since no
+                // project snapshot is ever sent. That is enough — the
+                // channel and the watch are what this is about.
+                let manager = AudioManager::spawn(|| {});
+                drop(manager);
+                let _ = finished.send(());
+            })
+            .expect("spawning the thread under test");
+
+        assert!(
+            done.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "dropping AudioManager did not return: its worker is still waiting on a sender \
+             nothing will drop"
+        );
     }
 }
