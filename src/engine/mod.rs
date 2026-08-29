@@ -563,7 +563,8 @@ fn start_recording(
     if recording.running.is_some() {
         return Err("a recording is already running".into());
     }
-    let settings = &recording.settings;
+    let settings = usable_settings(backend, &recording.settings);
+    let settings = &settings;
     let path = crate::paths::recording_file_in(
         &settings.directory_or_default(),
         settings.prefix_or_default(),
@@ -583,6 +584,43 @@ fn start_recording(
     recording.running = Some(running);
     println!("recording to {}", path.display());
     Ok(Instant::now())
+}
+
+/// The settings to record with, which are the stored ones unless the encoder
+/// they name cannot be opened here.
+///
+/// The default is `Nvenc`, and it is a good default — but it is wrong on
+/// every machine without an NVIDIA GPU, which is where the first Record press
+/// would otherwise fail with nothing on screen but an error. So the encoder
+/// falls through to the best one that did open.
+///
+/// The stored choice is not rewritten. Someone who picked NVENC on the
+/// machine that has it should still find it selected after recording once on
+/// a laptop that does not, rather than having their setting quietly replaced
+/// by whatever that laptop could manage.
+fn usable_settings(
+    backend: &Backend,
+    settings: &crate::settings::RecordingSettings,
+) -> crate::settings::RecordingSettings {
+    let available = backend.available_encoders();
+    if available.contains(&settings.encoder) {
+        return settings.clone();
+    }
+    let Some(encoder) = crate::settings::RecordingEncoder::best_of(available) else {
+        // Nothing opened at all. Recording with what was asked for will fail
+        // and say why, which is better than failing with a substitution the
+        // caller did not make.
+        return settings.clone();
+    };
+    eprintln!(
+        "{} cannot be opened here; recording with {} instead",
+        settings.encoder.label(),
+        encoder.label()
+    );
+    crate::settings::RecordingSettings {
+        encoder,
+        ..settings.clone()
+    }
 }
 
 /// One line naming everything that went wrong, not only the outermost of it.

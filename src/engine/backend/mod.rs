@@ -80,15 +80,17 @@ pub(super) const BACKGROUND: Color = Color::BLACK;
 
 /// Which of `VideoCodec`'s H.264 entries a software choice maps to.
 ///
-/// `Nvenc` never reaches here — it is not a software encoder and has no
-/// `VideoCodec` at all — so it is folded into the one this crate would rather
-/// have if it somehow did.
+/// The hardware entries never reach here — neither is a software encoder and
+/// neither has a `VideoCodec` at all — so they are folded into the one this
+/// crate would rather have if they somehow did.
 pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> VideoCodec {
+    use crate::settings::RecordingEncoder;
+
     match encoder {
-        crate::settings::RecordingEncoder::X264 => VideoCodec::H264,
-        crate::settings::RecordingEncoder::OpenH264 | crate::settings::RecordingEncoder::Nvenc => {
-            VideoCodec::OpenH264
-        }
+        RecordingEncoder::X264 => VideoCodec::H264,
+        RecordingEncoder::OpenH264
+        | RecordingEncoder::Nvenc
+        | RecordingEncoder::MediaFoundation => VideoCodec::OpenH264,
     }
 }
 

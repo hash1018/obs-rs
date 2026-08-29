@@ -192,9 +192,18 @@ impl Default for RecordingSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordingEncoder {
-    /// `h264_nvenc`, fed the compositor's frames directly.
+    /// `h264_nvenc`, fed the compositor's frames directly. First because it
+    /// reaches NVIDIA's encoder through NVIDIA's own API rather than through
+    /// a layer that has to pick a transform.
     #[default]
     Nvenc,
+    /// `h264_mf`, fed the compositor's frames directly. Media Foundation
+    /// hands back whichever hardware transform the installed driver
+    /// registers, so this is the one hardware entry an Intel or AMD machine
+    /// has — without it those record on the CPU while their encode block sits
+    /// idle. On an NVIDIA machine it reaches the same block `Nvenc` does, by
+    /// a longer route, which is why it is second rather than first.
+    MediaFoundation,
     /// `libopenh264` — Cisco's encoder, whose licence terms are why it is the
     /// software H.264 encoder most FFmpeg builds carry.
     OpenH264,
@@ -204,12 +213,31 @@ pub enum RecordingEncoder {
 }
 
 impl RecordingEncoder {
-    pub const ALL: [Self; 3] = [Self::Nvenc, Self::OpenH264, Self::X264];
+    /// In preference order, which is also the order the Settings dialog
+    /// lists them and the order [`Self::best_of`] falls through.
+    pub const ALL: [Self; 4] = [
+        Self::Nvenc,
+        Self::MediaFoundation,
+        Self::OpenH264,
+        Self::X264,
+    ];
 
     /// Whether reaching this encoder means copying frames back from the GPU
     /// and converting them.
     pub fn is_software(self) -> bool {
-        !matches!(self, Self::Nvenc)
+        !matches!(self, Self::Nvenc | Self::MediaFoundation)
+    }
+
+    /// The most preferred of `available`, or `None` when it is empty.
+    ///
+    /// What a machine whose saved encoder cannot open falls back to. The
+    /// stored choice is deliberately not overwritten by this — someone who
+    /// picked NVENC on a machine that has it should still have it selected
+    /// after recording once on a laptop that does not.
+    pub fn best_of(available: &[Self]) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|encoder| available.contains(encoder))
     }
 
     /// What to call it in a list.
@@ -220,6 +248,7 @@ impl RecordingEncoder {
     pub fn label(self) -> &'static str {
         match self {
             Self::Nvenc => "NVENC (h264_nvenc)",
+            Self::MediaFoundation => "Media Foundation (h264_mf)",
             Self::OpenH264 => "OpenH264 (libopenh264)",
             Self::X264 => "x264 (libx264)",
         }
@@ -566,6 +595,57 @@ mod tests {
                 .file_name()
                 .and_then(|name| name.to_str()),
             Some("settings.toml")
+        );
+    }
+
+    /// A machine whose stored encoder cannot open must still record, on the
+    /// best one that did. Without this the default of NVENC means the first
+    /// Record press on any non-NVIDIA machine fails.
+    #[test]
+    fn the_fallback_prefers_hardware_then_software() {
+        use RecordingEncoder::*;
+
+        assert_eq!(
+            best_of_slice(&[Nvenc, MediaFoundation, OpenH264]),
+            Some(Nvenc)
+        );
+        // The case this exists for: no NVENC, but a hardware transform.
+        assert_eq!(
+            best_of_slice(&[MediaFoundation, OpenH264]),
+            Some(MediaFoundation)
+        );
+        assert_eq!(best_of_slice(&[OpenH264, X264]), Some(OpenH264));
+        assert_eq!(best_of_slice(&[X264]), Some(X264));
+        // Nothing opened at all — the caller has to say so rather than
+        // substitute something that is not there either.
+        assert_eq!(best_of_slice(&[]), None);
+    }
+
+    fn best_of_slice(available: &[RecordingEncoder]) -> Option<RecordingEncoder> {
+        RecordingEncoder::best_of(available)
+    }
+
+    /// The order the fallback walks is the order the dialog lists, so a list
+    /// that disagreed with it would recommend one thing and choose another.
+    #[test]
+    fn every_encoder_is_in_the_preference_order_exactly_once() {
+        for encoder in RecordingEncoder::ALL {
+            assert_eq!(
+                RecordingEncoder::ALL
+                    .iter()
+                    .filter(|listed| **listed == encoder)
+                    .count(),
+                1,
+                "{encoder:?}"
+            );
+        }
+        assert!(
+            RecordingEncoder::ALL
+                .iter()
+                .take_while(|encoder| !encoder.is_software())
+                .count()
+                > 0,
+            "the hardware entries have to come first for the fallback to prefer them"
         );
     }
 }

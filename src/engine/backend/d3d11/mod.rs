@@ -13,9 +13,9 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, ChangeGate, D3d11Download, D3d11FrameRenderer, D3d11NvencCodec, D3d11NvencEncoder,
-        D3d11NvencEncoderOptions, D3d11NvencInputFormat, D3d11Renderer, D3d11VideoCompositor,
-        D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle,
+        AppSink, ChangeGate, D3d11Download, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCodec,
+        D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput,
+        D3d11VideoEncoder, D3d11VideoEncoderOptions, D3d11VideoInputFormat, D3d11VideoLayerHandle,
         FrameRateLimiter, PauseGate, SubmitError, SwEncoder, SwEncoderOptions, SwScaler,
         TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
     },
@@ -82,7 +82,7 @@ impl PreparedRecording {
 /// One opened encoder, and which kind of chain it needs in front of it.
 enum RecordEncoder {
     /// Takes the compositor's frames as they are.
-    Hardware(D3d11NvencEncoder),
+    Hardware(D3d11VideoEncoder),
     /// Needs them copied back from the GPU and converted first.
     Software(SwEncoder),
 }
@@ -383,21 +383,29 @@ impl Backend {
         let bit_rate = settings.bit_rate_bits();
         let gop_size = fps * settings.keyframe_seconds_clamped();
         match settings.encoder {
-            RecordingEncoder::Nvenc => Ok(RecordEncoder::Hardware(D3d11NvencEncoder::new(
-                "record-encode",
-                &self.device,
-                Arc::clone(&self.context),
-                D3d11NvencEncoderOptions {
-                    codec: D3d11NvencCodec::H264,
-                    input_format: D3d11NvencInputFormat::Bgra,
-                    width,
-                    height,
-                    time_base,
-                    frame_rate,
-                    bit_rate,
-                    gop_size,
-                },
-            )?)),
+            RecordingEncoder::Nvenc | RecordingEncoder::MediaFoundation => {
+                Ok(RecordEncoder::Hardware(D3d11VideoEncoder::new(
+                    "record-encode",
+                    &self.device,
+                    Arc::clone(&self.context),
+                    D3d11VideoEncoderOptions {
+                        codec: if settings.encoder == RecordingEncoder::Nvenc {
+                            D3d11VideoCodec::H264Nvenc
+                        } else {
+                            D3d11VideoCodec::H264MediaFoundation
+                        },
+                        // The compositor's own output, so neither hardware
+                        // path converts anything: both take BGRA directly.
+                        input_format: D3d11VideoInputFormat::Bgra,
+                        width,
+                        height,
+                        time_base,
+                        frame_rate,
+                        bit_rate,
+                        gop_size,
+                    },
+                )?))
+            }
             other => Ok(RecordEncoder::Software(SwEncoder::new(
                 "record-encode",
                 SwEncoderOptions {
