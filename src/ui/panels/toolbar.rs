@@ -195,11 +195,6 @@ pub(super) fn scroll_content<R>(
     id: &'static str,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) {
-    // A solid bar rather than egui's default floating one, which is drawn
-    // over the content only while the pointer is inside it. A dock too short
-    // for its content then looks like it is missing part of it rather than
-    // like it has more to scroll to — which is exactly how it read.
-    list.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     // What is left, not the whole pane. [`reserve_list`] hands back a `Ui`
     // whose cursor is already at its top, so for a dock with a strip the two
     // are the same — but a dock that calls this on its own pane has spent a
@@ -207,30 +202,39 @@ pub(super) fn scroll_content<R>(
     // would claim that space twice and push the last button off the bottom.
     let rect = list.available_rect_before_wrap().intersect(list.max_rect());
     list.allocate_ui(rect.size(), |ui| {
-        egui::ScrollArea::vertical()
-            .id_salt(id)
-            // Zero, not egui's default of 64. That default is a floor on the
-            // height at which an area is willing to scroll at all: below it
-            // the area expands to its content instead, decides everything
-            // fits, and draws no bar — so a dock left with less than 64
-            // points for its list silently dropped every row past the first
-            // rather than scrolling to them. Measured: a viewport of 64
-            // inside a `Ui` 26 tall, holding 59 of content.
-            .min_scrolled_height(0.0)
+        scrolls_like_a_dock(ui, egui::ScrollArea::vertical().id_salt(id))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 add(ui);
                 // Scrolled to the end, the last row would otherwise sit on
                 // the strip's edge with nothing between them.
-                ui.add_space(LIST_BOTTOM_GAP);
+                ui.add_space(BOTTOM_GAP);
             });
     });
 }
 
-/// Left below a list so scrolling to the end stops short of the button strip
-/// rather than against it. The same gap the audio mixer leaves under its own
-/// channels.
-const LIST_BOTTOM_GAP: f32 = 8.0;
+/// Left below a dock's content so scrolling to the end stops short of
+/// whatever is beneath rather than against it.
+pub(super) const BOTTOM_GAP: f32 = 8.0;
+
+/// The scroll settings every dock shares, applied to an area a caller has
+/// already chosen the axes of.
+///
+/// Here rather than repeated because the docks look wrong the moment they
+/// disagree, and each of these was arrived at by something being wrong:
+///
+/// - A solid bar, because egui's default floats into view only while the
+///   pointer is inside it — so a dock too short for its content read as one
+///   that had lost part of it rather than one with more to scroll to.
+/// - A zero scroll floor, because the default of 64 is the height below
+///   which an area refuses to scroll at all: it expands to its content
+///   instead, decides everything fits, draws no bar, and lets the overflow be
+///   clipped. Measured: a viewport of 64 inside a `Ui` 26 tall, holding 59 of
+///   content.
+pub(super) fn scrolls_like_a_dock(ui: &mut egui::Ui, area: egui::ScrollArea) -> egui::ScrollArea {
+    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+    area.min_scrolled_height(0.0).min_scrolled_width(0.0)
+}
 
 #[cfg(test)]
 mod tests {

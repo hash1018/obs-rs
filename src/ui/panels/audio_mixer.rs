@@ -41,9 +41,6 @@ const FIXED_ROW_HEIGHT: f32 = 50.0;
 /// Between two columns, agreed on by the channels and the strip of mute
 /// buttons under them so that a button stays beneath its own channel.
 const COLUMN_GAP: f32 = 4.0;
-/// Left below the channels so scrolling to the end stops short of the mute
-/// strip rather than against it.
-const CHANNEL_BOTTOM_GAP: f32 = 8.0;
 /// The shortest a channel may be squeezed to. Below this the scale's labels
 /// collide and the fader stops being worth dragging.
 const MIN_CHANNEL_HEIGHT: f32 = 96.0;
@@ -80,30 +77,30 @@ pub(in crate::ui) fn show(
     let mut channels = toolbar::reserve_list(ui, "audio_mixer_channels_area");
     let channel_height = (channels.available_height() - FIXED_ROW_HEIGHT).max(MIN_CHANNEL_HEIGHT);
 
-    let scrolled = egui::ScrollArea::both()
-        .id_salt("audio_mixer_channels")
-        // Zero, not egui's default of 64 — see `toolbar::scroll_content` for
-        // what that default does to a dock squeezed below it.
-        .min_scrolled_height(0.0)
-        .min_scrolled_width(0.0)
-        .auto_shrink([false, true])
-        .show(&mut channels, |ui| {
-            ui.spacing_mut().item_spacing.x = COLUMN_GAP;
-            ui.horizontal_top(|ui| {
-                for source in &snapshot.items {
-                    // Scoped per source: every column holds the same widgets,
-                    // so without this they would collide on ids derived from
-                    // their position alone.
-                    ui.push_id(source.id.0, |ui| {
-                        show_channel(ui, source, devices, channel_height, i18n, actions);
-                    });
-                }
-            });
-            // Scrolled to the end, the quietest mark on the scale would
-            // otherwise sit directly on the mute strip's edge. The same gap
-            // the channel already has above it when nothing is scrolled.
-            ui.add_space(CHANNEL_BOTTOM_GAP);
+    // The same settings every other dock scrolls with — only the axes differ,
+    // because this is the one whose content can also outgrow its width.
+    let scrolled = toolbar::scrolls_like_a_dock(
+        &mut channels,
+        egui::ScrollArea::both().id_salt("audio_mixer_channels"),
+    )
+    .auto_shrink([false, true])
+    .show(&mut channels, |ui| {
+        ui.spacing_mut().item_spacing.x = COLUMN_GAP;
+        ui.horizontal_top(|ui| {
+            for source in &snapshot.items {
+                // Scoped per source: every column holds the same widgets,
+                // so without this they would collide on ids derived from
+                // their position alone.
+                ui.push_id(source.id.0, |ui| {
+                    show_channel(ui, source, devices, channel_height, i18n, actions);
+                });
+            }
         });
+        // Scrolled to the end, the quietest mark on the scale would
+        // otherwise sit directly on the mute strip's edge. The same gap
+        // the channel already has above it when nothing is scrolled.
+        ui.add_space(toolbar::BOTTOM_GAP);
+    });
 
     show_mute_strip(ui, snapshot, scrolled.state.offset.x, i18n, actions);
 }
