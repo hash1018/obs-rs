@@ -78,6 +78,7 @@ settings-recording-name-example = Example
 settings-recording-encoder = Encoder
 settings-encoder-unavailable = unavailable on this machine
 settings-encoder-software-cost = Copies every frame back from the GPU; may not keep up at 1080p60
+settings-recording-fps = Frame rate
 settings-recording-bit-rate = Bit rate
 settings-recording-keyframes = Keyframe interval
 settings-recording-while-running = Applies to the next recording, not the one running

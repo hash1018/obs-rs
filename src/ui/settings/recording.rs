@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{
-    AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE, RecordingEncoder,
+    AppSettings, BIT_RATE_MBPS_RANGE, FPS_CHOICES, KEYFRAME_SECONDS_RANGE, RecordingEncoder,
 };
 
 /// Room for "Browse…" in either language, fixed so the field beside it does
@@ -130,6 +130,20 @@ pub(super) fn show(
                     );
                 }
             });
+            ui.end_row();
+
+            ui.label(i18n.text(TextKey::SettingsRecordingFps));
+            egui::ComboBox::from_id_salt("settings_fps")
+                .selected_text(format!("{} fps", draft.recording.fps))
+                .show_ui(ui, |ui| {
+                    // A list rather than a free number: an encoder is
+                    // configured for exactly what it is given, and a rate the
+                    // compositor cannot supply would claim frames the file
+                    // does not hold.
+                    for fps in FPS_CHOICES {
+                        ui.selectable_value(&mut draft.recording.fps, fps, format!("{fps} fps"));
+                    }
+                });
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsRecordingBitRate));

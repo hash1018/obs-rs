@@ -141,7 +141,7 @@ const PAGE_LIST_WIDTH: f32 = 120.0;
 /// height is the Recording page's five rows plus the note that appears above
 /// them while a recording is running.
 const PAGE_WIDTH: f32 = 380.0;
-const PAGE_HEIGHT: f32 = 170.0;
+const PAGE_HEIGHT: f32 = 210.0;
 
 pub(in crate::ui) fn show(
     ctx: &egui::Context,

@@ -78,6 +78,7 @@ settings-recording-name-example = 예시
 settings-recording-encoder = 인코더
 settings-encoder-unavailable = 이 컴퓨터에서 사용 불가
 settings-encoder-software-cost = 매 프레임을 GPU에서 되가져옵니다. 1080p60에서는 못 따라갈 수 있습니다
+settings-recording-fps = 프레임레이트
 settings-recording-bit-rate = 비트레이트
 settings-recording-keyframes = 키프레임 간격
 settings-recording-while-running = 진행 중인 녹화가 아니라 다음 녹화부터 적용됩니다

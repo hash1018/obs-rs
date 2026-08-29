@@ -88,6 +88,13 @@ pub struct RecordingSettings {
     /// What each file is named before its timestamp. The timestamp itself is
     /// not configurable — see [`crate::paths::recording_file`].
     pub name_prefix: String,
+    /// Frames per second written to the file.
+    ///
+    /// Independent of the compositor's rate, which the Preview and the
+    /// reported figure are made of and which this must never raise: a
+    /// recording is a branch off those frames, so it can take fewer of them
+    /// but not more than exist.
+    pub fps: u32,
     /// Target bit rate in megabits per second.
     pub bit_rate_mbps: u32,
     /// Seconds between keyframes.
@@ -100,6 +107,7 @@ impl Default for RecordingSettings {
             encoder: RecordingEncoder::default(),
             directory: String::new(),
             name_prefix: crate::paths::APPLICATION.to_owned(),
+            fps: DEFAULT_FPS,
             bit_rate_mbps: DEFAULT_BIT_RATE_MBPS,
             keyframe_seconds: DEFAULT_KEYFRAME_SECONDS,
         }
@@ -166,6 +174,15 @@ impl RecordingEncoder {
 /// figure the recording constants carried before this was settable.
 pub const DEFAULT_BIT_RATE_MBPS: u32 = 12;
 
+/// What a recording is written at unless it is changed — the compositor's own
+/// rate, so the default records every frame that is composited.
+pub const DEFAULT_FPS: u32 = 60;
+
+/// The rates offered. Not a free number: an encoder is configured for exactly
+/// what it is given, and a rate the compositor cannot supply would write a
+/// file that claims more frames a second than it holds.
+pub const FPS_CHOICES: [u32; 4] = [24, 30, 48, 60];
+
 /// Two is the usual compromise: a seek lands within that much of where it
 /// aimed, and the cost is one full frame every two seconds rather than every
 /// one.
@@ -212,6 +229,15 @@ impl RecordingSettings {
             *BIT_RATE_MBPS_RANGE.end(),
         );
         mbps as usize * 1_000_000
+    }
+
+    /// The rate to write at, never above what the compositor produces.
+    ///
+    /// Clamped rather than rejected: a settings file naming 120 against a
+    /// compositor running at 60 is asking for frames that do not exist, and
+    /// the honest answer is the most it can have.
+    pub fn fps_within(&self, compositor_fps: u32) -> u32 {
+        self.fps.clamp(1, compositor_fps.max(1))
     }
 
     /// As above, in seconds; the encoder wants it in frames.
@@ -279,6 +305,23 @@ mod tests {
             toml::from_str::<AppSettings>(&encoded).unwrap().locale,
             Locale::KoKr
         );
+    }
+
+    /// A recording is a branch off the compositor's frames, so it can take
+    /// fewer of them but never more than exist.
+    #[test]
+    fn the_recorded_rate_never_exceeds_what_the_compositor_produces() {
+        let asking_too_much = RecordingSettings {
+            fps: 120,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(asking_too_much.fps_within(60), 60);
+
+        let asking_for_less = RecordingSettings {
+            fps: 24,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(asking_for_less.fps_within(60), 24);
     }
 
     /// The encoder is written under its own name, so a settings file says

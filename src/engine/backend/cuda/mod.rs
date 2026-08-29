@@ -15,6 +15,7 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, ChangeGate, CudaCodec, CudaDevice, CudaEncoder, CudaEncoderOptions,
+        FrameRateLimiter,
         CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
         CudaDownload, CudaVideoCompositorHandle, CudaVideoLayerHandle, Mp4Muxer, SubmitError,
         SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
@@ -279,8 +280,11 @@ impl Backend {
         }
 
         let [width, height] = self.size;
-        let time_base = ffmpeg::Rational::new(1, fps as i32);
-        let encoder = self.open_encoder(fps, settings)?;
+        // `fps` is what the compositor produces; the file is written at what
+        // the settings ask for, which can be less but never more.
+        let recorded_fps = settings.fps_within(fps);
+        let time_base = ffmpeg::Rational::new(1, recorded_fps as i32);
+        let encoder = self.open_encoder(recorded_fps, settings)?;
 
         // The file's tracks are fixed before its header is written, which is
         // why audio cannot be added to a recording already running — the same
@@ -301,6 +305,17 @@ impl Backend {
                 RECORDING_QUEUE_DEPTH,
                 OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
             );
+        // Only when it has something to do. At the compositor's own rate the
+        // limiter would forward every frame and re-stamp each one to the
+        // number it already had, and `TimestampOrigin` after the encoder is
+        // what moves that timeline to zero instead.
+        if recorded_fps < fps {
+            branch = branch.pipe(FrameRateLimiter::new(
+                "record-rate",
+                ffmpeg::Rational::new(1, fps as i32),
+                ffmpeg::Rational::new(recorded_fps as i32, 1),
+            ));
+        }
         branch = match encoder {
             RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
             // A software encoder is not on the GPU and does not take NV12, so
