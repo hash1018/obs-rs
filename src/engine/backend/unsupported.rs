@@ -65,10 +65,25 @@ impl Backend {
     /// Unreachable in practice — `start` refuses, so no `Backend` exists on
     /// this platform to ask. Present because the engine above is written
     /// against one backend interface, not three.
-    pub(in crate::engine) fn start_recording(
+    pub(in crate::engine) fn prepare_recording(
         &self,
-        _path: &std::path::Path,
         _fps: u32,
+        _settings: &crate::settings::RecordingSettings,
+    ) -> Result<PreparedRecording, BackendError> {
+        Err("no compositor backend is written for this platform yet".into())
+    }
+
+    pub(in crate::engine) fn attach_recording(
+        &self,
+        _prepared: PreparedRecording,
+        _sink: Box<dyn media_pp::element::Sink>,
+    ) -> Result<super::VideoTrack, BackendError> {
+        Err("no compositor backend is written for this platform yet".into())
+    }
+
+    pub(in crate::engine) fn detach_recording(
+        &self,
+        _track: super::VideoTrack,
     ) -> Result<(), BackendError> {
         Err("no compositor backend is written for this platform yet".into())
     }
@@ -76,13 +91,18 @@ impl Backend {
     pub(in crate::engine) fn available_encoders(&self) -> &[crate::settings::RecordingEncoder] {
         &[]
     }
+}
 
-    pub(in crate::engine) fn pause_recording(&self, paused: bool) -> Result<(), BackendError> {
-        let _ = paused;
-        Err("no recording is running".into())
+/// No encoder is ever opened here, so there is nothing to carry — but the
+/// engine names this type, so it has to exist.
+pub(in crate::engine) enum PreparedRecording {}
+
+impl PreparedRecording {
+    pub(in crate::engine) fn parameters(&self) -> media_pp::ffmpeg::codec::Parameters {
+        match *self {}
     }
 
-    pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
-        Err("no compositor backend is written for this platform yet".into())
+    pub(in crate::engine) fn time_base(&self) -> media_pp::ffmpeg::Rational {
+        match *self {}
     }
 }

@@ -67,7 +67,7 @@ use crate::snapshots::SceneItemSnapshot;
 )]
 mod platform;
 
-pub(super) use platform::{Backend, Layer, RunningSource};
+pub(super) use platform::{Backend, Layer, PreparedRecording, RunningSource};
 
 pub(super) type BackendError = Box<dyn Error + Send + Sync>;
 
@@ -121,6 +121,15 @@ pub(super) const RECORDING_SEND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(500);
 
 /// A Source that is running, and the controls for its layer.
+/// The recording's video branch while one is running.
+///
+/// Platform-independent even though what feeds it is not: both backends end
+/// the same way, at a `PauseGate` and a branch on their compositor's `Tee`.
+pub(super) struct VideoTrack {
+    pub(super) branch: media_pp::graph::BranchId,
+    pub(super) pause: media_pp::elements::PauseGateHandle,
+}
+
 pub(super) struct OpenSource {
     pub(super) source: RunningSource,
     pub(super) layer: Layer,

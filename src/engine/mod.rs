@@ -14,6 +14,7 @@
 
 mod audio;
 mod backend;
+mod recording;
 
 pub use audio::AudioManager;
 
@@ -93,9 +94,25 @@ enum EngineCommand {
 struct EngineSetup {
     size: [u32; 2],
     project: Option<ProjectDispatcher>,
-    /// What the *first* recording is written as, loaded from disk before the
-    /// engine existed — see `ObsApp::new`.
-    recording: crate::settings::RecordingSettings,
+    recording: RecordingState,
+}
+
+/// Everything a recording is opened from, and the one that is open.
+///
+/// Grouped because they are only ever reached together, and because
+/// `apply_command` had collected as many parameters as it can carry.
+struct RecordingState {
+    /// What the *next* recording is written as. Loaded from disk before the
+    /// engine existed — see `ObsApp::new` — and replaced whenever the
+    /// Settings dialog is applied.
+    settings: crate::settings::RecordingSettings,
+    /// Where the audio track attaches, taken once at startup because the
+    /// mixer lives on a thread this one cannot ask. `None` when it never
+    /// started, which records video only.
+    mixer_tee: Option<media_pp::elements::TeeHandle>,
+    /// The recording that is running, if one is. It rather than the backend
+    /// holds the video branch too — see [`recording::Recording`].
+    running: Option<recording::Recording>,
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -152,6 +169,9 @@ impl EngineManager {
         canvas: SceneCanvas,
         project: Option<ProjectDispatcher>,
         recording_settings: crate::settings::RecordingSettings,
+        // Where a recording's audio track attaches — see
+        // `AudioManager::mixer_tee`. `None` records without sound.
+        mixer_tee: Option<media_pp::elements::TeeHandle>,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let size = [canvas.width as u32, canvas.height as u32];
@@ -184,7 +204,11 @@ impl EngineManager {
                 let setup = EngineSetup {
                     size,
                     project,
-                    recording: recording_settings,
+                    recording: RecordingState {
+                        settings: recording_settings,
+                        mixer_tee,
+                        running: None,
+                    },
                 };
                 if let Err(error) = run(render_state, setup, published, command_rx, &stop, wake_ui)
                 {
@@ -347,7 +371,7 @@ fn run(
     let EngineSetup {
         size,
         project,
-        recording: mut recording_settings,
+        mut recording,
     } = setup;
     // Shared rather than moved: both the sink that publishes a frame and the
     // loop that puts the branch to sleep have to ask for a repaint.
@@ -380,9 +404,10 @@ fn run(
 
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
-    // `recording_settings` is owned by this loop rather than shared: only
-    // `StartRecording` reads it, and that arrives on the same channel a change
-    // does, so one can never land half-way through a recording being opened.
+    // `recording` is owned by this loop rather than shared: only the commands
+    // below reach it, and a settings change arrives on the same channel a
+    // start does, so one can never land half-way through a recording being
+    // opened.
     while !stop.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => {
@@ -392,7 +417,7 @@ fn run(
                     &mut open,
                     &mut scene,
                     &published,
-                    &mut recording_settings,
+                    &mut recording,
                     command,
                 );
                 // Whatever else is already waiting, so a gesture's newer
@@ -404,7 +429,7 @@ fn run(
                         &mut open,
                         &mut scene,
                         &published,
-                        &mut recording_settings,
+                        &mut recording,
                         next,
                     );
                 }
@@ -434,7 +459,7 @@ fn apply_command(
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
     published: &Published,
-    recording_settings: &mut crate::settings::RecordingSettings,
+    recording: &mut RecordingState,
     command: EngineCommand,
 ) -> bool {
     match command {
@@ -460,7 +485,7 @@ fn apply_command(
             false
         }
         EngineCommand::RecordingSettings(settings) => {
-            *recording_settings = *settings;
+            recording.settings = *settings;
             false
         }
         EngineCommand::StartRecording => {
@@ -472,7 +497,7 @@ fn apply_command(
             published.recording_paused_at.store(None);
             // The instant is published only on success, so a UI that shows a
             // recording running is showing one that is.
-            match start_recording(backend, recording_settings) {
+            match start_recording(backend, recording) {
                 Ok(started) => published.recording_since.store(Some(Arc::new(started))),
                 Err(error) => {
                     let reason = describe(error.as_ref());
@@ -483,10 +508,11 @@ fn apply_command(
             false
         }
         EngineCommand::PauseRecording(paused) => {
-            if let Err(error) = backend.pause_recording(paused) {
-                eprintln!("could not pause the recording: {error}");
+            let Some(running) = recording.running.as_ref() else {
+                eprintln!("no recording is running");
                 return false;
-            }
+            };
+            running.set_paused(paused);
             // The clock counts how long the file is. Pausing stops it where
             // it is; resuming moves the start forward by however long the
             // pause lasted, so the same subtraction keeps working without the
@@ -514,8 +540,13 @@ fn apply_command(
             // leaving the clock running would say otherwise.
             published.recording_since.store(None);
             published.recording_paused_at.store(None);
-            if let Err(error) = backend.stop_recording() {
-                eprintln!("could not stop recording cleanly: {error}");
+            match recording.running.take() {
+                Some(running) => {
+                    if let Err(error) = running.stop(backend) {
+                        eprintln!("could not stop recording cleanly: {error}");
+                    }
+                }
+                None => eprintln!("no recording is running"),
             }
             false
         }
@@ -527,8 +558,12 @@ fn apply_command(
 /// frames, not the moment the button was pressed.
 fn start_recording(
     backend: &Backend,
-    settings: &crate::settings::RecordingSettings,
+    recording: &mut RecordingState,
 ) -> Result<Instant, BackendError> {
+    if recording.running.is_some() {
+        return Err("a recording is already running".into());
+    }
+    let settings = &recording.settings;
     let path = crate::paths::recording_file_in(
         &settings.directory_or_default(),
         settings.prefix_or_default(),
@@ -538,7 +573,14 @@ fn start_recording(
         // recording.
         OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
     );
-    backend.start_recording(&path, TARGET_FPS, settings)?;
+    let running = recording::Recording::start(
+        backend,
+        recording.mixer_tee.as_ref(),
+        &path,
+        TARGET_FPS,
+        settings,
+    )?;
+    recording.running = Some(running);
     println!("recording to {}", path.display());
     Ok(Instant::now())
 }

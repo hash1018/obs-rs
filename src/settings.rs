@@ -143,7 +143,7 @@ pub struct RecordingSettings {
     /// would freeze today's answer into the file.
     pub directory: String,
     /// What each file is named before its timestamp. The timestamp itself is
-    /// not configurable — see [`crate::paths::recording_file`].
+    /// not configurable — see [`crate::paths::recording_file_in`].
     pub name_prefix: String,
     /// Frames per second written to the file.
     ///

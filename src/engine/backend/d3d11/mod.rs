@@ -4,7 +4,6 @@
 mod capture;
 mod shared;
 
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,9 +16,8 @@ use media_pp::{
         AppSink, ChangeGate, D3d11Download, D3d11FrameRenderer, D3d11NvencCodec, D3d11NvencEncoder,
         D3d11NvencEncoderOptions, D3d11NvencInputFormat, D3d11Renderer, D3d11VideoCompositor,
         D3d11VideoCompositorHandle, D3d11VideoCompositorInput, D3d11VideoLayerHandle,
-        FrameRateLimiter, Mp4Muxer, PauseGate, PauseGateHandle, SubmitError, SwEncoder,
-        SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions,
-        VideoLayer,
+        FrameRateLimiter, PauseGate, SubmitError, SwEncoder, SwEncoderOptions, SwScaler,
+        TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -41,16 +39,44 @@ use crate::snapshots::SceneItemSnapshot;
 
 use super::{
     BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
-    flat_bgra, input_name, software_codec, unsupported_kind,
+    VideoTrack, flat_bgra, input_name, software_codec, unsupported_kind,
 };
 
 use crate::settings::{RecordingEncoder, RecordingSettings};
 
-/// The running recording: which branch it is, and the control that stops it
-/// taking frames without stopping anything else.
-struct RecordingBranch {
-    branch: BranchId,
-    pause: PauseGateHandle,
+/// A video encoder opened and ready, waiting only for the muxer sink it
+/// writes into.
+///
+/// It exists because an mp4's tracks are fixed before its header is written,
+/// and the audio track is added by `engine::recording` — which cannot open
+/// this one, since which encoder and which frame format are the backend's
+/// own. So the work splits: this end opens the encoder and says what stream
+/// it needs, and the branch is built once the sink for it exists.
+pub(in crate::engine) struct PreparedRecording {
+    encoder: RecordEncoder,
+    /// What the file's video track is stamped in, and what the branch's own
+    /// limiter is built against.
+    time_base: ffmpeg::Rational,
+    /// The rate frames actually reach the encoder at, which is the
+    /// compositor's unless the settings asked for less.
+    recorded_fps: u32,
+    /// The compositor's own rate, kept to decide whether a limiter is needed
+    /// at all.
+    source_fps: u32,
+}
+
+impl PreparedRecording {
+    /// What `Mp4Muxer::add_stream` needs to describe this track.
+    pub(in crate::engine) fn parameters(&self) -> ffmpeg::codec::Parameters {
+        match &self.encoder {
+            RecordEncoder::Hardware(encoder) => encoder.parameters(),
+            RecordEncoder::Software(encoder) => encoder.parameters(),
+        }
+    }
+
+    pub(in crate::engine) fn time_base(&self) -> ffmpeg::Rational {
+        self.time_base
+    }
 }
 
 /// One opened encoder, and which kind of chain it needs in front of it.
@@ -59,17 +85,6 @@ enum RecordEncoder {
     Hardware(D3d11NvencEncoder),
     /// Needs them copied back from the GPU and converted first.
     Software(SwEncoder),
-}
-
-impl RecordEncoder {
-    /// What the muxer has to be told about the track before its header is
-    /// written.
-    fn parameters(&self) -> ffmpeg::codec::Parameters {
-        match self {
-            Self::Hardware(encoder) => encoder.parameters(),
-            Self::Software(encoder) => encoder.parameters(),
-        }
-    }
 }
 
 use media_pp::graph::BranchId;
@@ -89,12 +104,9 @@ pub(in crate::engine) struct Backend {
     size: [u32; 2],
     compositor: D3d11VideoCompositorHandle,
     preview: Arc<Pipeline>,
-    /// Where a recording branch is attached — see [`Backend::start_recording`].
+    /// Where a recording branch is attached — see
+    /// [`Backend::attach_recording`].
     tee: TeeHandle,
-    /// The recording branch while one is running. `Mutex` rather than an
-    /// atomic because starting one builds a file and an encoder, and two
-    /// concurrent starts must not both get that far.
-    recording: Mutex<Option<RecordingBranch>>,
     /// Which encoders this machine can open, worked out on first ask.
     encoders: std::sync::OnceLock<Vec<RecordingEncoder>>,
     /// Reached from the UI through [`Backend::set_preview_visible`] — see
@@ -231,7 +243,6 @@ impl Backend {
             compositor: handle,
             preview,
             tee,
-            recording: Mutex::new(None),
             encoders: std::sync::OnceLock::new(),
             surface,
         })
@@ -260,36 +271,40 @@ impl Backend {
     /// compositor, and with it the Preview and every other branch. So it
     /// blocks, but only for a bounded time, and a timeout arrives on the bus
     /// as an error naming this branch rather than as silence.
-    pub(in crate::engine) fn start_recording(
+    pub(in crate::engine) fn prepare_recording(
         &self,
-        path: &Path,
         fps: u32,
         settings: &crate::settings::RecordingSettings,
-    ) -> Result<(), BackendError> {
-        let mut recording = self.recording.lock().expect("recording state poisoned");
-        if recording.is_some() {
-            return Err("a recording is already running".into());
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let [width, height] = self.size;
+    ) -> Result<PreparedRecording, BackendError> {
         // `fps` is what the compositor produces; the file is written at what
         // the settings ask for, which can be less but never more.
         let recorded_fps = settings.fps_within(fps);
-        let time_base = ffmpeg::Rational::new(1, recorded_fps as i32);
-        let encoder = self.open_encoder(recorded_fps, settings)?;
+        Ok(PreparedRecording {
+            encoder: self.open_encoder(recorded_fps, settings)?,
+            time_base: ffmpeg::Rational::new(1, recorded_fps as i32),
+            recorded_fps,
+            source_fps: fps,
+        })
+    }
 
-        // The file's tracks are fixed before its header is written, which is
-        // why audio cannot be added to a recording already running — the same
-        // constraint OBS has, and the reason a track list is decided here.
-        let mut muxer = Mp4Muxer::create(path)?;
-        muxer.add_stream("video", encoder.parameters(), time_base)?;
-        let sink = muxer
-            .open()?
-            .pop()
-            .ok_or("the muxer produced no track sink")?;
+    /// Builds the recording's video branch onto the compositor's `Tee` and
+    /// starts it writing into `sink`.
+    ///
+    /// Separate from [`Backend::prepare_recording`] only because the sink
+    /// cannot exist until every track has been declared — see
+    /// [`PreparedRecording`].
+    pub(in crate::engine) fn attach_recording(
+        &self,
+        prepared: PreparedRecording,
+        sink: Box<dyn media_pp::element::Sink>,
+    ) -> Result<VideoTrack, BackendError> {
+        let PreparedRecording {
+            encoder,
+            recorded_fps,
+            source_fps: fps,
+            ..
+        } = prepared;
+        let [width, height] = self.size;
 
         let mut branch = self
             .tee
@@ -345,26 +360,10 @@ impl Backend {
             // beginning that far in, and a player shows the lead-in as empty.
             .pipe(TimestampOrigin::new("record-origin"))
             .to(sink)?;
-        *recording = Some(RecordingBranch {
+        Ok(VideoTrack {
             branch: self.tee.attach(branch)?,
             pause,
-        });
-        Ok(())
-    }
-
-    /// Stops or resumes writing frames to the running recording.
-    ///
-    /// The file stays open and the paused span leaves no trace in it — see
-    /// `FrameRateLimiter`'s own docs. Nothing upstream is stopped: pausing by
-    /// holding the branch would backpressure the `Tee` and freeze the Preview
-    /// with it.
-    pub(in crate::engine) fn pause_recording(&self, paused: bool) -> Result<(), BackendError> {
-        let recording = self.recording.lock().expect("recording state poisoned");
-        let Some(recording) = recording.as_ref() else {
-            return Err("no recording is running".into());
-        };
-        recording.pause.set_paused(paused);
-        Ok(())
+        })
     }
 
     /// Opens whichever encoder the settings name.
@@ -426,7 +425,7 @@ impl Backend {
         })
     }
 
-    /// Ends the recording and finalizes its file.
+    /// Ends the recording's video track.
     ///
     /// `finish_branch` rather than `detach`: an mp4 is unplayable until its
     /// trailer is written, and that happens when the muxer sees the branch's
@@ -434,16 +433,20 @@ impl Backend {
     /// exactly as long as it is useless. `finish_branch` detaches too, so the
     /// branch id is spent either way.
     ///
+    /// Only *this* track: the trailer is written once every track has
+    /// reported done, so a file with audio in it stays unplayable until the
+    /// audio branch is finished too. Ending both is `engine::recording`'s
+    /// job, and the reason it rather than this owns them.
+    ///
     /// Returns once the `Eos` is on its way, not once the file is closed: the
     /// encoder flush and the trailer happen on a thread the `Tee` owns, so
     /// this does not block the engine. The file is complete a moment after
     /// this returns rather than at the instant it does.
-    pub(in crate::engine) fn stop_recording(&self) -> Result<(), BackendError> {
-        let mut recording = self.recording.lock().expect("recording state poisoned");
-        let Some(recording) = recording.take() else {
-            return Err("no recording is running".into());
-        };
-        self.tee.finish_branch(recording.branch)?;
+    pub(in crate::engine) fn detach_recording(
+        &self,
+        track: VideoTrack,
+    ) -> Result<(), BackendError> {
+        self.tee.finish_branch(track.branch)?;
         Ok(())
     }
 

@@ -108,6 +108,15 @@ impl ObsApp {
         // where they end up.
         let saved_window = settings.workspace.window;
 
+        // Before the engine, because the engine is handed where a recording's
+        // audio track attaches and the mixer is what owns it. Without it the
+        // mixer draws what the project holds and nothing is captured, which
+        // is what this application did until now.
+        let audio = AudioManager::spawn(move || audio_repaint_ctx.request_repaint())
+            .inspect_err(|error| eprintln!("could not start audio: {error}"))
+            .ok();
+        let mixer_tee = audio.as_ref().and_then(AudioManager::mixer_tee);
+
         Self {
             ui_state,
             snapshots: Snapshots::default(),
@@ -130,6 +139,7 @@ impl ObsApp {
                     // started before that would ignore everything the user had
                     // saved.
                     recording_settings,
+                    mixer_tee,
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))
@@ -145,11 +155,7 @@ impl ObsApp {
             settings_store,
             ui_actions: Vec::new(),
             audio_devices: Arc::new(crate::capture::audio_devices()),
-            // Without it the mixer draws what the project holds and nothing
-            // is captured, which is what this application did until now.
-            audio: AudioManager::spawn(move || audio_repaint_ctx.request_repaint())
-                .inspect_err(|error| eprintln!("could not start audio: {error}"))
-                .ok(),
+            audio,
             exiting: false,
             // Filled in on the first pass, which happens before anything can
             // close the window.

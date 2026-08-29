@@ -18,7 +18,7 @@
 //! pipeline "audio-2"  CaptureSource ─ AudioVolume ─ Tee ┬─ AppSink
 //!                                                       └─┤
 //!                                                         ↓
-//! pipeline "audio-mix"                    AudioMixer ─ (recording, later)
+//! pipeline "audio-mix"                    AudioMixer ─ Tee ─ (a recording, when one runs)
 //! ```
 //!
 //! One pipeline each, not one between them. A `Pipeline`'s sources are fixed
@@ -55,7 +55,7 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, AudioMixer, AudioMixerOptions, AudioVolume, AudioVolumeHandle, MixerHandle,
-        TeeBuilder,
+        TeeBuilder, TeeHandle,
     },
     pipeline::Pipeline,
 };
@@ -70,8 +70,8 @@ use super::backend::BackendError;
 /// track is made of. 48 kHz stereo is what both backends' devices are
 /// overwhelmingly already at, so the mixer's own resampler usually has
 /// nothing to do.
-const MIX_SAMPLE_RATE: u32 = 48_000;
-const MIX_CHANNELS: u16 = 2;
+pub(super) const MIX_SAMPLE_RATE: u32 = 48_000;
+pub(super) const MIX_CHANNELS: u16 = 2;
 
 /// The quietest a meter shows, matching the mixer dock's own scale.
 const METER_FLOOR_DB: f32 = -60.0;
@@ -148,6 +148,9 @@ pub(super) struct AudioEngine {
 struct RunningMixer {
     _pipeline: Arc<Pipeline>,
     handle: MixerHandle,
+    /// Where a recording's audio track attaches, and the reason the mixer
+    /// fans out at all — see [`start_mixer`].
+    tee: TeeHandle,
 }
 
 impl AudioEngine {
@@ -170,6 +173,13 @@ impl AudioEngine {
 
     pub(super) fn levels(&self) -> &Levels {
         &self.levels
+    }
+
+    /// Where a recording's audio track attaches, or `None` when the mixer
+    /// never started — in which case a recording is written without one
+    /// rather than refused.
+    pub(super) fn mixer_tee(&self) -> Option<TeeHandle> {
+        self.mixer.as_ref().map(|mixer| mixer.tee.clone())
     }
 
     /// Brings the running sources in line with what the project holds and
@@ -289,11 +299,17 @@ fn device_available(devices: &[AudioDeviceTarget], source: &AudioSourceSnapshot)
     })
 }
 
-/// The mixer, alone in a pipeline of its own.
+/// The mixer, alone in a pipeline of its own, fanning out through a `Tee`.
 ///
 /// Alone because it must outlive every source that comes and goes through it
 /// — see [`AudioEngine`]. It emits whether or not anything is listening,
 /// which is what a recording attached later needs.
+///
+/// The `Tee` is built with no branches on it at all, and `build_dynamic` so
+/// that one can be added while it runs: a recording's audio track is opened
+/// long after this, and the mixer must not be rebuilt to take it. It is the
+/// same arrangement the compositor's own output `Tee` has, for the same
+/// reason.
 fn start_mixer() -> Result<RunningMixer, BackendError> {
     let (mixer, handle) = AudioMixer::new(
         "audio-mixer",
@@ -302,11 +318,20 @@ fn start_mixer() -> Result<RunningMixer, BackendError> {
             channels: MIX_CHANNELS,
         },
     );
-    let pipeline = Pipeline::new("audio-mix", mixer, |_source, _context| Ok(()))?;
+    let mut tee = None;
+    let pipeline = Pipeline::new("audio-mix", mixer, |source, context| {
+        let (tee_branch, tee_handle) =
+            TeeBuilder::new("mix-tee", context.clone()).build_dynamic()?;
+        context.attach(source, 0, tee_branch)?;
+        tee = Some(tee_handle);
+        Ok(())
+    })?;
+    let tee = tee.expect("Pipeline::new runs the builder before returning");
     pipeline.run()?;
     Ok(RunningMixer {
         _pipeline: pipeline,
         handle,
+        tee,
     })
 }
 
@@ -531,6 +556,11 @@ pub struct AudioManager {
     /// the side that is told when the answer changes. A list taken once at
     /// startup is missing whatever was plugged in since.
     devices: Arc<ArcSwapOption<Vec<AudioDeviceTarget>>>,
+    /// Where a recording attaches its audio track, taken once here rather
+    /// than asked for later: the recording is opened on the *video* thread,
+    /// which cannot reach into this one to fetch it. `None` when the mixer
+    /// failed to start.
+    mixer_tee: Option<TeeHandle>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -539,12 +569,19 @@ impl AudioManager {
         let (commands, command_rx) = mpsc::channel::<AudioCommand>();
         let levels = Arc::new(ArcSwapOption::empty());
         let devices = Arc::new(ArcSwapOption::empty());
+        // The engine is built on its own thread and stays there — it holds
+        // FFmpeg state that is not `Send`, so it cannot be made here and
+        // moved. Only the mixer's `Tee` comes back, over this channel: a
+        // recording is opened on the *video* thread, which has no way to
+        // reach into this one and ask for it later.
+        let (ready, mixer_tee_rx) = mpsc::channel::<Option<TeeHandle>>();
         let worker = thread::Builder::new().name("audio".to_owned()).spawn({
             let levels = Arc::clone(&levels);
             let published_devices = Arc::clone(&devices);
             let watch_commands = commands.clone();
             move || {
                 let mut engine = AudioEngine::new();
+                let _ = ready.send(engine.mixer_tee());
                 let mut known_devices = crate::capture::audio_devices();
                 published_devices.store(Some(Arc::new(known_devices.clone())));
                 // Held for the life of the loop: dropping it stops the
@@ -624,6 +661,10 @@ impl AudioManager {
             commands: Some(commands),
             levels,
             devices,
+            // Waits only for the mixer to be built, which is the worker's
+            // first act. An `Err` means it never got that far, which is the
+            // same answer as a mixer that failed: record without audio.
+            mixer_tee: mixer_tee_rx.recv().ok().flatten(),
             worker: Some(worker),
         })
     }
@@ -667,6 +708,12 @@ impl AudioManager {
 
     /// Every audio endpoint the machine currently has, or `None` before the
     /// first enumeration.
+    /// Where a recording's audio track attaches, or `None` when the mixer
+    /// never started.
+    pub fn mixer_tee(&self) -> Option<TeeHandle> {
+        self.mixer_tee.clone()
+    }
+
     pub fn devices(&self) -> Option<Arc<Vec<AudioDeviceTarget>>> {
         self.devices.load_full()
     }

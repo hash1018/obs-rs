@@ -364,7 +364,6 @@ async fn try_pick_system_display() -> ashpd::Result<DisplayCaptureSettings> {
     })
 }
 
-
 /// Every PipeWire audio node, both sinks and sources.
 ///
 /// The node *name* is what gets stored, not the id: a PipeWire id is valid
