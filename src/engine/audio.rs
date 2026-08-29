@@ -13,34 +13,34 @@
 //! # Shape
 //!
 //! ```text
-//! CaptureSource ─ Tee ┬─ AppSink                   (peak, for the meters)
-//!                     └─ AudioVolume ─ AudioMixer input
-//! CaptureSource ─ Tee ┬─ AppSink
-//!                     └─ AudioVolume ─ AudioMixer input
-//!                                      AudioMixer ─ (recording, later)
+//! pipeline "audio-1"  CaptureSource ─ AudioVolume ─ Tee ┬─ AppSink   (meters)
+//!                                                       └─┐
+//! pipeline "audio-2"  CaptureSource ─ AudioVolume ─ Tee ┬─ AppSink
+//!                                                       └─┤
+//!                                                         ↓
+//! pipeline "audio-mix"                    AudioMixer ─ (recording, later)
 //! ```
 //!
-//! # The meters are pre-fader
+//! One pipeline each, not one between them. A `Pipeline`'s sources are fixed
+//! when it is built, so anything that has to be reopened has to be alone in
+//! one — see [`AudioEngine`] for why the mixer above all.
 //!
-//! The tap is the `Tee`'s own branch, ahead of [`AudioVolume`], so a meter
-//! shows what the device is producing rather than what the fader is letting
-//! through. That is a normal choice — it is what a console's default metering
-//! is — and here it is also the only one a `ChainBuilder` expresses: a chain
-//! ends at a `Sink`, and a `Tee` is attached to a source rather than reached
-//! through filters, so nothing can sit between the two.
+//! # The meters are post-fader
 //!
-//! Muting still empties the meter, because the mixer dock draws a muted
-//! channel as silent whatever its peak says. Pulling a fader down is what
-//! this cannot show, and a fader is a thing somebody is looking at while they
-//! move it.
+//! The `Tee` hangs off [`AudioVolume`], not off the capture, so a meter shows
+//! what the fader let through rather than what arrived at it — pulling one
+//! down empties its meter, and so does muting.
+//!
+//! It takes two steps rather than one `pipe` chain because a `Tee` is not a
+//! `Source`: its outputs live behind a lock instead of in `src_pads`, so
+//! nothing can follow it in a `ChainBuilder` and it cannot be a `pipe` stage.
+//! `Context::attach` takes any `Source` though, and an `AudioVolume` is one.
 //!
 //! # What a change costs
 //!
-//! Gain and mute go through handles and cost nothing. A device change rebuilds
-//! the whole graph, because a `Pipeline`'s sources are fixed when it is built
-//! and a capture element is bound to the endpoint it opened. That is rare —
-//! it happens when somebody picks from the menu — and the alternative is
-//! machinery for a case that occurs once.
+//! Gain and mute go through handles and cost nothing. A device change costs
+//! that one source's capture, which is reopened and registered with the
+//! mixer again — nothing else stops, and the mix keeps its timeline.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,13 +53,14 @@ use arc_swap::ArcSwapOption;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, AudioMixer, AudioMixerOptions, AudioVolume, AudioVolumeHandle, TeeBuilder,
+        AppSink, AudioMixer, AudioMixerOptions, AudioVolume, AudioVolumeHandle, MixerHandle,
+        TeeBuilder,
     },
     pipeline::Pipeline,
 };
 
 use crate::domain::{AudioSourceId, AudioSourceKind};
-use crate::snapshots::AudioSnapshot;
+use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
 use super::backend::BackendError;
 
@@ -96,32 +97,62 @@ impl Levels {
     }
 }
 
-/// One source that is open, and how it was opened.
+/// One source that is open, in its own pipeline, and how it was opened.
 struct OpenAudioSource {
+    /// This source's capture, tee and fader. Dropping it stops that one
+    /// capture and nothing else.
+    _pipeline: Arc<Pipeline>,
+    /// What it is registered with the mixer as, which is how it is
+    /// deregistered again.
+    name: String,
     volume: AudioVolumeHandle,
-    /// What this was opened with, so a snapshot that names something else is
-    /// recognised as needing a rebuild rather than a handle update.
+    /// What this was opened with, so a snapshot naming something else is
+    /// recognised as needing a reopen rather than a handle call.
     device: Option<String>,
 }
 
-/// Every audio source running, the mix they feed, and the pipeline that owns
-/// them.
+/// The mixer, and the sources feeding it.
+///
+/// # The mixer outlives its inputs
+///
+/// It is built once and never rebuilt, in a pipeline of its own that holds
+/// nothing else. Its output timestamps are a count from when it started, so
+/// restarting it restarts that count — which is invisible today, when nothing
+/// consumes the mix, and would be a recording losing its audio timeline the
+/// moment one does.
+///
+/// So a device change closes and reopens *that source's* pipeline and
+/// re-registers it with the mixer through [`MixerHandle`], which is a runtime
+/// registration for exactly this. The mixer never notices, and neither does
+/// the source beside it: changing the microphone used to restart desktop
+/// audio too, because both lived in the one pipeline a change had to rebuild.
 pub(super) struct AudioEngine {
-    /// `None` until something is open. Dropping it stops every capture and
-    /// the mixer with them.
-    running: Option<Running>,
+    /// `None` only if building it failed, which leaves the sources with
+    /// nowhere to mix into and is reported once.
+    mixer: Option<RunningMixer>,
+    sources: HashMap<AudioSourceId, OpenAudioSource>,
     levels: Levels,
 }
 
-struct Running {
+struct RunningMixer {
     _pipeline: Arc<Pipeline>,
-    sources: HashMap<AudioSourceId, OpenAudioSource>,
+    handle: MixerHandle,
 }
 
 impl AudioEngine {
+    /// Starts the mixer. It runs from here until this is dropped, whether or
+    /// not anything is feeding it.
     pub(super) fn new() -> Self {
+        let mixer = match start_mixer() {
+            Ok(mixer) => Some(mixer),
+            Err(error) => {
+                eprintln!("could not start the audio mixer: {error}");
+                None
+            }
+        };
         Self {
-            running: None,
+            mixer,
+            sources: HashMap::new(),
             levels: Levels::default(),
         }
     }
@@ -130,144 +161,152 @@ impl AudioEngine {
         &self.levels
     }
 
-    /// Brings the running graph in line with what the project holds.
+    /// Brings the running sources in line with what the project holds.
     ///
-    /// Gain and mute are handle calls. Anything else — a source appearing, a
-    /// device changing — rebuilds, because a `Pipeline`'s sources are settled
-    /// when it is built.
+    /// Gain and mute are handle calls on a source that is already open. A
+    /// device change, or a source appearing or going, touches only that
+    /// source.
     pub(super) fn apply(&mut self, snapshot: &AudioSnapshot) {
-        if self.matches(snapshot) {
-            self.update_levels(snapshot);
-            return;
-        }
-        // Dropped before the new one is built: two captures of the same
-        // endpoint is a thing WASAPI allows and PipeWire allows, and neither
-        // is what was asked for.
-        self.running = None;
-        match build(snapshot, &mut self.levels) {
-            Ok(running) => self.running = Some(running),
-            Err(error) => eprintln!("could not start audio: {error}"),
-        }
-        self.update_levels(snapshot);
-    }
-
-    /// Whether the running graph is of the same sources, on the same devices.
-    fn matches(&self, snapshot: &AudioSnapshot) -> bool {
-        let Some(running) = &self.running else {
-            return snapshot.items.is_empty();
-        };
-        running.sources.len() == snapshot.items.len()
-            && snapshot.items.iter().all(|source| {
-                running
-                    .sources
-                    .get(&source.id)
-                    .is_some_and(|open| open.device == source.device)
-            })
-    }
-
-    /// Pushes the faders and mute buttons through, which needs no rebuild.
-    fn update_levels(&mut self, snapshot: &AudioSnapshot) {
-        let Some(running) = &self.running else {
+        let Some(mixer) = &self.mixer else {
             return;
         };
+
+        // Gone from the project: close it and take its registration back.
+        let wanted: Vec<AudioSourceId> = snapshot.items.iter().map(|source| source.id).collect();
+        self.sources.retain(|id, open| {
+            if wanted.contains(id) {
+                return true;
+            }
+            mixer.handle.remove_source(&open.name);
+            false
+        });
+        self.levels.peaks.retain(|id, _| wanted.contains(id));
+
         for source in &snapshot.items {
-            let Some(open) = running.sources.get(&source.id) else {
-                continue;
-            };
-            let _ = open.volume.set_gain_db(source.gain_db);
-            open.volume.set_muted(source.muted);
+            match self.sources.get(&source.id) {
+                // Already open on the endpoint asked for: the fader and the
+                // mute button are all that can have changed.
+                Some(open) if open.device == source.device => {
+                    let _ = open.volume.set_gain_db(source.gain_db);
+                    open.volume.set_muted(source.muted);
+                }
+                _ => self.reopen(source),
+            }
+        }
+    }
+
+    /// Closes this source if it was open and opens it again on the endpoint
+    /// the project now names.
+    fn reopen(&mut self, source: &AudioSourceSnapshot) {
+        let Some(mixer) = &self.mixer else {
+            return;
+        };
+        let name = format!("audio-{}", source.id.0);
+        // Dropped before the new one opens: two captures of one endpoint is
+        // something both backends allow and neither is what was asked for.
+        if let Some(previous) = self.sources.remove(&source.id) {
+            drop(previous);
+            mixer.handle.remove_source(&name);
+        }
+        self.levels.peaks.remove(&source.id);
+
+        match open_source(&mixer.handle, &name, source) {
+            Ok((open, peak)) => {
+                self.levels.peaks.insert(source.id, peak);
+                self.sources.insert(source.id, open);
+            }
+            Err(error) => {
+                // One source that cannot open must not cost the others
+                // theirs — a missing microphone is not a reason to lose
+                // desktop audio. Its meter stays empty, which is what says
+                // so.
+                eprintln!("could not open audio source {}: {error}", source.name);
+                mixer.handle.remove_source(&name);
+            }
         }
     }
 }
 
-/// Builds one pipeline holding every source and the mixer they feed.
+/// The mixer, alone in a pipeline of its own.
 ///
-/// One pipeline rather than one per source: they share a clock and a bus, and
-/// the mixer is only meaningful alongside the inputs registered with it.
-fn build(snapshot: &AudioSnapshot, levels: &mut Levels) -> Result<Running, BackendError> {
-    levels.peaks.clear();
-    if snapshot.items.is_empty() {
-        return Err("no audio sources".into());
-    }
-
-    let (mixer, mixer_handle) = AudioMixer::new(
+/// Alone because it must outlive every source that comes and goes through it
+/// — see [`AudioEngine`]. It emits whether or not anything is listening,
+/// which is what a recording attached later needs.
+fn start_mixer() -> Result<RunningMixer, BackendError> {
+    let (mixer, handle) = AudioMixer::new(
         "audio-mixer",
         AudioMixerOptions {
             sample_rate: MIX_SAMPLE_RATE,
             channels: MIX_CHANNELS,
         },
     );
+    let pipeline = Pipeline::new("audio-mix", mixer, |_source, _context| Ok(()))?;
+    pipeline.run()?;
+    Ok(RunningMixer {
+        _pipeline: pipeline,
+        handle,
+    })
+}
 
-    let mut builder = media_pp::pipeline::PipelineBuilder::new("audio");
-    let mut sources = HashMap::new();
+/// Opens one capture and wires it to the mixer, in a pipeline of its own.
+fn open_source(
+    mixer: &MixerHandle,
+    name: &str,
+    source: &AudioSourceSnapshot,
+) -> Result<(OpenAudioSource, Arc<AtomicU32>), BackendError> {
+    let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
+    let capture = open_capture(name, source.kind, source.device.as_deref())?;
 
-    for source in &snapshot.items {
-        let name = format!("audio-{}", source.id.0);
-        let mixer_input = mixer_handle
-            .add_source(&name)
-            .ok_or("the audio mixer is gone")?;
-        let peak = Arc::new(AtomicU32::new(0));
-        levels.peaks.insert(source.id, Arc::clone(&peak));
+    let (mut volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
+    let _ = volume_handle.set_gain_db(source.gain_db);
+    volume_handle.set_muted(source.muted);
 
-        let capture = match open_capture(&name, source.kind, source.device.as_deref()) {
-            Ok(capture) => capture,
-            Err(error) => {
-                // One source that cannot open must not cost the others theirs
-                // — a missing microphone is not a reason to lose desktop
-                // audio. Its meter stays empty, which is what says so.
-                eprintln!("could not open audio source {}: {error}", source.name);
-                mixer_handle.remove_source(&name);
-                levels.peaks.remove(&source.id);
-                continue;
-            }
-        };
-
-        let (volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
-        let _ = volume_handle.set_gain_db(source.gain_db);
-        volume_handle.set_muted(source.muted);
-
-        let meter = AppSink::new(format!("{name}-meter"), move |buffer| {
+    let peak = Arc::new(AtomicU32::new(0));
+    let meter = AppSink::new(format!("{name}-meter"), {
+        let peak = Arc::clone(&peak);
+        move |buffer| {
             if let MediaBuffer::Audio(frame) = &buffer {
                 peak.store(peak_db(frame).to_bits(), Ordering::Relaxed);
             }
             Ok(())
-        });
+        }
+    });
 
-        builder = builder.add_source(capture, move |source_element, context| {
-            let meter_branch = context.branch().to(Box::new(meter))?;
-            let mix_branch = context.branch().pipe(volume).to(mixer_input)?;
-            let tee = TeeBuilder::new(format!("{name}-tee"), context.clone())
-                .branch(meter_branch)
-                .branch(mix_branch)
-                .build()?;
-            context.attach(source_element, 0, tee)?;
-            Ok(())
-        })?;
+    let tee_name = format!("{name}-tee");
+    let pipeline = Pipeline::new(name, capture, move |source_element, context| {
+        // The `Tee` hangs off the *fader's* pad, not the capture's, so what
+        // both branches carry is what the fader let through — a meter that
+        // measures the level rather than the one before it.
+        //
+        // Two steps rather than one `pipe` chain, because a `Tee` is not a
+        // `Source`: its outputs live behind a lock instead of in `src_pads`,
+        // so nothing can follow it in a `ChainBuilder` and it cannot be a
+        // `pipe` stage. `Context::attach` takes any `Source` though, and an
+        // `AudioVolume` is one — so the tee is attached to it first, and the
+        // capture is then wired to the fader it already feeds.
+        let meter_branch = context.branch().to(Box::new(meter))?;
+        let mix_branch = context.branch().to(mixer_input)?;
+        let tee = TeeBuilder::new(tee_name, context.clone())
+            .branch(meter_branch)
+            .branch(mix_branch)
+            .build()?;
+        context.attach(&mut volume, 0, tee)?;
 
-        sources.insert(
-            source.id,
-            OpenAudioSource {
-                volume: volume_handle,
-                device: source.device.clone(),
-            },
-        );
-    }
-
-    if sources.is_empty() {
-        return Err("no audio source could be opened".into());
-    }
-
-    // The mixer is a source of its own: it runs on its own clock and emits
-    // whether or not anything is listening, which is what a recording
-    // attached later needs.
-    let pipeline = builder
-        .add_source(mixer, |_source, _context| Ok(()))?
-        .build();
+        let faded = context.branch().to(Box::new(volume))?;
+        context.attach(source_element, 0, faded)?;
+        Ok(())
+    })?;
     pipeline.run()?;
-    Ok(Running {
-        _pipeline: pipeline,
-        sources,
-    })
+
+    Ok((
+        OpenAudioSource {
+            _pipeline: pipeline,
+            name: name.to_owned(),
+            volume: volume_handle,
+            device: source.device.clone(),
+        },
+        peak,
+    ))
 }
 
 /// The loudest sample in this buffer, in decibels below full scale, floored
