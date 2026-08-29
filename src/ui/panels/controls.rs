@@ -37,10 +37,9 @@ pub(in crate::ui) fn show(
     }
 
     ui.add_space(BUTTON_SPACING);
-    // Nothing behind this one yet, so a hover says so rather than leaving a
-    // click that looks like it worked.
-    button(ui, i18n, TextKey::ControlSettings)
-        .on_hover_text(i18n.text(TextKey::ControlUnavailable));
+    if button(ui, i18n, TextKey::ControlSettings).clicked() {
+        actions.push(UiAction::OpenSettings);
+    }
 }
 
 /// One full-width button.

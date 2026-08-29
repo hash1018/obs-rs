@@ -3,6 +3,7 @@ mod docking;
 mod editor;
 mod panels;
 mod preview;
+mod settings;
 mod shell;
 mod state;
 

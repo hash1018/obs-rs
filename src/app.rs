@@ -73,6 +73,7 @@ impl ObsApp {
         let project_manager =
             ProjectManager::spawn(move || project_repaint_ctx.request_repaint()).ok();
         let project_dispatcher = project_manager.as_ref().map(ProjectManager::dispatcher);
+        let recording_settings = settings.recording.clone();
 
         Self {
             ui_state,
@@ -90,6 +91,12 @@ impl ObsApp {
                     render_state,
                     SceneCanvas::DEFAULT,
                     project_dispatcher,
+                    // Handed over at construction, not sent afterwards: the
+                    // engine would otherwise hold its defaults until the
+                    // Settings dialog was opened and applied, and a recording
+                    // started before that would ignore everything the user had
+                    // saved.
+                    recording_settings,
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))
@@ -167,6 +174,27 @@ impl ObsApp {
         }
     }
 
+    /// Commits the Settings dialog's draft.
+    ///
+    /// Saved after it is applied, and a failed write does not undo any of it:
+    /// the user asked for these settings now, and refusing them because they
+    /// could not also be remembered would be the worse of the two failures.
+    fn apply_settings(&mut self, ctx: &egui::Context, settings: AppSettings) {
+        if settings.locale != self.settings.locale {
+            self.localization.set_locale(settings.locale);
+        }
+        // Read when a recording starts, so this reaches the next one rather
+        // than any that is running.
+        if let Some(engine) = &self.engine {
+            engine.set_recording_settings(settings.recording.clone());
+        }
+        self.settings = settings;
+        if let Err(error) = self.settings_store.save(&self.settings) {
+            eprintln!("could not save app settings: {error}");
+        }
+        ctx.request_repaint();
+    }
+
     fn poll_resource_usage(&mut self) {
         let Some(manager) = &self.resources else {
             return;
@@ -231,6 +259,13 @@ impl ObsApp {
                     engine.stop_recording();
                 }
             }
+            UiAction::OpenSettings => {
+                // Seeded here rather than in the dialog: this is what holds
+                // the live settings, and a draft taken from anywhere else
+                // could be stale.
+                self.ui_state.open_settings(&self.settings);
+            }
+            UiAction::ApplySettings(settings) => self.apply_settings(ctx, *settings),
             UiAction::SetTheme(theme) => ctx.set_theme(theme),
             UiAction::SetLocale(locale) => {
                 self.localization.set_locale(locale);

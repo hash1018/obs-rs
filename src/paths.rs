@@ -5,12 +5,14 @@
 //! same question, and were answering it separately — in different styles, and
 //! with different fallbacks for the case where the environment says nothing.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use time::OffsetDateTime;
 
 /// The directory name both trees hang under.
-const APPLICATION: &str = "obs-rs";
+/// Also the default prefix a recording is named with — see
+/// [`crate::settings::RecordingSettings::prefix_or_default`].
+pub const APPLICATION: &str = "obs-rs";
 
 /// Per-user configuration: preferences that are not project data.
 pub fn config_dir() -> PathBuf {
@@ -37,11 +39,15 @@ pub fn recordings_dir() -> PathBuf {
 /// `started` is a parameter rather than read in here so the naming can be
 /// asserted against a fixed instant instead of whatever the clock says
 /// during a test.
-pub fn recording_file(started: OffsetDateTime) -> PathBuf {
+///
+/// The timestamp is not part of what a caller chooses. It is what keeps two
+/// recordings from colliding, and a name a user could strip it from would
+/// make the second one overwrite the first.
+pub fn recording_file_in(directory: &Path, prefix: &str, started: OffsetDateTime) -> PathBuf {
     let stamp = started
         .format(STAMP)
         .unwrap_or_else(|_| String::from("unknown"));
-    recordings_dir().join(format!("{APPLICATION}-{stamp}.mp4"))
+    directory.join(format!("{prefix}-{stamp}.mp4"))
 }
 
 /// Sortable, and legal on every filesystem this runs on — which rules out
@@ -149,7 +155,7 @@ mod tests {
     fn a_recording_is_named_for_when_it_started() {
         let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
 
-        let file = recording_file(started);
+        let file = recording_file_in(&recordings_dir(), APPLICATION, started);
 
         assert_eq!(
             file.file_name().unwrap(),
@@ -158,5 +164,16 @@ mod tests {
              filesystem accepts and a listing sorts"
         );
         assert_eq!(file.parent().unwrap(), recordings_dir());
+    }
+
+    /// A prefix the user chose replaces the application's, and the timestamp
+    /// stays whatever they did — it is what keeps two recordings apart.
+    #[test]
+    fn a_chosen_prefix_and_directory_are_both_used() {
+        let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
+
+        let file = recording_file_in(Path::new("/tmp/clips"), "demo", started);
+
+        assert_eq!(file, Path::new("/tmp/clips/demo-2026-08-29-143005.mp4"));
     }
 }

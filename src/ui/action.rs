@@ -23,4 +23,10 @@ pub enum UiAction {
     StartRecording,
     /// Finish the running recording and close its file.
     StopRecording,
+    /// Show the Settings dialog, seeded from what is currently set.
+    OpenSettings,
+    /// Commit the dialog's draft: persist it, and hand the engine the part it
+    /// needs. Boxed because it is much the largest variant here and every
+    /// other one would otherwise be padded to its size.
+    ApplySettings(Box<crate::settings::AppSettings>),
 }

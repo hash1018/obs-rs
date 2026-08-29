@@ -3,7 +3,7 @@ mod status_bar;
 
 use eframe::egui;
 
-use super::{UiAction, UiResources, UiState, docking};
+use super::{UiAction, UiResources, UiState, docking, settings};
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -31,4 +31,12 @@ pub fn show(
         actions,
     );
     menu_bar::show_about(ui, state, resources.i18n);
+    // Last, so it draws over the docks it was opened from.
+    settings::show(
+        ui.ctx(),
+        &mut state.settings,
+        resources.snapshots.status.recording_elapsed.is_some(),
+        resources.i18n,
+        actions,
+    );
 }

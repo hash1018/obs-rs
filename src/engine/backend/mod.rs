@@ -77,21 +77,6 @@ pub(super) type BackendError = Box<dyn Error + Send + Sync>;
 #[allow(dead_code)]
 pub(super) const BACKGROUND: Color = Color::BLACK;
 
-/// What a recording is encoded at, shared by every backend so that a file
-/// does not come out differently depending on which platform made it. Both
-/// NVENC elements take the same four numbers.
-///
-/// Enough for 1080p screen content at the compositor's rate, where large
-/// still areas cost almost nothing and a scrolling window is the peak.
-#[allow(dead_code)]
-pub(super) const RECORDING_BIT_RATE: usize = 12_000_000;
-
-/// Seconds between keyframes. Two is the usual compromise: a seek lands
-/// within that much of where it aimed, and the cost is one full frame every
-/// two seconds rather than every one.
-#[allow(dead_code)]
-pub(super) const RECORDING_GOP_SECONDS: u32 = 2;
-
 /// Frames the recording branch may fall behind by before the compositor is
 /// made to wait — at 60 fps, about an eighth of a second of slack for an
 /// encoder that hiccups.

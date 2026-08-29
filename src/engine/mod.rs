@@ -75,6 +75,21 @@ enum EngineCommand {
     StartRecording,
     /// Finish the running recording, closing its file.
     StopRecording,
+    /// What the *next* recording is written as. A running one is unaffected:
+    /// an mp4's header is written before its first frame, so none of this can
+    /// be renegotiated after it has started.
+    RecordingSettings(Box<crate::settings::RecordingSettings>),
+}
+
+/// What the engine is started with, as opposed to what it is told afterwards
+/// over [`EngineCommand`]. Grouped because they travel together and because
+/// `run` had collected more parameters than anyone can read at a glance.
+struct EngineSetup {
+    size: [u32; 2],
+    project: Option<ProjectDispatcher>,
+    /// What the *first* recording is written as, loaded from disk before the
+    /// engine existed — see `ObsApp::new`.
+    recording: crate::settings::RecordingSettings,
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -112,6 +127,7 @@ impl EngineManager {
         render_state: RenderState,
         canvas: SceneCanvas,
         project: Option<ProjectDispatcher>,
+        recording_settings: crate::settings::RecordingSettings,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let size = [canvas.width as u32, canvas.height as u32];
@@ -135,15 +151,13 @@ impl EngineManager {
                     recording_since,
                     recording_error,
                 };
-                if let Err(error) = run(
-                    render_state,
+                let setup = EngineSetup {
                     size,
                     project,
-                    published,
-                    command_rx,
-                    &stop,
-                    wake_ui,
-                ) {
+                    recording: recording_settings,
+                };
+                if let Err(error) = run(render_state, setup, published, command_rx, &stop, wake_ui)
+                {
                     // The Preview keeps showing "no frame" rather than the
                     // application failing to start over a compositor.
                     eprintln!("engine stopped: {error}");
@@ -230,6 +244,13 @@ impl EngineManager {
         let _ = self.commands.send(EngineCommand::StopRecording);
     }
 
+    /// Hands the engine what the next recording should be written as.
+    pub fn set_recording_settings(&self, settings: crate::settings::RecordingSettings) {
+        let _ = self
+            .commands
+            .send(EngineCommand::RecordingSettings(Box::new(settings)));
+    }
+
     /// How long the running recording has been going, or `None` when none is.
     ///
     /// Derived from the instant the engine published rather than counted
@@ -261,13 +282,17 @@ impl Drop for EngineManager {
 
 fn run(
     render_state: RenderState,
-    size: [u32; 2],
-    project: Option<ProjectDispatcher>,
+    setup: EngineSetup,
     published: Published,
     commands: mpsc::Receiver<EngineCommand>,
     stop: &AtomicBool,
     wake_ui: impl Fn() + Send + Sync + 'static,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let EngineSetup {
+        size,
+        project,
+        recording: mut recording_settings,
+    } = setup;
     // Shared rather than moved: both the sink that publishes a frame and the
     // loop that puts the branch to sleep have to ask for a repaint.
     let wake_ui = Arc::new(wake_ui);
@@ -297,6 +322,9 @@ fn run(
 
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
+    // `recording_settings` is owned by this loop rather than shared: only
+    // `StartRecording` reads it, and that arrives on the same channel a change
+    // does, so one can never land half-way through a recording being opened.
     while !stop.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => {
@@ -306,6 +334,7 @@ fn run(
                     &mut open,
                     &mut scene,
                     &published,
+                    &mut recording_settings,
                     command,
                 );
                 // Whatever else is already waiting, so a gesture's newer
@@ -317,6 +346,7 @@ fn run(
                         &mut open,
                         &mut scene,
                         &published,
+                        &mut recording_settings,
                         next,
                     );
                 }
@@ -368,6 +398,7 @@ fn apply_command(
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
     published: &Published,
+    recording_settings: &mut crate::settings::RecordingSettings,
     command: EngineCommand,
 ) -> bool {
     match command {
@@ -392,6 +423,10 @@ fn apply_command(
             backend.set_preview_visible(visible);
             false
         }
+        EngineCommand::RecordingSettings(settings) => {
+            *recording_settings = *settings;
+            false
+        }
         EngineCommand::StartRecording => {
             // Cleared before the attempt, not after: what is shown then
             // describes this attempt rather than an older one, and a retry
@@ -399,7 +434,7 @@ fn apply_command(
             published.recording_error.store(None);
             // The instant is published only on success, so a UI that shows a
             // recording running is showing one that is.
-            match start_recording(backend) {
+            match start_recording(backend, recording_settings) {
                 Ok(started) => published.recording_since.store(Some(Arc::new(started))),
                 Err(error) => {
                     let reason = describe(error.as_ref());
@@ -425,15 +460,20 @@ fn apply_command(
 /// Opens one recording, returning when it started rather than `()` — the
 /// clock the status bar counts from is the moment the file began taking
 /// frames, not the moment the button was pressed.
-fn start_recording(backend: &Backend) -> Result<Instant, BackendError> {
-    let path = crate::paths::recording_file(
+fn start_recording(
+    backend: &Backend,
+    settings: &crate::settings::RecordingSettings,
+) -> Result<Instant, BackendError> {
+    let path = crate::paths::recording_file_in(
+        &settings.directory_or_default(),
+        settings.prefix_or_default(),
         // A recording is named for the user's own wall clock. `now_local`
         // refuses to answer in a process with more than one thread on some
         // platforms, which this is; UTC is then a worse name rather than no
         // recording.
         OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
     );
-    backend.start_recording(&path, TARGET_FPS)?;
+    backend.start_recording(&path, TARGET_FPS, settings)?;
     println!("recording to {}", path.display());
     Ok(Instant::now())
 }

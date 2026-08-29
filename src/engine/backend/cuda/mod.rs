@@ -29,7 +29,7 @@ use crate::domain::{SourceKind, SourceSettings};
 use crate::snapshots::SceneItemSnapshot;
 
 use super::{
-    BACKGROUND, BackendError, OpenSource, RECORDING_BIT_RATE, RECORDING_GOP_SECONDS,
+    BACKGROUND, BackendError, OpenSource,
     RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, flat_bgra, input_name, unsupported_kind,
 };
 
@@ -243,6 +243,7 @@ impl Backend {
         &self,
         path: &Path,
         fps: u32,
+        settings: &crate::settings::RecordingSettings,
     ) -> Result<(), BackendError> {
         let mut recording = self.recording.lock().expect("recording state poisoned");
         if recording.is_some() {
@@ -264,8 +265,8 @@ impl Backend {
                 height,
                 time_base,
                 frame_rate: ffmpeg::Rational::new(fps as i32, 1),
-                bit_rate: RECORDING_BIT_RATE,
-                gop_size: fps * RECORDING_GOP_SECONDS,
+                bit_rate: settings.bit_rate_bits(),
+                gop_size: fps * settings.keyframe_seconds_clamped(),
             },
         )?;
 
