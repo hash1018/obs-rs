@@ -1,8 +1,15 @@
-//! The button strip both docks put along their bottom edge.
+//! The pieces every dock is built from, and the rule they enforce: what can
+//! overflow scrolls, and buttons that must stay reachable sit outside it.
 //!
-//! Shared rather than duplicated because the icons are drawn from geometry
-//! rather than loaded from assets: two copies would drift a pixel at a time,
-//! and the two docks are meant to look like one control.
+//! - [`strip`] is the button row along a dock's bottom edge. Shared rather
+//!   than duplicated because the icons are drawn from geometry rather than
+//!   loaded from assets: two copies would drift a pixel at a time, and the
+//!   docks are meant to look like one control.
+//! - [`reserve_list`] takes the strip's height out of a pane before anything
+//!   claims it, for a dock that has both halves.
+//! - [`scroll_content`] is the scrolling half, configured the one way that
+//!   actually bounds it. A dock whose content *is* its buttons — Controls —
+//!   uses this alone, with no strip to reserve.
 
 use eframe::egui;
 
@@ -159,7 +166,7 @@ fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
 ///
 /// The clip alone is not scrolling, though — it hides the overflow rather
 /// than making it reachable. What bounds the scroll area is
-/// [`list_scroll_area`], and a list has to be built with both.
+/// [`scroll_content`], and a list has to be built with both.
 pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
     let mut rect = ui.available_rect_before_wrap().intersect(ui.max_rect());
     rect.max.y = (rect.max.y - HEIGHT).max(rect.min.y);
@@ -170,30 +177,36 @@ pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
             .layout(egui::Layout::top_down(egui::Align::LEFT)),
     );
     list.set_clip_rect(rect);
-    // A solid bar rather than egui's default floating one, which is drawn
-    // over the content only while the pointer is inside it. A dock too short
-    // for its list then looks like it is missing a row rather than like it
-    // has one more to scroll to — which is exactly how it read.
-    list.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     list
 }
 
-/// The scroll area a dock's list belongs in, sized to the `Ui`
-/// [`reserve_list`] handed back.
+/// A dock's scrolling half, filling the `Ui` it is given.
 ///
-/// The configuration is the point. `auto_shrink(false)` on an axis makes a
-/// scroll area take the whole of that axis *and grow past it* when the
-/// content is longer, so it never believes it has overflow and never draws a
-/// bar — the rows past the end are simply clipped away, which reads as a list
-/// that has lost them. Shrinking vertically and capping the height is what
-/// makes it scroll instead, and the cap is why the width still fills.
-pub(super) fn list_scroll<R>(
+/// That `Ui` is what [`reserve_list`] hands back for a dock that also has a
+/// button strip, and the pane's own for one whose content is all there is.
+///
+/// The configuration is the point, and every part of it was arrived at by
+/// something being wrong: a solid bar because the default floats into view
+/// only under the pointer, a zero scroll floor because the default refuses to
+/// scroll a short pane at all, and a trailing gap because the last row
+/// otherwise ends flush against whatever is below.
+pub(super) fn scroll_content<R>(
     list: &mut egui::Ui,
     id: &'static str,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) {
-    let size = egui::vec2(list.available_width(), list.max_rect().height());
-    list.allocate_ui(size, |ui| {
+    // A solid bar rather than egui's default floating one, which is drawn
+    // over the content only while the pointer is inside it. A dock too short
+    // for its content then looks like it is missing part of it rather than
+    // like it has more to scroll to — which is exactly how it read.
+    list.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+    // What is left, not the whole pane. [`reserve_list`] hands back a `Ui`
+    // whose cursor is already at its top, so for a dock with a strip the two
+    // are the same — but a dock that calls this on its own pane has spent a
+    // title bar and a separator first, and sizing from `max_rect` there
+    // would claim that space twice and push the last button off the bottom.
+    let rect = list.available_rect_before_wrap().intersect(list.max_rect());
+    list.allocate_ui(rect.size(), |ui| {
         egui::ScrollArea::vertical()
             .id_salt(id)
             // Zero, not egui's default of 64. That default is a floor on the

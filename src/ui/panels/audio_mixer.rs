@@ -82,7 +82,7 @@ pub(in crate::ui) fn show(
 
     let scrolled = egui::ScrollArea::both()
         .id_salt("audio_mixer_channels")
-        // Zero, not egui's default of 64 — see `toolbar::list_scroll` for
+        // Zero, not egui's default of 64 — see `toolbar::scroll_content` for
         // what that default does to a dock squeezed below it.
         .min_scrolled_height(0.0)
         .min_scrolled_width(0.0)

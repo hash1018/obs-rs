@@ -71,7 +71,7 @@ pub(in crate::ui) fn show(
             ui.weak(i18n.text_with(TextKey::SourceEmpty, &args));
         });
     } else {
-        toolbar::list_scroll(ui, "sources_list", |ui| {
+        toolbar::scroll_content(ui, "sources_list", |ui| {
             for item in &snapshot.items {
                 show_source_row(ui, editor, item, i18n, actions);
             }

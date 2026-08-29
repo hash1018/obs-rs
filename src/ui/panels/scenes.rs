@@ -43,7 +43,7 @@ pub(in crate::ui) fn show(
     let mut list = toolbar::reserve_list(ui, "scenes_list_area");
     show_toolbar(ui, snapshot, i18n, actions);
 
-    toolbar::list_scroll(&mut list, "scenes_list", |ui| {
+    toolbar::scroll_content(&mut list, "scenes_list", |ui| {
         for scene in &snapshot.items {
             let selected = snapshot.selected_scene_id == Some(scene.id);
             let row_width = ui.available_width();

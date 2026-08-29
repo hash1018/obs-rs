@@ -6,6 +6,7 @@ use crate::i18n::{LocalizationManager, TextKey};
 use crate::snapshots::StatusSnapshot;
 
 use super::super::UiAction;
+use super::toolbar;
 
 /// Tall enough to read as a primary control rather than a list row, which is
 /// what separates this dock from the Scenes and Sources lists beside it.
@@ -13,6 +14,21 @@ const BUTTON_HEIGHT: f32 = 30.0;
 const BUTTON_SPACING: f32 = 6.0;
 
 pub(in crate::ui) fn show(
+    ui: &mut egui::Ui,
+    status: &StatusSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    // Scrolls like every other dock here, but with nothing reserved below
+    // it: the buttons *are* this dock's content, so there is no strip to
+    // keep them out of. Without it a squeezed pane simply clipped the lower
+    // ones away — and it grew a third the day recording learned to pause.
+    toolbar::scroll_content(ui, "controls_buttons", |ui| {
+        show_buttons(ui, status, i18n, actions);
+    });
+}
+
+fn show_buttons(
     ui: &mut egui::Ui,
     status: &StatusSnapshot,
     i18n: &LocalizationManager,
