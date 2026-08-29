@@ -75,7 +75,6 @@ settings-page-recording = 녹화
 settings-language = 언어
 settings-theme = 테마
 settings-recording-directory = 저장 폴더
-settings-recording-directory-hint = 비워 두면 기본 폴더를 사용합니다
 settings-recording-name-prefix = 파일 이름 접두사
 settings-recording-name-example = 예시
 settings-recording-encoder = 인코더

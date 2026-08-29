@@ -51,11 +51,25 @@ pub(super) fn show(
                 // rather than allowed to grow, so the button cannot be pushed
                 // off the end of the row by a long path.
                 let field = ui.available_width() - BROWSE_WIDTH - ui.spacing().item_spacing.x;
+                // Shown, not typed. A path is picked from the dialog beside
+                // it, which is the only way to know the folder exists and can
+                // be written before a recording depends on it — a typed one
+                // is only found out about when the button is pressed.
+                //
+                // A `&str` buffer rather than a disabled field: egui treats
+                // that as read-only and still lets the text be selected and
+                // copied, which is most of what anyone wants a path for.
+                //
+                // What it shows is the folder in force, so an unset one reads
+                // as the default it resolves to rather than as blank.
+                let shown = draft.recording.directory_or_default();
+                let mut shown = shown.display().to_string();
+                let mut shown: &str = &mut shown;
                 ui.add_sized(
                     [field.max(80.0), ui.spacing().interact_size.y],
-                    egui::TextEdit::singleline(&mut draft.recording.directory)
-                        .hint_text(i18n.text(TextKey::SettingsRecordingDirectoryHint)),
-                );
+                    egui::TextEdit::singleline(&mut shown),
+                )
+                .on_hover_text(shown);
                 // Disabled while one is open: the desktop's picker is a
                 // separate window, and a second would sit behind the first
                 // with nothing to say it was there.

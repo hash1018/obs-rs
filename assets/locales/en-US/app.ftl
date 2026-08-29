@@ -75,7 +75,6 @@ settings-page-recording = Recording
 settings-language = Language
 settings-theme = Theme
 settings-recording-directory = Recording folder
-settings-recording-directory-hint = Leave empty to use the default folder
 settings-recording-name-prefix = File name prefix
 settings-recording-name-example = Example
 settings-recording-encoder = Encoder
