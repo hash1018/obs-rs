@@ -144,17 +144,31 @@ pub(super) fn show(
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsRecordingFps));
-            egui::ComboBox::from_id_salt("settings_fps")
-                .selected_text(format!("{} fps", draft.recording.fps))
-                .show_ui(ui, |ui| {
-                    // A list rather than a free number: an encoder is
-                    // configured for exactly what it is given, and a rate the
-                    // compositor cannot supply would claim frames the file
-                    // does not hold.
-                    for fps in FPS_CHOICES {
-                        ui.selectable_value(&mut draft.recording.fps, fps, format!("{fps} fps"));
-                    }
-                });
+            // Disabled while a recording runs, unlike everything else on this
+            // page. The others take effect on the *next* recording; this one
+            // is the compositor's own rate and takes immediately, which the
+            // running file's encoder was not configured for.
+            ui.add_enabled_ui(!recording, |ui| {
+                let combo = egui::ComboBox::from_id_salt("settings_fps")
+                    .selected_text(format!("{} fps", draft.recording.fps))
+                    .show_ui(ui, |ui| {
+                        // A list rather than a free number: an encoder is
+                        // configured for exactly what it is given, and the
+                        // compositor is built to produce one of these.
+                        for fps in FPS_CHOICES {
+                            ui.selectable_value(
+                                &mut draft.recording.fps,
+                                fps,
+                                format!("{fps} fps"),
+                            );
+                        }
+                    });
+                if recording {
+                    combo
+                        .response
+                        .on_disabled_hover_text(i18n.text(TextKey::SettingsFpsWhileRecording));
+                }
+            });
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsRecordingBitRate));

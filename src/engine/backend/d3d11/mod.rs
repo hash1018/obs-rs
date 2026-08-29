@@ -4,6 +4,7 @@
 mod capture;
 mod shared;
 
+use crate::engine::TARGET_FPS;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -461,6 +462,36 @@ impl Backend {
     ) -> Result<(), BackendError> {
         self.tee.finish_branch(track.branch)?;
         Ok(())
+    }
+
+    /// Changes the rate the compositor emits at, which is also the rate a
+    /// recording is written at.
+    ///
+    /// Runtime rather than a restart: the compositor's handle takes it, so
+    /// the captures feeding it and the Preview reading it are undisturbed.
+    /// Refused by the engine while a recording is running — see
+    /// `EngineCommand::VideoSettings` — because the file's encoder was
+    /// configured for the old rate and the timestamps it is being handed
+    /// would change meaning underneath it.
+    pub(in crate::engine) fn set_frame_rate(&self, fps: u32) -> bool {
+        self.compositor
+            .set_frame_rate(ffmpeg::Rational::new(fps as i32, 1))
+    }
+
+    /// What the compositor is actually emitting at, which is what a recording
+    /// has to be configured for.
+    ///
+    /// Read from the compositor rather than from the setting that asked for
+    /// it: a rate it refused leaves the old one running, and a recording
+    /// opened for a rate nothing is producing writes a file that claims more
+    /// frames a second than it holds.
+    pub(in crate::engine) fn frame_rate(&self) -> u32 {
+        self.compositor
+            .frame_rate()
+            .map_or(TARGET_FPS, |rate| {
+                (rate.numerator().max(1) / rate.denominator().max(1)) as u32
+            })
+            .max(1)
     }
 
     pub(in crate::engine) fn remove_source(&self, name: &str) {

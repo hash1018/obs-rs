@@ -88,6 +88,16 @@ impl Backend {
         Err("no compositor backend is written for this platform yet".into())
     }
 
+    /// Nothing composites here, so there is no rate to change.
+    pub(in crate::engine) fn set_frame_rate(&self, _fps: u32) -> bool {
+        false
+    }
+
+    /// The rate a recording would be configured for, if one could start.
+    pub(in crate::engine) fn frame_rate(&self) -> u32 {
+        crate::engine::TARGET_FPS
+    }
+
     pub(in crate::engine) fn available_encoders(&self) -> &[crate::settings::RecordingEncoder] {
         &[]
     }

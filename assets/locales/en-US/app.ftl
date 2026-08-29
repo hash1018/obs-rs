@@ -90,6 +90,7 @@ settings-recording-fps = Frame rate
 settings-recording-bit-rate = Bit rate
 settings-recording-keyframes = Keyframe interval
 settings-recording-while-running = Applies to the next recording, not the one running
+settings-fps-while-recording = The rate cannot change while recording: it is the compositor's own, and the running file was encoded for the old one
 action-apply = Apply
 action-browse = Browse…
 action-ok = OK

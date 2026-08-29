@@ -198,7 +198,7 @@ impl ObsApp {
             return;
         };
         self.snapshots.status.active_fps = engine.active_fps();
-        self.snapshots.status.target_fps = Some(engine.target_fps());
+        self.snapshots.status.target_fps = Some(engine.target_fps(&self.settings.recording));
         // Read every pass rather than tracked here: the engine is what knows
         // whether a recording actually started, and the Controls dock reads
         // the same answer the status bar's clock does.

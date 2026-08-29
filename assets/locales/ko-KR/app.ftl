@@ -90,6 +90,7 @@ settings-recording-fps = 프레임레이트
 settings-recording-bit-rate = 비트레이트
 settings-recording-keyframes = 키프레임 간격
 settings-recording-while-running = 진행 중인 녹화가 아니라 다음 녹화부터 적용됩니다
+settings-fps-while-recording = 녹화 중에는 바꿀 수 없습니다. 컴포지터 자체의 속도이고, 진행 중인 파일은 이전 값으로 인코딩되고 있습니다
 action-apply = 적용
 action-browse = 찾아보기…
 action-ok = 확인

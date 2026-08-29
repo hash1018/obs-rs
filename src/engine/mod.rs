@@ -39,11 +39,14 @@ use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
 use backend::{Backend, BackendError, OpenSource};
 
-/// The compositor's output rate. Independent of the egui repaint rate: egui
-/// redraws when something asks it to, this advances on the compositor's own
-/// clock. It is what a recording will be made of, so it is not the knob to
-/// turn for a quieter Preview.
-const TARGET_FPS: u32 = 60;
+/// The rate to assume when the compositor cannot be asked — it is gone, or
+/// there is no backend at all.
+///
+/// Not what the compositor runs at: that is `RecordingSettings::fps`, which
+/// it is started with and follows afterwards. This is only the answer to
+/// "what rate would a recording be configured for" when there is nothing to
+/// ask, where any number is wrong and a plausible one beats a panic.
+pub(in crate::engine) const TARGET_FPS: u32 = crate::settings::DEFAULT_FPS;
 
 /// How often the Preview is redrawn from those frames.
 ///
@@ -283,8 +286,15 @@ impl EngineManager {
         (bits != 0).then(|| f32::from_bits(bits))
     }
 
-    pub fn target_fps(&self) -> f32 {
-        TARGET_FPS as f32
+    /// The rate the compositor is being asked for, which is also the rate a
+    /// recording is written at.
+    ///
+    /// The setting rather than the constant, because the compositor now
+    /// follows it — see `EngineCommand::RecordingSettings`. It is what the
+    /// status bar's actual rate is compared against, so a machine keeping 30
+    /// of a requested 30 reads as keeping up rather than as half of 60.
+    pub fn target_fps(&self, settings: &crate::settings::RecordingSettings) -> f32 {
+        settings.fps.max(1) as f32
     }
 
     /// Starts writing the composited frames to a file.
@@ -393,7 +403,17 @@ fn run(
             }
         }
     };
-    let backend = Backend::start(&render_state, size, TARGET_FPS, PREVIEW_FPS, publish)?;
+    // Built at the configured rate, not at a constant. Composing at 60 for a
+    // recording written at 30 is half the GPU cost thrown away, and the
+    // setting is what the compositor follows from here on — see
+    // `EngineCommand::RecordingSettings`.
+    let backend = Backend::start(
+        &render_state,
+        size,
+        recording.settings.fps.max(1),
+        PREVIEW_FPS,
+        publish,
+    )?;
 
     // Probed here rather than on demand: it needs the backend's own device,
     // and the dialog that shows the list must not be the thing that waits for
@@ -485,6 +505,16 @@ fn apply_command(
             false
         }
         EngineCommand::RecordingSettings(settings) => {
+            // The rate is the compositor's, not just the file's: what a
+            // recording is written at is what is being composited, so
+            // applying it means telling the compositor. Refused while one is
+            // running — the encoder was configured for the old rate and the
+            // timestamps it is being handed would change meaning underneath
+            // it. The setting is kept either way, and takes at the next
+            // change once the recording has stopped.
+            if recording.running.is_none() && settings.fps != backend.frame_rate() {
+                backend.set_frame_rate(settings.fps);
+            }
             recording.settings = *settings;
             false
         }
@@ -578,7 +608,7 @@ fn start_recording(
         backend,
         recording.mixer_tee.as_ref(),
         &path,
-        TARGET_FPS,
+        backend.frame_rate(),
         settings,
     )?;
     recording.running = Some(running);
@@ -674,7 +704,7 @@ fn reconcile(
             }
             Some(SourceState::Failed) => {}
             None => {
-                let state = match backend.open_source(item, layer, TARGET_FPS) {
+                let state = match backend.open_source(item, layer, backend.frame_rate()) {
                     Ok(source) => {
                         // The portal may hand back a different token than the
                         // one it was given. Keeping the old one would mean
