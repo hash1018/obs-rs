@@ -22,6 +22,7 @@ control-stop-recording = 녹화 중지
 control-settings = 설정
 control-unavailable = 아직 연결되지 않았습니다
 status-ready = 준비
+status-recording-failed = 녹화를 시작할 수 없습니다 — {$reason}
 status-gpu-process = obs-rs가 사용 중인 GPU
 status-gpu-device = GPU 전체 사용률, * 표시. 이 드라이버는 프로세스별 GPU 카운터를 제공하지 않아 다른 프로그램의 사용량이 함께 포함됩니다.
 status-gpu-unavailable = 이 드라이버에서는 GPU 사용률을 얻을 수 없습니다

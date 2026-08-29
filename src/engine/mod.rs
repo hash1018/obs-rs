@@ -88,6 +88,12 @@ struct Published {
     /// written only once a recording has actually started, so a start that
     /// failed leaves the UI showing what is true.
     recording_since: Arc<ArcSwapOption<Instant>>,
+    /// Why the last attempt to start a recording failed, if it did.
+    ///
+    /// A failed start is otherwise silent: nothing appears, no clock runs,
+    /// and the button goes back to what it said. Somewhere has to keep the
+    /// reason, and it is the engine that has it.
+    recording_error: Arc<ArcSwapOption<String>>,
 }
 
 pub struct EngineManager {
@@ -95,6 +101,7 @@ pub struct EngineManager {
     /// `f32` bits, so the UI can read the rate without a lock.
     active_fps: Arc<AtomicU32>,
     recording_since: Arc<ArcSwapOption<Instant>>,
+    recording_error: Arc<ArcSwapOption<String>>,
     commands: Sender<EngineCommand>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -112,18 +119,21 @@ impl EngineManager {
         let active_fps = Arc::new(AtomicU32::new(0));
         let recording_since = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
+        let recording_error = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
 
         let worker = thread::Builder::new().name("engine".to_owned()).spawn({
             let frame = Arc::clone(&frame);
             let active_fps = Arc::clone(&active_fps);
             let recording_since = Arc::clone(&recording_since);
+            let recording_error = Arc::clone(&recording_error);
             let stop = Arc::clone(&stop);
             move || {
                 let published = Published {
                     frame,
                     active_fps,
                     recording_since,
+                    recording_error,
                 };
                 if let Err(error) = run(
                     render_state,
@@ -145,6 +155,7 @@ impl EngineManager {
             frame,
             active_fps,
             recording_since,
+            recording_error,
             commands,
             stop,
             worker: Some(worker),
@@ -227,6 +238,14 @@ impl EngineManager {
         self.recording_since
             .load_full()
             .map(|since| since.elapsed())
+    }
+
+    /// Why the last attempt to start a recording failed, if it did.
+    ///
+    /// Cleared when the next attempt is made, so this always describes the
+    /// most recent one rather than accumulating.
+    pub fn recording_error(&self) -> Option<Arc<String>> {
+        self.recording_error.load_full()
     }
 }
 
@@ -374,13 +393,19 @@ fn apply_command(
             false
         }
         EngineCommand::StartRecording => {
-            // Published only on success, so a Preview that shows a recording
-            // running is showing one that is. A failure is reported and
-            // nothing else changes: the button stays as it was, which is what
-            // the user then sees.
+            // Cleared before the attempt, not after: what is shown then
+            // describes this attempt rather than an older one, and a retry
+            // that works leaves nothing behind.
+            published.recording_error.store(None);
+            // The instant is published only on success, so a UI that shows a
+            // recording running is showing one that is.
             match start_recording(backend) {
                 Ok(started) => published.recording_since.store(Some(Arc::new(started))),
-                Err(error) => eprintln!("could not start recording: {error}"),
+                Err(error) => {
+                    let reason = describe(error.as_ref());
+                    eprintln!("could not start recording: {reason}");
+                    published.recording_error.store(Some(Arc::new(reason)));
+                }
             }
             false
         }
@@ -411,6 +436,30 @@ fn start_recording(backend: &Backend) -> Result<Instant, BackendError> {
     backend.start_recording(&path, TARGET_FPS)?;
     println!("recording to {}", path.display());
     Ok(Instant::now())
+}
+
+/// One line naming everything that went wrong, not only the outermost of it.
+///
+/// `media-pp`'s errors carry their cause as a `source`, and the outer message
+/// is often the general shape — "could not open the encoder" — while the one
+/// a person can act on is underneath: no NVENC on this adapter, a directory
+/// that cannot be written. So the chain is walked and joined.
+///
+/// A cause already quoted by its parent is not repeated: `thiserror`'s
+/// `#[error("... {0}")]` embeds one, and appending it again would say the
+/// same thing twice in the one line a status bar has.
+fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut next = error.source();
+    while let Some(cause) = next {
+        let message = cause.to_string();
+        if !text.contains(&message) {
+            text.push_str(": ");
+            text.push_str(&message);
+        }
+        next = cause.source();
+    }
+    text
 }
 
 enum SourceState {
@@ -547,5 +596,77 @@ impl FrameRate {
         self.window_start = Instant::now();
         self.frames = 0;
         Some(measured)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Layer {
+        message: &'static str,
+        cause: Option<Box<Layer>>,
+    }
+
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str(self.message)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.cause
+                .as_deref()
+                .map(|cause| cause as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    fn chain(messages: &[&'static str]) -> Layer {
+        let mut layers = messages.iter().rev();
+        let mut error = Layer {
+            message: layers.next().expect("a chain needs a layer"),
+            cause: None,
+        };
+        for message in layers {
+            error = Layer {
+                message,
+                cause: Some(Box::new(error)),
+            };
+        }
+        error
+    }
+
+    /// The outermost message is the shape of the failure; the one a person
+    /// can act on is usually underneath it.
+    #[test]
+    fn a_failure_is_described_by_its_whole_chain() {
+        let error = chain(&[
+            "could not open the encoder",
+            "avcodec_open2 failed",
+            "no NVENC capable devices found",
+        ]);
+
+        assert_eq!(
+            describe(&error),
+            "could not open the encoder: avcodec_open2 failed: no NVENC capable devices found"
+        );
+    }
+
+    /// `thiserror`'s `#[error("... {0}")]` already embeds its source, and a
+    /// status bar has one line — saying it twice would spend half of that
+    /// line repeating itself.
+    #[test]
+    fn a_cause_its_parent_already_quotes_is_not_repeated() {
+        let error = chain(&[
+            "opening the file failed: access is denied",
+            "access is denied",
+        ]);
+
+        assert_eq!(
+            describe(&error),
+            "opening the file failed: access is denied"
+        );
     }
 }

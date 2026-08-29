@@ -16,7 +16,7 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label(i18n.text(TextKey::StatusReady));
+                show_state(ui, status, i18n);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Tighter than the default 8, which spent 22 points on
                     // every divider — 8 before, the separator's own 6, 8 after
@@ -46,6 +46,41 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
 /// readings apart is the separator between them, so this only has to keep
 /// them off it.
 const SEGMENT_GAP: f32 = 3.0;
+
+/// The bar's left half: what the application is doing, or the last thing that
+/// went wrong trying to.
+///
+/// A recording that fails to start is otherwise invisible — no file appears,
+/// no clock runs, and the button goes back to what it said — so this is where
+/// the reason surfaces. In the error colour, and it stays until the next
+/// attempt rather than fading, because a message that clears itself is one
+/// somebody looking away from the bottom of the window never sees.
+///
+/// Truncated to the width the bar has, with the whole of it on hover: the
+/// readings on the right are what this bar exists for, and a long message
+/// from a driver must not push them off the end.
+fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
+    let Some(error) = &status.recording_error else {
+        ui.label(i18n.text(TextKey::StatusReady));
+        return;
+    };
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("reason", error.as_str());
+    let message = i18n.text_with(TextKey::StatusRecordingFailed, &args);
+    ui.scope(|ui| {
+        ui.set_max_width(ui.available_width() * ERROR_WIDTH_SHARE);
+        ui.label(
+            egui::RichText::new(message.as_ref())
+                .color(ui.visuals().error_fg_color)
+                .strong(),
+        )
+        .on_hover_text(message.as_ref());
+    });
+}
+
+/// How much of the bar an error message may take before it is elided. The
+/// readings on the right need the rest, and they are fixed-width.
+const ERROR_WIDTH_SHARE: f32 = 0.55;
 
 fn format_recording_time(elapsed: Option<Duration>) -> String {
     let Some(elapsed) = elapsed else {

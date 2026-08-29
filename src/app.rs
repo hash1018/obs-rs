@@ -138,6 +138,7 @@ impl ObsApp {
         // whether a recording actually started, and the Controls dock reads
         // the same answer the status bar's clock does.
         self.snapshots.status.recording_elapsed = engine.recording();
+        self.snapshots.status.recording_error = engine.recording_error();
 
         // A minimised window is nobody looking at the Preview, and the engine
         // can stop putting frames where nobody will sample them. Only the

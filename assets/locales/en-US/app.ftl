@@ -22,6 +22,7 @@ control-stop-recording = Stop Recording
 control-settings = Settings
 control-unavailable = Not wired up yet
 status-ready = Ready
+status-recording-failed = Recording could not start — {$reason}
 status-gpu-process = GPU used by obs-rs
 status-gpu-device = Whole-GPU usage, marked *. This driver reports no per-process GPU counter, so this includes every other application.
 status-gpu-unavailable = No GPU counter is available on this driver
