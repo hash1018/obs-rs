@@ -17,6 +17,7 @@
 
 use eframe::egui;
 
+use crate::capture::AudioDeviceTarget;
 use crate::domain::{AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{AudioCommand, ProjectCommand};
@@ -24,9 +25,11 @@ use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
 use super::super::UiAction;
 
-/// One source's column: a fader, a meter, and the scale between them, and no
-/// wider. The dock shows as many as it has room for and scrolls past the rest.
-const SOURCE_WIDTH: f32 = 88.0;
+/// One source's column: a fader, a meter, the scale between them, and a name
+/// wide enough not to wrap onto a second line — which would push the channel
+/// down and leave two columns disagreeing about where their meters start. The
+/// dock shows as many as it has room for and scrolls past the rest.
+const SOURCE_WIDTH: f32 = 112.0;
 const METER_WIDTH: f32 = 9.0;
 /// Room for "-60", the longest label on the scale.
 const SCALE_WIDTH: f32 = 22.0;
@@ -50,6 +53,7 @@ const CLIP_DB: f32 = -9.0;
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     snapshot: &AudioSnapshot,
+    devices: &[AudioDeviceTarget],
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -74,7 +78,7 @@ pub(in crate::ui) fn show(
                     // so without this they would collide on ids derived from
                     // their position alone.
                     ui.push_id(source.id.0, |ui| {
-                        show_channel(ui, source, channel_height, i18n, actions);
+                        show_channel(ui, source, devices, channel_height, i18n, actions);
                     });
                 }
             });
@@ -84,6 +88,7 @@ pub(in crate::ui) fn show(
 fn show_channel(
     ui: &mut egui::Ui,
     source: &AudioSourceSnapshot,
+    devices: &[AudioDeviceTarget],
     channel_height: f32,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
@@ -92,7 +97,7 @@ fn show_channel(
     ui.allocate_ui(size, |ui| {
         ui.vertical(|ui| {
             ui.set_width(SOURCE_WIDTH);
-            show_name(ui, source, i18n);
+            show_name(ui, source, devices, i18n, actions);
             ui.monospace(format_gain(source.gain_db));
             ui.horizontal(|ui| {
                 show_fader(ui, source, actions);
@@ -104,21 +109,74 @@ fn show_channel(
     });
 }
 
-/// The name, with what the column is listening to on its hover: a column this
-/// narrow cannot spell out a device, and the name is what the pointer is
-/// already over.
-fn show_name(ui: &mut egui::Ui, source: &AudioSourceSnapshot, i18n: &LocalizationManager) {
+/// The name, which is also where the device is chosen.
+///
+/// A menu rather than a combo box: a column this narrow has no room for a
+/// device name, and the name of the source is already the thing a pointer
+/// goes to. What it is currently listening to is on the hover, and ticked in
+/// the menu.
+fn show_name(
+    ui: &mut egui::Ui,
+    source: &AudioSourceSnapshot,
+    devices: &[AudioDeviceTarget],
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
     let kind = i18n.text(match source.kind {
         AudioSourceKind::Output => TextKey::AudioKindOutput,
         AudioSourceKind::Input => TextKey::AudioKindInput,
     });
-    let device = source
-        .device
-        .as_deref()
-        .map(str::to_owned)
-        .unwrap_or_else(|| i18n.text(TextKey::AudioDeviceDefault).into_owned());
-    ui.add(egui::Label::new(egui::RichText::new(&source.name).strong()).truncate())
-        .on_hover_text(format!("{kind} · {device}"));
+    let default_label = i18n.text(TextKey::AudioDeviceDefault);
+    // The stored id is what a device is known by, but the picker shows names
+    // — so an endpoint that has since gone shows its id rather than becoming
+    // an empty row that says nothing.
+    let listening = source.device.as_deref().map_or_else(
+        || default_label.as_ref().to_owned(),
+        |id| {
+            devices
+                .iter()
+                .find(|device| device.id == id)
+                .map_or_else(|| id.to_owned(), |device| device.name.clone())
+        },
+    );
+
+    let menu = ui.menu_button(
+        egui::RichText::new(format!("{} ⏷", source.name)).strong(),
+        |ui| {
+            if ui
+                .selectable_label(source.device.is_none(), default_label.as_ref())
+                .clicked()
+            {
+                actions.push(audio_action(AudioCommand::SetDevice(source.id, None)));
+                ui.close();
+            }
+            ui.separator();
+            // Only the endpoints of this source's own kind: a microphone
+            // cannot be captured as desktop audio, and offering it would be
+            // offering a choice that cannot work.
+            let mut listed = false;
+            for device in devices.iter().filter(|device| device.kind == source.kind) {
+                listed = true;
+                let label = if device.is_default {
+                    format!("{} ({default_label})", device.name)
+                } else {
+                    device.name.clone()
+                };
+                let chosen = source.device.as_deref() == Some(device.id.as_str());
+                if ui.selectable_label(chosen, label).clicked() {
+                    actions.push(audio_action(AudioCommand::SetDevice(
+                        source.id,
+                        Some(device.id.clone()),
+                    )));
+                    ui.close();
+                }
+            }
+            if !listed {
+                ui.weak(i18n.text(TextKey::AudioNoDevices));
+            }
+        },
+    );
+    menu.response.on_hover_text(format!("{kind} · {listening}"));
 }
 
 /// The fader stays live while muted rather than greying out: muting is not

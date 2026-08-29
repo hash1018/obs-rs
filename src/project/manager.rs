@@ -135,6 +135,9 @@ fn handle_audio_command(
     database.transaction(|transaction| match command {
         AudioCommand::SetGainDb(id, gain_db) => AudioStore::set_gain_db(transaction, id, gain_db),
         AudioCommand::SetMuted(id, muted) => AudioStore::set_muted(transaction, id, muted),
+        AudioCommand::SetDevice(id, device) => {
+            AudioStore::set_device(transaction, id, device.as_deref())
+        }
     })
 }
 

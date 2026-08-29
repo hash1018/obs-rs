@@ -61,6 +61,21 @@ impl AudioStore {
         Ok(())
     }
 
+    /// `None` is not "unset": it is the instruction to follow whichever
+    /// device the system calls its default, so it keeps working when that
+    /// changes.
+    pub(crate) fn set_device(
+        transaction: &Transaction<'_>,
+        id: AudioSourceId,
+        device: Option<&str>,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE audio_sources SET device = ?2 WHERE id = ?1",
+            params![id.0, device],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_muted(
         transaction: &Transaction<'_>,
         id: AudioSourceId,

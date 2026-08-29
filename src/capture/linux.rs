@@ -25,7 +25,11 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
-use super::{MonitorRect, MonitorTarget, SourcePicker, WindowTarget};
+use media_pp::elements::{PipeWireAudioCaptureSource, PipeWireAudioDeviceKind};
+
+use crate::domain::AudioSourceKind;
+
+use super::{AudioDeviceTarget, MonitorRect, MonitorTarget, SourcePicker, WindowTarget};
 use crate::domain::{DisplayCaptureSettings, DisplayCaptureTarget, SceneId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,4 +390,39 @@ mod tests {
             PickerBackend::X11
         );
     }
+}
+
+/// Every PipeWire audio node, both sinks and sources.
+///
+/// The node *name* is what gets stored, not the id: a PipeWire id is valid
+/// only while its node is, so unplugging and reattaching a device yields a
+/// new one and a saved choice would stop resolving. `media-pp`'s own
+/// `PipeWireAudioDevice` says as much on the field.
+///
+/// An enumeration that fails is an empty list rather than an error. The
+/// picker's own "default device" entry still works without one — it is the
+/// absence of a choice, not one of the entries — so a caller has something to
+/// show either way.
+pub fn audio_devices() -> Vec<AudioDeviceTarget> {
+    let devices = match PipeWireAudioCaptureSource::list_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            eprintln!("could not list audio devices: {error}");
+            return Vec::new();
+        }
+    };
+    devices
+        .into_iter()
+        .map(|device| AudioDeviceTarget {
+            id: device.name,
+            name: device.description,
+            kind: match device.kind {
+                // A sink is captured through its monitor ports, so what
+                // arrives is whatever the machine is playing.
+                PipeWireAudioDeviceKind::Sink => AudioSourceKind::Output,
+                PipeWireAudioDeviceKind::Source => AudioSourceKind::Input,
+            },
+            is_default: device.is_default,
+        })
+        .collect()
 }

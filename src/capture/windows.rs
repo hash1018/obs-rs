@@ -26,7 +26,11 @@ use windows::Win32::{
 };
 use windows::core as windows_core;
 
-use super::{MonitorRect, MonitorTarget, WindowTarget};
+use media_pp::elements::{WasapiCaptureSource, WasapiDeviceKind};
+
+use crate::domain::AudioSourceKind;
+
+use super::{AudioDeviceTarget, MonitorRect, MonitorTarget, WindowTarget};
 
 /// `MONITORINFOF_PRIMARY`. windows-rs 0.62 does not generate a binding for
 /// it, so the documented value is spelled out here rather than guessed at
@@ -263,6 +267,37 @@ unsafe extern "system" fn enum_monitor(
         });
     }
     windows_core::BOOL(1)
+}
+
+/// Every active WASAPI endpoint, both playback and recording.
+///
+/// The endpoint id is what gets stored: it is opaque, and it is stable across
+/// restarts and replugs, which is what a saved choice needs.
+///
+/// An enumeration that fails is an empty list rather than an error. The
+/// picker's own "default device" entry still works without one — it is the
+/// absence of a choice, not one of the entries — so a caller has something to
+/// show either way.
+pub fn audio_devices() -> Vec<AudioDeviceTarget> {
+    let devices = match WasapiCaptureSource::list_devices() {
+        Ok(devices) => devices,
+        Err(error) => {
+            eprintln!("could not list audio devices: {error}");
+            return Vec::new();
+        }
+    };
+    devices
+        .into_iter()
+        .map(|device| AudioDeviceTarget {
+            id: device.id,
+            name: device.name,
+            kind: match device.kind {
+                WasapiDeviceKind::Render => AudioSourceKind::Output,
+                WasapiDeviceKind::Capture => AudioSourceKind::Input,
+            },
+            is_default: device.is_default,
+        })
+        .collect()
 }
 
 #[cfg(test)]

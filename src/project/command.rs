@@ -11,12 +11,19 @@ pub enum ProjectCommand {
 ///
 /// Carries no Scene, because audio is not in one — see
 /// [`crate::domain::AudioSourceId`].
+// Every variant is a `Set` because every one of them is: the mixer has no
+// add or remove, only the three values a channel holds. Dropping the verb
+// would leave `AudioCommand::Device(..)` reading as a noun where the rest of
+// this file reads as instructions.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioCommand {
     /// Gain in decibels. Clamped where it is stored rather than here, so
     /// every way in lands on the same range.
     SetGainDb(AudioSourceId, f32),
     SetMuted(AudioSourceId, bool),
+    /// Which endpoint to listen to, or `None` to follow the system default.
+    SetDevice(AudioSourceId, Option<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

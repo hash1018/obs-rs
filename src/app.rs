@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use eframe::egui;
 
+use crate::capture::AudioDeviceTarget;
 use crate::domain::SceneCanvas;
 use crate::engine::EngineManager;
 use crate::i18n::{LocalizationManager, install_locale_fonts};
@@ -32,6 +33,14 @@ pub struct ObsApp {
     /// What the engine was last told about whether anyone can see the
     /// Preview — see [`ObsApp::poll_engine`].
     preview_visible: bool,
+    /// Every audio endpoint the mixer can offer.
+    ///
+    /// Taken once at startup rather than per frame: enumerating opens the
+    /// audio subsystem, and a list that is a device or two out of date until
+    /// the next launch is a smaller cost than doing that sixty times a
+    /// second. Refreshing on device change is what a hotplug notification
+    /// would be for, and neither backend offers one here yet.
+    audio_devices: Vec<AudioDeviceTarget>,
 }
 
 /// What the engine's wake asks egui to wait before repainting — which is
@@ -116,6 +125,7 @@ impl ObsApp {
             settings,
             settings_store,
             ui_actions: Vec::new(),
+            audio_devices: crate::capture::audio_devices(),
             exiting: false,
             // What the engine starts believing, so the first pass says
             // something only if the window came up minimised.
@@ -367,6 +377,7 @@ impl eframe::App for ObsApp {
             ui,
             &mut self.ui_state,
             &self.snapshots,
+            &self.audio_devices,
             &self.localization,
             composite_frame.as_deref(),
             &mut self.ui_actions,

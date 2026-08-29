@@ -24,6 +24,7 @@ audio-unmute = Unmute
 audio-kind-output = Output
 audio-kind-input = Input
 audio-device-default = Default
+audio-no-devices = No devices found
 control-start-recording = Start Recording
 control-pause-recording = Pause Recording
 control-resume-recording = Resume Recording

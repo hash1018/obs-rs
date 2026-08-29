@@ -4,6 +4,7 @@ use eframe::egui;
 
 use super::PANEL_MARGIN;
 use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
+use crate::capture::AudioDeviceTarget;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::snapshots::Snapshots;
 use crate::ui::editor::SceneEditorState;
@@ -47,6 +48,7 @@ struct DockContent<'a> {
     sources_state: &'a mut SourcesPanelState,
     editor: &'a mut SceneEditorState,
     snapshots: &'a Snapshots,
+    audio_devices: &'a [AudioDeviceTarget],
     i18n: &'a LocalizationManager,
     actions: &'a mut Vec<UiAction>,
 }
@@ -75,6 +77,7 @@ pub(super) fn show(
         sources_state,
         editor,
         snapshots: resources.snapshots,
+        audio_devices: resources.audio_devices,
         i18n: resources.i18n,
         actions,
     };
@@ -257,6 +260,7 @@ fn show_panel(
             panels::audio_mixer::show(
                 &mut child,
                 &content.snapshots.audio,
+                content.audio_devices,
                 content.i18n,
                 content.actions,
             );

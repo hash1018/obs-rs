@@ -18,11 +18,18 @@
 //!
 //! [`SourcePicker`] is that fork, named once here so the UI can branch on it
 //! instead of a Windows-shaped list leaking into the rest of the app.
+//!
+//! Audio is the easy case and lives here too — see [`audio_devices`]. It has
+//! no portal, no permission prompt and no fork: every platform answers with a
+//! list. It is the one thing in this module that reads through `media-pp`,
+//! which already enumerates both backends for its own capture sources.
 
 // Display-target enumeration is wired into the Sources dock. Window targets
 // are retained for the upcoming Window Capture picker, so part of this shared
 // platform API is still intentionally unused.
 #![allow(dead_code)]
+
+use crate::domain::AudioSourceKind;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -68,6 +75,59 @@ pub struct MonitorTarget {
     pub rect: MonitorRect,
     /// Whether this is the primary display.
     pub is_primary: bool,
+}
+
+/// One audio endpoint the user can pick for a mixer source.
+///
+/// Unlike a capture target, this really is a list on every platform: audio
+/// needs no portal and no permission prompt, so both backends answer
+/// immediately and without showing anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDeviceTarget {
+    /// What gets stored, and what is handed back to `media-pp` to open this
+    /// endpoint again.
+    ///
+    /// Not the same field on both platforms, deliberately. Windows' endpoint
+    /// id is opaque and stable, so that is what this holds. PipeWire's node
+    /// id is only valid while the node is, and survives neither a replug nor
+    /// a restart — so on Linux this is the node *name*, which does. Nothing
+    /// above here has to know which, as long as nothing above here tries to
+    /// interpret it.
+    pub id: String,
+    /// What the user reads in the picker.
+    pub name: String,
+    /// Which side of the sound card this is, matching the mixer source it can
+    /// be chosen for: an [`AudioSourceKind::Output`] source lists playback
+    /// endpoints, captured by listening to what they play.
+    pub kind: AudioSourceKind,
+    /// Whether this was the system's default for its own kind when the list
+    /// was taken. Shown in the picker; it is not what "no device" means — a
+    /// source with no device follows the default as it changes, rather than
+    /// being pinned to whichever one this was.
+    pub is_default: bool,
+}
+
+/// Every audio endpoint this platform can capture from, or an empty list on
+/// one that has no backend.
+///
+/// Reads through `media-pp`, which already enumerates both WASAPI endpoints
+/// and PipeWire nodes for its own capture sources. That is a dependency the
+/// screen-capture half of this module deliberately does not have — see this
+/// module's own docs — and the reason does not apply here: this is a static
+/// call that shows nothing and needs no pipeline.
+pub fn audio_devices() -> Vec<AudioDeviceTarget> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::audio_devices()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::audio_devices()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Vec::new()
+    }
 }
 
 /// A monitor's place in the virtual desktop. Signed origin: a display left of
