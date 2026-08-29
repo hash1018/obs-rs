@@ -219,6 +219,26 @@ impl Backend {
     /// compositor, and with it the Preview and every other branch. So it
     /// blocks, but only for a bounded time, and a timeout arrives on the bus
     /// as an error naming this branch rather than as silence.
+    ///
+    /// # Verified on this backend
+    ///
+    /// The commits that built this could only reason about the Linux half —
+    /// the host they were written on cannot build the CUDA backend — so it is
+    /// worth writing down that it was afterwards run. Two live display
+    /// captures, 1920x1080 H.264 at 60:
+    ///
+    /// - 717 frames over 11.95 s, 959 over 15.98 s, 1198 over 19.97 s: 60.0
+    ///   throughout, and the compositor held 59.99 of its 60.00 while
+    ///   recording. A decoded frame from the middle is the composited Canvas.
+    /// - `start_time` is 0.050000 on every file, including a second recording
+    ///   started 24 s into the same session — three frames of B-frame reorder
+    ///   delay, which is what [`TimestampOrigin`] leaves behind rather than
+    ///   the compositor's uptime.
+    /// - 1439 frames over 23.98 s across a twelve-second minimise, so the
+    ///   Preview going idle takes nothing from this branch.
+    /// - A directory it cannot write reaches the status bar as "Recording
+    ///   could not start — ffmpeg error: Permission denied", the clock stays
+    ///   at `--:--:--`, and the next attempt clears it.
     pub(in crate::engine) fn start_recording(
         &self,
         path: &Path,
