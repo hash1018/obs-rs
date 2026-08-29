@@ -257,20 +257,13 @@ impl Backend {
         self.preview.stop();
     }
 
-    /// Attaches an encode-and-mux branch to the compositor's own `Tee`, so a
-    /// recording is made of exactly the frames the Preview is showing.
+    /// Opens the encoder this recording's video track needs, and says what
+    /// stream to declare for it.
     ///
-    /// No colour conversion anywhere: the compositor draws BGRA and NVENC
-    /// takes BGRA directly, converting to its own YUV as part of encoding.
-    ///
-    /// # What the queue's policy has to be
-    ///
-    /// Not the Preview's `DropNewest` — a dropped frame there is one stale
-    /// repaint, here it is a frame missing from the file. Not an unbounded
-    /// wait either: an encoder that stops answering would then wedge the
-    /// compositor, and with it the Preview and every other branch. So it
-    /// blocks, but only for a bounded time, and a timeout arrives on the bus
-    /// as an error naming this branch rather than as silence.
+    /// Nothing is attached and nothing is written: an mp4's tracks are fixed
+    /// before its header is, so the encoder has to exist before the sink it
+    /// will write into can — see [`PreparedRecording`], and
+    /// [`Backend::attach_recording`] for the half that draws.
     pub(in crate::engine) fn prepare_recording(
         &self,
         fps: u32,
@@ -293,6 +286,18 @@ impl Backend {
     /// Separate from [`Backend::prepare_recording`] only because the sink
     /// cannot exist until every track has been declared — see
     /// [`PreparedRecording`].
+    ///
+    /// No colour conversion anywhere: the compositor draws BGRA and NVENC
+    /// takes BGRA directly, converting to its own YUV as part of encoding.
+    ///
+    /// # What the queue's policy has to be
+    ///
+    /// Not the Preview's `DropNewest` — a dropped frame there is one stale
+    /// repaint, here it is a frame missing from the file. Not an unbounded
+    /// wait either: an encoder that stops answering would then wedge the
+    /// compositor, and with it the Preview and every other branch. So it
+    /// blocks, but only for a bounded time, and a timeout arrives on the bus
+    /// as an error naming this branch rather than as silence.
     pub(in crate::engine) fn attach_recording(
         &self,
         prepared: PreparedRecording,

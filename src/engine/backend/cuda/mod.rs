@@ -242,8 +242,35 @@ impl Backend {
         self.preview.stop();
     }
 
-    /// Attaches an encode-and-mux branch to the compositor's own `Tee`, so a
-    /// recording is made of exactly the frames the Preview is showing.
+    /// Opens the encoder this recording's video track needs, and says what
+    /// stream to declare for it.
+    ///
+    /// Nothing is attached and nothing is written: an mp4's tracks are fixed
+    /// before its header is, so the encoder has to exist before the sink it
+    /// will write into can — see [`PreparedRecording`], and
+    /// [`Backend::attach_recording`] for the half that draws.
+    pub(in crate::engine) fn prepare_recording(
+        &self,
+        fps: u32,
+        settings: &crate::settings::RecordingSettings,
+    ) -> Result<PreparedRecording, BackendError> {
+        // `fps` is what the compositor produces; the file is written at what
+        // the settings ask for, which can be less but never more.
+        let recorded_fps = settings.fps_within(fps);
+        Ok(PreparedRecording {
+            encoder: self.open_encoder(recorded_fps, settings)?,
+            time_base: ffmpeg::Rational::new(1, recorded_fps as i32),
+            recorded_fps,
+            source_fps: fps,
+        })
+    }
+
+    /// Builds the recording's video branch onto the compositor's `Tee` and
+    /// starts it writing into `sink`.
+    ///
+    /// Separate from [`Backend::prepare_recording`] only because the sink
+    /// cannot exist until every track has been declared — see
+    /// [`PreparedRecording`].
     ///
     /// No colour conversion anywhere: the compositor draws NV12 and NVENC
     /// takes NV12 as its own native input.
@@ -276,28 +303,6 @@ impl Backend {
     /// - A directory it cannot write reaches the status bar as "Recording
     ///   could not start — ffmpeg error: Permission denied", the clock stays
     ///   at `--:--:--`, and the next attempt clears it.
-    pub(in crate::engine) fn prepare_recording(
-        &self,
-        fps: u32,
-        settings: &crate::settings::RecordingSettings,
-    ) -> Result<PreparedRecording, BackendError> {
-        // `fps` is what the compositor produces; the file is written at what
-        // the settings ask for, which can be less but never more.
-        let recorded_fps = settings.fps_within(fps);
-        Ok(PreparedRecording {
-            encoder: self.open_encoder(recorded_fps, settings)?,
-            time_base: ffmpeg::Rational::new(1, recorded_fps as i32),
-            recorded_fps,
-            source_fps: fps,
-        })
-    }
-
-    /// Builds the recording's video branch onto the compositor's `Tee` and
-    /// starts it writing into `sink`.
-    ///
-    /// Separate from [`Backend::prepare_recording`] only because the sink
-    /// cannot exist until every track has been declared — see
-    /// [`PreparedRecording`].
     pub(in crate::engine) fn attach_recording(
         &self,
         prepared: PreparedRecording,
