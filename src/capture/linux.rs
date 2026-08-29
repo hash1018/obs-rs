@@ -364,45 +364,6 @@ async fn try_pick_system_display() -> ashpd::Result<DisplayCaptureSettings> {
     })
 }
 
-/// Watches for PipeWire nodes appearing or going, calling `on_change` each
-/// time the set is not what it was.
-///
-/// A poll rather than a registry subscription. PipeWire does publish node
-/// events, but reaching them means this process opening a second connection
-/// and running a loop of its own beside the one `media-pp` already has —
-/// where re-enumerating is a round trip every couple of seconds and answers
-/// the only question asked of it. If the enumeration ever costs enough to
-/// notice, the subscription is what replaces this.
-///
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wayland_uses_the_portal_even_when_xwayland_is_available() {
-        assert_eq!(
-            picker_backend(None, Some("wayland-0"), Some("wayland"), Some(":0")),
-            PickerBackend::Portal
-        );
-    }
-
-    #[test]
-    fn x11_session_is_enumerated() {
-        assert_eq!(
-            picker_backend(None, None, Some("x11"), Some(":0")),
-            PickerBackend::X11
-        );
-    }
-
-    #[test]
-    fn explicit_winit_backend_wins_for_hybrid_sessions() {
-        assert_eq!(
-            picker_backend(Some("x11"), Some("wayland-0"), Some("wayland"), Some(":0")),
-            PickerBackend::X11
-        );
-    }
-}
 
 /// Every PipeWire audio node, both sinks and sources.
 ///
@@ -439,6 +400,15 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
         .collect()
 }
 
+/// Watches for PipeWire nodes appearing or going, calling `on_change` each
+/// time the set is not what it was.
+///
+/// A poll rather than a registry subscription. PipeWire does publish node
+/// events, but reaching them means this process opening a second connection
+/// and running a loop of its own beside the one `media-pp` already has —
+/// where re-enumerating is a round trip every couple of seconds and answers
+/// the only question asked of it. If the enumeration ever costs enough to
+/// notice, the subscription is what replaces this.
 pub fn watch_audio_devices(on_change: impl Fn() + Send + 'static) -> Option<AudioDeviceWatch> {
     // A channel rather than a flag and a sleep: dropping the sender wakes the
     // thread out of its wait at once, so closing the application does not
@@ -533,4 +503,33 @@ pub fn displays() -> Vec<MonitorRect> {
         .into_iter()
         .map(|monitor| monitor.rect)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_uses_the_portal_even_when_xwayland_is_available() {
+        assert_eq!(
+            picker_backend(None, Some("wayland-0"), Some("wayland"), Some(":0")),
+            PickerBackend::Portal
+        );
+    }
+
+    #[test]
+    fn x11_session_is_enumerated() {
+        assert_eq!(
+            picker_backend(None, None, Some("x11"), Some(":0")),
+            PickerBackend::X11
+        );
+    }
+
+    #[test]
+    fn explicit_winit_backend_wins_for_hybrid_sessions() {
+        assert_eq!(
+            picker_backend(Some("x11"), Some("wayland-0"), Some("wayland"), Some(":0")),
+            PickerBackend::X11
+        );
+    }
 }
