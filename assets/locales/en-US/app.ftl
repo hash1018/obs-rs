@@ -16,6 +16,10 @@ about-description = Live capture and recording, built with media-pp.
 
 dock-scenes = Scenes
 dock-sources = Sources
+dock-controls = Controls
+control-start-recording = Start Recording
+control-settings = Settings
+control-unavailable = Not wired up yet
 status-ready = Ready
 status-gpu-process = GPU used by obs-rs
 status-gpu-device = Whole-GPU usage, marked *. This driver reports no per-process GPU counter, so this includes every other application.

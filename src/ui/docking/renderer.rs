@@ -225,6 +225,7 @@ fn show_panel(
         content.i18n.text(match panel {
             DockPanel::Scenes => TextKey::DockScenes,
             DockPanel::Sources => TextKey::DockSources,
+            DockPanel::Controls => TextKey::DockControls,
         }),
         egui::TextStyle::Heading.resolve(child.style()),
         child.visuals().strong_text_color(),
@@ -250,6 +251,9 @@ fn show_panel(
                 content.i18n,
                 content.actions,
             );
+        }
+        DockPanel::Controls => {
+            panels::controls::show(&mut child, content.i18n);
         }
     }
 

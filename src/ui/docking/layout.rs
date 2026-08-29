@@ -6,6 +6,7 @@ use eframe::egui;
 pub(in crate::ui) enum DockPanel {
     Scenes,
     Sources,
+    Controls,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -42,7 +43,7 @@ impl Default for DockLayout {
             regions: HashMap::from([
                 (
                     DockRegionId::Left,
-                    DockRegion::new([DockPanel::Scenes, DockPanel::Sources]),
+                    DockRegion::new([DockPanel::Scenes, DockPanel::Sources, DockPanel::Controls]),
                 ),
                 (DockRegionId::Right, DockRegion::new([])),
                 (DockRegionId::Bottom, DockRegion::new([])),
@@ -50,6 +51,7 @@ impl Default for DockLayout {
             states: HashMap::from([
                 (DockPanel::Scenes, DockState::open()),
                 (DockPanel::Sources, DockState::open()),
+                (DockPanel::Controls, DockState::open()),
             ]),
         }
     }
@@ -68,6 +70,10 @@ impl DockPanel {
     pub(super) fn min_size(self) -> egui::Vec2 {
         match self {
             Self::Scenes | Self::Sources => egui::vec2(180.0, 120.0),
+            // Its buttons plus the title bar above them, rather than the
+            // list panels' figure: this dock has a height it is complete at,
+            // and a splitter should not be able to clip a button in half.
+            Self::Controls => egui::vec2(180.0, 110.0),
         }
     }
 }
@@ -245,13 +251,13 @@ mod tests {
         let mut layout = DockLayout::default();
         assert_eq!(
             layout.visible_panels(DockRegionId::Left),
-            vec![DockPanel::Scenes, DockPanel::Sources]
+            vec![DockPanel::Scenes, DockPanel::Sources, DockPanel::Controls]
         );
 
         layout.move_panel(DockPanel::Scenes, DockRegionId::Left, 1);
         assert_eq!(
             layout.visible_panels(DockRegionId::Left),
-            vec![DockPanel::Sources, DockPanel::Scenes]
+            vec![DockPanel::Sources, DockPanel::Scenes, DockPanel::Controls]
         );
     }
 
@@ -262,8 +268,24 @@ mod tests {
 
         assert_eq!(
             layout.visible_panels(DockRegionId::Left),
-            vec![DockPanel::Sources]
+            vec![DockPanel::Sources, DockPanel::Controls]
         );
+    }
+
+    /// Every panel needs state, and `DockLayout::state` panics without it —
+    /// so a new `DockPanel` variant that was added to a region but not to
+    /// `states` would take down the first frame that drew it.
+    #[test]
+    fn every_docked_panel_has_state() {
+        let layout = DockLayout::default();
+        for region in REGIONS {
+            for panel in layout.region(region).panels.iter() {
+                assert!(
+                    layout.states.contains_key(panel),
+                    "{panel:?} is docked in {region:?} but has no state"
+                );
+            }
+        }
     }
 
     #[test]

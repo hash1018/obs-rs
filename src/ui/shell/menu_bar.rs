@@ -39,6 +39,12 @@ pub fn show(
                             DockPanel::Sources,
                             i18n.text(TextKey::DockSources),
                         );
+                        dock_option(
+                            ui,
+                            state,
+                            DockPanel::Controls,
+                            i18n.text(TextKey::DockControls),
+                        );
                     });
 
                     ui.menu_button(i18n.text(TextKey::MenuTheme), |ui| {
