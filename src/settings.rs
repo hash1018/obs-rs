@@ -42,10 +42,31 @@ pub struct WorkspaceLayout {
 /// The position is the outer rect's — the frame, not the client area — since
 /// that is what a window manager is asked to place. The size is the inner
 /// one, because that is what `ViewportBuilder` takes.
+///
+/// # The position is optional, and on Wayland it is always absent
+///
+/// A Wayland client is not told where it is and cannot ask to be put
+/// anywhere: winit answers `outer_position` with `NotSupportedError` and
+/// implements `set_outer_position` as an empty function saying "Not possible
+/// on Wayland". That is the protocol rather than a gap in winit — the
+/// compositor places windows and does not let a client argue.
+///
+/// So the position is stored only where the platform will say what it is, and
+/// a file written on such a session simply has none. Keeping a stale one
+/// instead would be worse than having none: it survives into an X11 session
+/// and throws the window to wherever it last was several sessions ago.
+///
+/// The size has no such problem. Wayland will not report the window's rect
+/// either — egui builds that from a position it cannot get — but the size is
+/// what egui itself is drawing into, so `screen_rect` has it, and asking to
+/// open at a size works everywhere.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowGeometry {
-    pub x: f32,
-    pub y: f32,
+    /// `None` on a platform that will not say where its windows are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
     pub width: f32,
     pub height: f32,
     /// Restored as a maximized window. The rect beside it is the one the
@@ -398,6 +419,51 @@ mod tests {
         assert!(!RecordingEncoder::Nvenc.is_software());
         assert!(RecordingEncoder::OpenH264.is_software());
         assert!(RecordingEncoder::X264.is_software());
+    }
+
+    /// A settings file written before the position could be absent has both
+    /// halves; one written on Wayland has neither. Both have to load.
+    #[test]
+    fn a_window_geometry_loads_with_or_without_a_position() {
+        let with: AppSettings = toml::from_str(
+            "[workspace.window]\nx = 300.0\ny = 150.0\nwidth = 900.0\nheight = 640.0\nmaximized = false\n",
+        )
+        .expect("load a geometry with a position");
+        let window = with.workspace.window.expect("a window");
+        assert_eq!((window.x, window.y), (Some(300.0), Some(150.0)));
+        assert_eq!((window.width, window.height), (900.0, 640.0));
+
+        let without: AppSettings = toml::from_str(
+            "[workspace.window]\nwidth = 900.0\nheight = 640.0\nmaximized = false\n",
+        )
+        .expect("load a geometry with no position");
+        let window = without.workspace.window.expect("a window");
+        assert_eq!((window.x, window.y), (None, None));
+        assert_eq!((window.width, window.height), (900.0, 640.0));
+    }
+
+    /// An absent position writes no keys at all, rather than nulls a reader
+    /// would have to know to ignore.
+    #[test]
+    fn an_absent_position_is_left_out_of_the_file() {
+        let settings = AppSettings {
+            workspace: WorkspaceLayout {
+                window: Some(WindowGeometry {
+                    x: None,
+                    y: None,
+                    width: 900.0,
+                    height: 640.0,
+                    maximized: false,
+                }),
+                ..Default::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let encoded = toml::to_string(&settings).expect("encode");
+        assert!(!encoded.contains("\nx = "), "unexpected x: {encoded}");
+        assert!(!encoded.contains("\ny = "), "unexpected y: {encoded}");
+        assert!(encoded.contains("width = 900.0"), "missing size: {encoded}");
     }
 
     /// The theme is written as this application's own name for it, not as

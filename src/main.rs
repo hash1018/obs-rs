@@ -82,8 +82,13 @@ fn place_window(
     let viewport = viewport
         .with_inner_size([saved.width, saved.height])
         .with_maximized(saved.maximized);
-    if on_a_display(&saved) {
-        viewport.with_position([saved.x, saved.y])
+    // No position at all on a platform that will not report one, which is
+    // every Wayland session — see `WindowGeometry`.
+    let (Some(x), Some(y)) = (saved.x, saved.y) else {
+        return viewport;
+    };
+    if on_a_display(x, y) {
+        viewport.with_position([x, y])
     } else {
         viewport
     }
@@ -97,15 +102,14 @@ fn place_window(
 /// every monitor is not. An empty list — Wayland, where enumeration is the
 /// portal's job — answers `true`, since refusing to restore on the ground
 /// that nothing could be enumerated would be worse than trusting the file.
-fn on_a_display(saved: &settings::WindowGeometry) -> bool {
+fn on_a_display(x: f32, y: f32) -> bool {
     let monitors = capture::displays();
     monitors.is_empty()
-        || monitors.iter().any(|monitor| {
-            let area = monitor;
-            saved.x >= area.x as f32
-                && saved.y >= area.y as f32
-                && saved.x < area.x as f32 + area.width as f32
-                && saved.y < area.y as f32 + area.height as f32
+        || monitors.iter().any(|area| {
+            x >= area.x as f32
+                && y >= area.y as f32
+                && x < area.x as f32 + area.width as f32
+                && y < area.y as f32 + area.height as f32
         })
 }
 

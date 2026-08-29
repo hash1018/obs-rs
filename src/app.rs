@@ -279,17 +279,26 @@ impl ObsApp {
             if self.window_maximized || viewport.minimized.unwrap_or(false) {
                 return;
             }
-            let (Some(outer), Some(inner)) = (viewport.outer_rect, viewport.inner_rect) else {
+            // The size from what egui is drawing into rather than from the
+            // viewport's rect. Both of that rect's corners come from a window
+            // position, which Wayland will not report — so `inner_rect` is
+            // `None` there and a rect-only reading remembered nothing at all,
+            // not even a size the platform is perfectly able to restore.
+            let Some(size) = input.raw.screen_rect.map(|rect| rect.size()) else {
                 return;
             };
-            // Outer for the position and inner for the size, because those
-            // are what a window manager and `ViewportBuilder` respectively
-            // take — see `WindowGeometry`.
+            if size.x <= 0.0 || size.y <= 0.0 {
+                return;
+            }
+            // Outer for the position, because that is what a window manager is
+            // asked to place. Absent where the platform will not say — see
+            // `WindowGeometry`.
+            let position = viewport.outer_rect.map(|outer| outer.min);
             self.window = Some(WindowGeometry {
-                x: outer.min.x,
-                y: outer.min.y,
-                width: inner.width(),
-                height: inner.height(),
+                x: position.map(|position| position.x),
+                y: position.map(|position| position.y),
+                width: size.x,
+                height: size.y,
                 maximized: false,
             });
         });
@@ -301,8 +310,16 @@ impl ObsApp {
     /// file on every frame of a drag, for a value only the next startup
     /// reads.
     fn save_workspace(&mut self) {
+        // A position this session could not observe is left as it was found,
+        // not cleared. Wayland never reports one, and wiping the file there
+        // would lose a position an X11 session had set — where keeping it
+        // costs nothing, since a session that *can* place windows overwrites
+        // it every time anyway.
+        let saved = self.settings.workspace.window;
         self.settings.workspace.window = self.window.map(|window| WindowGeometry {
             maximized: self.window_maximized,
+            x: window.x.or_else(|| saved.and_then(|saved| saved.x)),
+            y: window.y.or_else(|| saved.and_then(|saved| saved.y)),
             ..window
         });
         self.settings.workspace.docks = self.ui_state.docks();
