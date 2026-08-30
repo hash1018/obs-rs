@@ -51,7 +51,7 @@ Reuse the `ObsApp::ui_actions` buffer by clearing it. Do not allocate a new acti
 
 ## Preview terminology and behavior
 
-Use the terminology defined in `README.md` consistently:
+Use the terminology defined in `docs/ARCHITECTURE.md` consistently:
 
 - Preview Workspace: the complete central editor area.
 - Preview Viewport: the rectangle that displays the final Composite Frame.
