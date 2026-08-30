@@ -14,9 +14,11 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 - **Scenes and sources.** A Scene is a list of sources placed on a 1920×1080
   canvas. Move, resize, reorder, hide and lock them in the Preview. A source
   can appear in more than one Scene, with its own position in each.
-- **Display capture** on Windows and Linux. Frames go straight into GPU
-  memory and stay there through compositing and encoding — the desktop never
-  passes through system memory on its way to the recording.
+- **Display and window capture** on Windows and Linux. Frames go straight
+  into GPU memory and stay there through compositing and encoding — the
+  desktop never passes through system memory on its way to the recording.
+  A captured window that is closed is not an error: the source waits where it
+  is and picks the window up again when it comes back.
 - **Drawing.** A source you draw on rather than one that captures something:
   pen, highlighter and eraser, with undo and clear. It is a real layer, so
   what you draw is in the recording, not just on your screen.
@@ -26,6 +28,9 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 - **Audio.** Desktop and microphone channels with faders, mute, and level
   meters that read after the fader. A fader can boost past unity, and a lamp
   reports a channel that clipped.
+- **Properties.** Selecting a source describes it in a dock of its own —
+  where it sits, how large it is, and what it is actually capturing. A Color
+  source's colour is edited there.
 - **A workspace that stays put.** Docks can be moved, resized and closed, and
   where they were is remembered along with the window and the Preview's zoom.
 - **English and Korean**, chosen from `View → Language`.
@@ -33,8 +38,14 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 ## Using it
 
 Add a source from the **+** under the Sources dock. A Display Capture asks
-which monitor; on Wayland the system's own picker opens instead, and the
-choice is remembered so later runs do not ask again.
+which monitor and a Window Capture which window; on Wayland the system's own
+picker opens instead, and the choice is remembered so later runs do not ask
+again.
+
+A Window Capture is stored as the window's program and title rather than as a
+handle, which only means something while that window is open. Closing the
+window empties the layer and reopening it fills it again — a browser you quit
+for the day is still in the Scene tomorrow.
 
 Drag a source in the Preview to move it and its handles to resize it. Sources
 higher in the list are drawn in front of lower ones.
@@ -43,6 +54,12 @@ Select a **Drawing** and the Preview's toolbar grows a pen. It stays in Select
 until you pick one, so a stray click cannot leave a mark. The eraser takes
 whole strokes rather than rubbing at pixels, and undo is the same thing aimed
 at the last one.
+
+The **Properties** dock says what the selected source is: its name and kind,
+where it sits on the canvas and how large, and what it captures — the monitor
+and its place in the desktop, or the program and title of a window. Most of it
+reports rather than asks; a Color source's colour is the one thing edited
+there.
 
 **Start Recording** writes to your Videos folder unless Settings says
 otherwise. What it records is the canvas, not the window — the selection
@@ -70,9 +87,8 @@ you try it:
 
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
-- **Two source kinds.** Display Capture and Drawing, plus a Color source whose
-  colour cannot be changed from the blue it is created with. Window capture,
-  cameras, images and media files are not there.
+- **Four source kinds.** Display Capture, Window Capture, Drawing and Color.
+  Cameras, images and media files are not there.
 - **No filters, transitions or hotkeys.** Switching Scenes is a cut.
 
 ## Contributing

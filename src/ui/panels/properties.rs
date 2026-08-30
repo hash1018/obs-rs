@@ -1,9 +1,10 @@
 //! What the selected Source is, as it currently stands.
 //!
-//! Read-only. Everything here is already settable somewhere — a Transform by
-//! dragging in the Preview, visibility and lock by the Sources dock's own
-//! icons — and this says what those came out as, in numbers a drag cannot be
-//! precise about.
+//! Almost all of it reports rather than asks: everything shown is already
+//! settable somewhere — a Transform by dragging in the Preview, visibility
+//! and lock by the Sources dock's own icons — and this says what those came
+//! out as, in numbers a drag cannot be precise about. The exception is a
+//! Color's colour, which has nowhere else to be set; see `show_colour`.
 //!
 //! # Why it is a dock and not a dialog
 //!

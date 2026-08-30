@@ -60,12 +60,14 @@ While a Source is moved or resized, the layer follows the pointer directly and t
 
 ## Current source support
 
-- Color Source is composited, and can be moved, resized, reordered, hidden, and locked. Its colour is stored per source and there is nothing yet that sets it, so every one of them is the blue a new one is created with.
+- Color Source is composited, and can be moved, resized, reordered, hidden, and locked. Its colour is stored per source and edited in the Properties dock; a new one starts blue. The colour belongs to the Source, so two SceneItems standing for one Color change together.
 - Drawing is composited on both backends and is the one source that carries transparency: it reaches the compositor as BGRA rather than through a converter, so what was never drawn on lets the scene beneath it through. See `drawing_bgra` for why a stroke is rasterized in two passes.
 - Display Capture is composited on Windows and Linux. Capture lands directly in GPU surfaces — D3D11 textures or CUDA surfaces — so the desktop never passes through system memory on its way to the compositor.
 - Every SceneItem is selectable, movable, and resizable in the editor regardless of whether its Source can produce a frame yet. The editor works on the item's Canvas rectangle, not on the Source's content.
 - A Display Capture source stores the pixel size its picker reported, so a new SceneItem starts at the display's own shape rather than being squared off to the Canvas. The size is a hint, not a fact: the display layout can change between runs and a compositor may scale a Wayland stream to a size the portal never named, so the capture layer replaces it with the stream's negotiated size once the Source opens. A Source with no reported size stands in at Canvas size, because an item with no rectangle cannot be selected or dragged at all.
 - Display Capture can enumerate monitors on Windows and Linux/X11, persist the selected monitor name, and create a SceneItem. On Wayland, source creation opens the system-owned `xdg-desktop-portal` picker and persists the restore token it issues, and a later run reopens the same display from that token without showing the picker again.
+
+Window Capture is composited on Windows and written for Linux, where it narrows the same portal source to windows rather than monitors. It is the one source whose target is expected to come and go — see "A window that is not there" below.
 
 A Display Capture source stores one of two targets, and neither platform can produce the other:
 
@@ -77,6 +79,17 @@ A Display Capture source stores one of two targets, and neither platform can pro
 Wayland never names a display: the portal owns the picker and returns only what the user chose. A stream id belongs to the session that produced it, so the restore token is the only value that reproduces a selection in a later run. The compositor may decline to issue one, which is not an error — capture then shows the picker again instead of restoring silently.
 
 Opening a Source can hand back a fresher restore token than the one it was given, and that replaces the stored one: a compositor is free to issue a new token on every restore, and keeping the old one would mean prompting on every launch.
+
+A Window Capture stores a pair, and for the same reason: a window handle means something only inside the session that issued it.
+
+| Platform | Stored target | Reproduced by |
+|---|---|---|
+| Windows, Linux/X11 | `{program, title}` | Searching the live window list |
+| Wayland | `xdg-desktop-portal` restore token | Reopening a portal session with the token |
+
+Neither half of that pair identifies a window on its own: two windows of one program are common, and two programs can show the same title. The search takes an exact match on both first, then the same program under any title — titles change constantly (a document name, a tab, an unsaved marker) and a window whose title moved on is still the window the user picked. Where several windows of that program are open the first is taken, because nothing stored tells them apart.
+
+A portal Window Capture stores nothing at all when it is added. There is no list to pick from, so the item is created pointing at the portal and the portal asks which window the first time the Source opens; the token it hands back is what reopens it after that.
 
 Monitor *position* in the virtual desktop is intentionally not persisted — it changes whenever displays are rearranged, and nothing resolves against it. The capture layer resolves the saved monitor name against the current display layout; on Windows it will open `DxgiCaptureSource` in GPU mode. GPU mode is an application invariant rather than a user setting and does not currently support cursor inclusion.
 
@@ -91,7 +104,8 @@ engine/
 ├─ backend/      the compositor, and what a platform's Backend is
 ├─ source/       opening one SceneItem's Source
 │   ├─ color.rs, drawing.rs        (no platform half: both push pixels)
-│   └─ display_capture/            (a portal here, a registry on Windows)
+│   ├─ display_capture/            (a portal here, a registry on Windows)
+│   └─ window_capture/             (a search here, the same portal there)
 ├─ preview/      compositor output → egui, and nothing else
 ├─ recording/    the encode chain and the muxer's tracks
 └─ audio/        capture, per-source gain, one mix
@@ -119,7 +133,28 @@ The Preview is redrawn at 30 fps, or at the compositor's own rate when that is l
 
 The Preview branch is not allowed to set the compositor's pace. It sits behind a dropping queue, so a Preview that cannot keep up drops frames rather than slowing the output every other branch will be built from. It also sleeps entirely when no shown Source is running — an empty Scene, or one whose Sources are all in other Scenes, costs nothing.
 
+### A window that is not there
+
+Opening a Source answers with three outcomes rather than two. A window that is not on screen is neither open nor failed: `open_source` returns `Ok(None)` and the engine holds the SceneItem as `Missing` — nothing was opened, so nothing holds a device or a dialog while it waits. `Failed` stays terminal, because a source that could not open will not open by being asked again, and on the portal path asking again means another modal window.
+
+Two things then have to be noticed rather than waited for, and both happen on the engine loop's idle tick, once a second:
+
+- a window that comes back, which reopens the Source where it stood;
+- a window that closes while its capture is running. That ends the capture — the compositor sees the input finish and drops the layer — but nothing tells the engine, so it asks the pipeline through `Pipeline::is_running`. The endings are not alike on the bus: a closed window ends `WgcCaptureSource` as an *error*, where a file source ends with `Eos`, and whoever might reopen it has no reason to tell those apart.
+
+Nothing else is polled this way. A display does not close, and a capture shared between SceneItems belongs to the registry rather than to one item.
+
 Switching Scenes stops a Source rather than closing it, so returning is a resume and not another portal round trip. Only a SceneItem the project no longer holds anywhere is closed, which is why the snapshot carries every item and not just the shown Scene's.
+
+## The Properties dock
+
+What the selected SceneItem is, as it currently stands: name and kind, its place and size on the Canvas, whether it is visible and locked, and then whatever its kind has to say — the monitor and its rectangle in the virtual desktop, a window's program and title, a Drawing's stroke count, a Color's colour.
+
+It is a dock and not a dialog because the values move while they are read: dragging in the Preview changes the numbers here, and a dialog would have to be reopened to see it while covering the picture the numbers are about.
+
+Almost all of it reports rather than asks. Everything shown is already settable somewhere — a Transform by dragging, visibility and lock by the Sources dock's icons — and this says what those came out as, in numbers a drag cannot be precise about. The one exception is a Color's colour, which follows the same two-part shape a drag does: `UiAction::DragSourceColour` goes straight to the engine so the layer changes under the pointer, and one `SourceCommand::SetColor` is recorded when the picker is let go. A live gesture is one edit in the project, not sixty.
+
+Crop is deliberately absent. `SceneItemSnapshot` carries one and the editor's geometry honours it, but nothing in either backend does, so a crop reported here would describe something the recording does not do.
 
 ## Recording output
 
