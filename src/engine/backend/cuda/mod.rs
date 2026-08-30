@@ -776,9 +776,7 @@ fn open_drawing_source(
     item: &SceneItemSnapshot,
     layer: VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{
-        AppSource, CudaConverter, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput,
-    };
+    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
 
     let SourceSettings::Drawing(settings) = &item.settings else {
         return Err("scene item is not a drawing source".into());
@@ -798,11 +796,14 @@ fn open_drawing_source(
         width,
         height,
     )?;
-    let converter = CudaConverter::new(format!("{name}-convert"), device, width, height)?;
 
+    // No converter, unlike every other source here. A Drawing is an overlay:
+    // its alpha is the marks themselves, and NV12 has nowhere to keep one, so
+    // converting first would put opaque black over everything nobody drew on.
+    // The compositor takes BGRA for exactly this and blends per pixel.
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(converter).to(sink)?;
+        let branch = context.branch().pipe(upload).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
