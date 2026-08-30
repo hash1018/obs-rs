@@ -266,9 +266,7 @@ impl Drop for AudioManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::AudioSourceKind;
     use crate::engine::audio::DEFAULT_MIX_FORMAT;
-    use crate::snapshots::AudioSnapshot;
     use std::sync::mpsc;
     use std::time::Duration;
 

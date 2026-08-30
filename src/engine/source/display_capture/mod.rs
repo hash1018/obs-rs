@@ -6,7 +6,7 @@
 //! # Windows shares a capture, Linux cannot
 //!
 //! Desktop duplication opens one stream per display, and a display may be in
-//! more than one SceneItem — so Windows keeps a [`CaptureRegistry`] and hands
+//! more than one SceneItem — so Windows keeps a `CaptureRegistry` and hands
 //! each item a `Tee` branch off the capture it wants, which is why stopping
 //! one item must leave the capture running for the others.
 //!

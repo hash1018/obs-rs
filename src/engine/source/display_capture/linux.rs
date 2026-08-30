@@ -4,8 +4,9 @@
 //! request, so nothing two SceneItems show *has* to be shared and each owns
 //! its own pipeline.
 
-use media_pp::elements::{CudaDevice, CudaVideoCompositorHandle, FrameRateHandle, VideoLayer};
+use media_pp::elements::{CudaDevice, CudaVideoCompositorHandle, VideoLayer};
 use media_pp::pipeline::Pipeline;
+use media_pp::rate::FrameRateHandle;
 
 use crate::engine::backend::{BackendError, RunningSource};
 use crate::engine::source::{OpenSource, input_name};

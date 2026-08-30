@@ -12,10 +12,8 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, ChangeGate, CudaCodec, CudaDevice, CudaDownload, CudaEncoder, CudaEncoderOptions,
-        CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaScaler, CudaScalerInterp,
-        CudaVideoCompositor, CudaVideoCompositorHandle, CudaVideoLayerHandle, PauseGate,
-        SubmitError, SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
+        AppSink, ChangeGate, CudaDevice, CudaRenderer, CudaVideoCompositor,
+        CudaVideoCompositorHandle, CudaVideoLayerHandle, TeeBuilder, TeeHandle,
         VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
@@ -24,16 +22,13 @@ use media_pp::{
     rate::FrameRateHandle,
 };
 
-use crate::domain::{SourceKind, SourceSettings};
-use crate::settings::{RecordingEncoder, RecordingSettings};
+use crate::domain::SourceKind;
+use crate::settings::RecordingEncoder;
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::{self, OpenSource, input_name, unsupported_kind};
+use crate::engine::source::{self, OpenSource, unsupported_kind};
 
-use super::{
-    BACKGROUND, BackendError, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, VideoTrack,
-    software_codec,
-};
+use super::{BACKGROUND, BackendError};
 
 /// The running recording: which branch it is, and the control that stops it
 /// taking frames without stopping anything else.
@@ -313,7 +308,12 @@ impl Backend {
 /// twice, so the second item was a black rectangle until it shared. Here both
 /// captures work, and the trade is a few percent of one core against a
 /// correctness hazard, in a configuration that is rare to begin with.
-pub(in crate::engine) struct RunningSource(Arc<Pipeline>);
+pub(in crate::engine) struct RunningSource(
+    /// Visible to the rest of the engine because the modules that open a
+    /// Source construct one — the Windows half is an enum whose variants are
+    /// reachable for the same reason.
+    pub(in crate::engine) Arc<Pipeline>,
+);
 
 impl RunningSource {
     pub(in crate::engine) fn pause(&self) {

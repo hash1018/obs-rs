@@ -8,11 +8,11 @@
 //!
 //! The planes are separate textures rather than one, because that is what the
 //! shape of NV12 makes them: different resolutions, different formats. What
-//! fills them is one buffer CUDA wrote the whole frame into — see [`super::shared`] —
+//! fills them is one buffer CUDA wrote the whole frame into — see [`super::platform`] —
 //! so the upload is two `copy_buffer_to_texture` calls in the same submission
 //! as the pass, and nothing here crosses the bus.
 
-use super::linux::SharedNv12;
+use super::platform::SharedNv12;
 
 /// `CudaConverter` documents its output as BT.709 limited-range Y'CbCr from
 /// full-range RGB, so this is that conversion run backwards. Guessing the

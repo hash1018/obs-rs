@@ -8,11 +8,9 @@
 //! encoder and says what stream it needs, and the branch is built once the
 //! sink for it exists.
 
-use std::sync::Arc;
-
 use media_pp::elements::{
-    CudaConverter, CudaDownload, CudaEncoder, CudaEncoderOptions, CudaScaler, PauseGate, SwEncoder,
-    SwEncoderOptions, TimestampOrigin,
+    CudaCodec, CudaDownload, CudaEncoder, CudaEncoderOptions, CudaFrameFormat, CudaScaler,
+    CudaScalerInterp, PauseGate, SwEncoder, SwEncoderOptions, SwScaler, TimestampOrigin,
 };
 use media_pp::ffmpeg;
 use media_pp::queue::OverflowPolicy;

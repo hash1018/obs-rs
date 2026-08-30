@@ -36,7 +36,7 @@
 //! - `Backend::{pause, resume, stop}` — the Preview branch sleeps whenever no
 //!   shown Source is running, so these are called often and must be cheap.
 //! - `Backend::open_source` — start one SceneItem's Source and register its
-//!   compositor input. Return [`OpenSource`].
+//!   compositor input. Return [`crate::engine::source::OpenSource`].
 //! - `Backend::remove_source` — drop a registration by name.
 //! - `Layer` — runtime control for one registered input, with `set_layer` and
 //!   `set_visible`. A platform whose handle already has both can alias it.
