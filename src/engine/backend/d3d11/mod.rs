@@ -14,11 +14,12 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, ChangeGate, D3d11Download, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCodec,
-        D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput,
-        D3d11VideoEncoder, D3d11VideoEncoderOptions, D3d11VideoInputFormat, D3d11VideoLayerHandle,
-        PauseGate, SubmitError, SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle,
-        TimestampOrigin, VideoCompositorOptions, VideoLayer,
+        AppSink, ChangeGate, D3d11Download, D3d11FrameRenderer, D3d11Renderer, D3d11Scaler,
+        D3d11ScalerFormat, D3d11VideoCodec, D3d11VideoCompositor, D3d11VideoCompositorHandle,
+        D3d11VideoCompositorInput, D3d11VideoEncoder, D3d11VideoEncoderOptions,
+        D3d11VideoInputFormat, D3d11VideoLayerHandle, PauseGate, SubmitError, SwEncoder,
+        SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions,
+        VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -59,6 +60,10 @@ pub(in crate::engine) struct PreparedRecording {
     /// rate the compositor is running at, which is the only rate frames can
     /// arrive at.
     time_base: ffmpeg::Rational,
+    /// What the file is written at, which is the Scene Canvas unless the
+    /// settings asked for less. The encoder was opened for it, so the branch
+    /// has to deliver it.
+    size: [u32; 2],
 }
 
 impl PreparedRecording {
@@ -273,6 +278,7 @@ impl Backend {
         Ok(PreparedRecording {
             encoder: self.open_encoder(fps, settings)?,
             time_base: ffmpeg::Rational::new(1, fps as i32),
+            size: settings.output_size(self.size),
         })
     }
 
@@ -299,8 +305,8 @@ impl Backend {
         prepared: PreparedRecording,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<VideoTrack, BackendError> {
-        let PreparedRecording { encoder, .. } = prepared;
-        let [width, height] = self.size;
+        let PreparedRecording { encoder, size, .. } = prepared;
+        let [width, height] = size;
 
         let mut branch = self
             .tee
@@ -315,6 +321,20 @@ impl Backend {
         // has to reason about it.
         let (gate, pause) = PauseGate::new("record-pause");
         branch = branch.pipe(gate);
+        // Only when the file is smaller than the canvas. `Preserve` because
+        // this is a resize and nothing more — the compositor draws BGRA and
+        // the encoder takes BGRA, so a format change here would be work
+        // neither end asked for.
+        if size != self.size {
+            branch = branch.pipe(D3d11Scaler::new(
+                "record-scale",
+                &self.device,
+                Arc::clone(&self.context),
+                D3d11ScalerFormat::Preserve,
+                width,
+                height,
+            )?);
+        }
         branch = match encoder {
             RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
             // A software encoder is not on the GPU and does not take BGRA, so
@@ -356,7 +376,7 @@ impl Backend {
         fps: u32,
         settings: &RecordingSettings,
     ) -> Result<RecordEncoder, BackendError> {
-        let [width, height] = self.size;
+        let [width, height] = settings.output_size(self.size);
         let time_base = ffmpeg::Rational::new(1, fps as i32);
         let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
         let bit_rate = settings.bit_rate_bits();

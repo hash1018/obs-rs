@@ -17,6 +17,7 @@
 
 mod general;
 mod recording;
+mod video;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -33,16 +34,18 @@ use super::UiAction;
 pub(in crate::ui) enum SettingsPage {
     #[default]
     General,
+    Video,
     Recording,
 }
 
 impl SettingsPage {
     /// Every page, in the order the list shows them.
-    const ALL: [Self; 2] = [Self::General, Self::Recording];
+    const ALL: [Self; 3] = [Self::General, Self::Video, Self::Recording];
 
     fn title(self) -> TextKey {
         match self {
             Self::General => TextKey::SettingsPageGeneral,
+            Self::Video => TextKey::SettingsPageVideo,
             Self::Recording => TextKey::SettingsPageRecording,
         }
     }
@@ -207,6 +210,9 @@ pub(in crate::ui) fn show(
                             .show(ui, |ui| match state.page {
                                 SettingsPage::General => {
                                     general::show(ui, &mut state.draft, i18n);
+                                }
+                                SettingsPage::Video => {
+                                    video::show(ui, &mut state.draft, recording, i18n);
                                 }
                                 SettingsPage::Recording => {
                                     browse = recording::show(

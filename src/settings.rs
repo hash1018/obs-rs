@@ -145,13 +145,24 @@ pub struct RecordingSettings {
     /// What each file is named before its timestamp. The timestamp itself is
     /// not configurable — see [`crate::paths::recording_file_in`].
     pub name_prefix: String,
-    /// Frames per second written to the file.
+    /// Frames per second, which is the compositor's rate and therefore the
+    /// file's — there is nothing between them that re-rates.
     ///
-    /// Independent of the compositor's rate, which the Preview and the
-    /// reported figure are made of and which this must never raise: a
-    /// recording is a branch off those frames, so it can take fewer of them
-    /// but not more than exist.
+    /// Kept here rather than in a settings group of its own because the file
+    /// this is stored in does not have to mirror the dialog's tabs, and
+    /// moving it would leave every existing settings file resetting to the
+    /// default. It is presented on the Video page, where it belongs.
     pub fps: u32,
+    /// The height the file is written at, scaled down from the Scene Canvas.
+    ///
+    /// A height rather than a pair, because the width follows from the
+    /// canvas's own aspect ratio — see [`RecordingSettings::output_size`],
+    /// which is the only thing that should compute one. A height at or above
+    /// the canvas's means no scaling at all, which is what the default is.
+    ///
+    /// This one really is a recording setting: only the file is scaled. The
+    /// Preview and anything else off the compositor's `Tee` keep the canvas.
+    pub output_height: u32,
     /// Target bit rate in megabits per second.
     pub bit_rate_mbps: u32,
     /// Seconds between keyframes.
@@ -167,8 +178,40 @@ impl Default for RecordingSettings {
             fps: DEFAULT_FPS,
             bit_rate_mbps: DEFAULT_BIT_RATE_MBPS,
             keyframe_seconds: DEFAULT_KEYFRAME_SECONDS,
+            output_height: 0,
         }
     }
+}
+
+/// How far a recording can be scaled down from the Scene Canvas, as
+/// divisors of it.
+///
+/// Divisors rather than a list of heights, so the choices stay sensible for
+/// whatever canvas they are computed against: 1080p gives 1080/900/720/540,
+/// and a canvas twice that would give twice those. The same shape OBS offers,
+/// and for the same reason — a recording is scaled *relative to* what is
+/// being composited, not to a fixed set of numbers.
+pub const OUTPUT_SCALES: [f32; 4] = [1.0, 1.2, 1.5, 2.0];
+
+/// The heights offered for a canvas this tall, largest first.
+///
+/// Even, because encoders reject odd dimensions and it is better to round
+/// here than to have one refuse to open.
+pub fn output_heights(canvas_height: u32) -> Vec<u32> {
+    OUTPUT_SCALES
+        .iter()
+        .map(|scale| even(canvas_height as f32 / scale))
+        .collect()
+}
+
+/// Rounds to the nearest even number of at least two — what every H.264
+/// encoder here requires of both dimensions.
+///
+/// To the *nearest* even, not down to one: 16:9 at 480 tall is 853.3 wide,
+/// and rounding down gives 852, which is a slightly wrong aspect ratio where
+/// 854 is the width everything else in the world calls 480p.
+fn even(value: f32) -> u32 {
+    (((value / 2.0).round() as u32) * 2).max(2)
 }
 
 /// Which H.264 encoder a recording is written with.
@@ -305,6 +348,28 @@ impl RecordingSettings {
         } else {
             trimmed
         }
+    }
+
+    /// The size the file is written at, given the Scene Canvas it is scaled
+    /// from.
+    ///
+    /// The canvas itself unless [`Self::output_height`] asks for less, and
+    /// then that height with the width following the canvas's aspect ratio.
+    /// Both even, because H.264 encoders refuse odd dimensions.
+    ///
+    /// Derived rather than stored as a pair: a width and a height that can
+    /// disagree with the canvas is a stretched recording nobody asked for,
+    /// and the one place to keep them agreeing is here.
+    pub fn output_size(&self, canvas: [u32; 2]) -> [u32; 2] {
+        let [canvas_width, canvas_height] = canvas;
+        if self.output_height == 0 || self.output_height >= canvas_height || canvas_height == 0 {
+            return [even(canvas_width as f32), even(canvas_height as f32)];
+        }
+        let scale = self.output_height as f32 / canvas_height as f32;
+        [
+            even(canvas_width as f32 * scale),
+            even(self.output_height as f32),
+        ]
     }
 
     /// Clamped to what this application will encode at, so a hand-edited
@@ -621,5 +686,76 @@ mod tests {
                 > 0,
             "the hardware entries have to come first for the fallback to prefer them"
         );
+    }
+
+    /// The default is the canvas itself: a recording is full size until
+    /// somebody asks for less.
+    #[test]
+    fn no_output_height_means_the_canvas() {
+        let settings = RecordingSettings::default();
+        assert_eq!(settings.output_size([1920, 1080]), [1920, 1080]);
+    }
+
+    /// A width is never stored, only derived, so it cannot drift from the
+    /// canvas's aspect ratio and stretch the picture.
+    #[test]
+    fn the_width_follows_the_canvas_aspect_ratio() {
+        for (canvas, height, expected) in [
+            ([1920, 1080], 720, [1280, 720]),
+            ([1920, 1080], 540, [960, 540]),
+            ([1280, 720], 480, [854, 480]),
+            // 16:10, to prove nothing here assumes 16:9.
+            ([1920, 1200], 600, [960, 600]),
+        ] {
+            let settings = RecordingSettings {
+                output_height: height,
+                ..RecordingSettings::default()
+            };
+            assert_eq!(
+                settings.output_size(canvas),
+                expected,
+                "{canvas:?} → {height}"
+            );
+        }
+    }
+
+    /// H.264 encoders refuse odd dimensions, so both sides are rounded here
+    /// rather than left to fail at `avcodec_open2`.
+    #[test]
+    fn both_dimensions_come_out_even() {
+        for (canvas, height) in [([1919, 1081], 0), ([1920, 1080], 507), ([1366, 768], 361)] {
+            let settings = RecordingSettings {
+                output_height: height,
+                ..RecordingSettings::default()
+            };
+            let [width, height] = settings.output_size(canvas);
+            assert_eq!(width % 2, 0, "{canvas:?} gave width {width}");
+            assert_eq!(height % 2, 0, "{canvas:?} gave height {height}");
+            assert!(width >= 2 && height >= 2);
+        }
+    }
+
+    /// Asking for more than is being composited is asking for detail that
+    /// does not exist; the honest answer is the canvas.
+    #[test]
+    fn an_output_taller_than_the_canvas_is_the_canvas() {
+        let settings = RecordingSettings {
+            output_height: 2160,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(settings.output_size([1920, 1080]), [1920, 1080]);
+    }
+
+    /// The list the dialog offers has to start at the canvas itself, or
+    /// "no scaling" would not be reachable from it.
+    #[test]
+    fn the_offered_heights_start_at_the_canvas() {
+        let heights = output_heights(1080);
+        assert_eq!(heights.first(), Some(&1080));
+        assert!(
+            heights.windows(2).all(|pair| pair[0] > pair[1]),
+            "largest first, strictly: {heights:?}"
+        );
+        assert!(heights.iter().all(|height| height % 2 == 0), "{heights:?}");
     }
 }

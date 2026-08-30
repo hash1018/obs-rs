@@ -16,10 +16,10 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, ChangeGate, CudaCodec, CudaDevice, CudaDownload, CudaEncoder, CudaEncoderOptions,
-        CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaVideoCompositor,
-        CudaVideoCompositorHandle, CudaVideoLayerHandle, PauseGate, SubmitError, SwEncoder,
-        SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions,
-        VideoLayer,
+        CudaFrameFormat, CudaFrameRenderer, CudaRenderer, CudaScaler, CudaScalerInterp,
+        CudaVideoCompositor, CudaVideoCompositorHandle, CudaVideoLayerHandle, PauseGate,
+        SubmitError, SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
+        VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -52,6 +52,10 @@ pub(in crate::engine) struct PreparedRecording {
     /// rate the compositor is running at, which is the only rate frames can
     /// arrive at.
     time_base: ffmpeg::Rational,
+    /// What the file is written at, which is the Scene Canvas unless the
+    /// settings asked for less. The encoder was opened for it, so the branch
+    /// has to deliver it.
+    size: [u32; 2],
 }
 
 impl PreparedRecording {
@@ -267,6 +271,7 @@ impl Backend {
         Ok(PreparedRecording {
             encoder: self.open_encoder(fps, settings)?,
             time_base: ffmpeg::Rational::new(1, fps as i32),
+            size: settings.output_size(self.size),
         })
     }
 
@@ -313,8 +318,8 @@ impl Backend {
         prepared: PreparedRecording,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<VideoTrack, BackendError> {
-        let PreparedRecording { encoder, .. } = prepared;
-        let [width, height] = self.size;
+        let PreparedRecording { encoder, size, .. } = prepared;
+        let [width, height] = size;
 
         let mut branch = self
             .tee
@@ -329,6 +334,19 @@ impl Backend {
         // has to reason about it.
         let (gate, pause) = PauseGate::new("record-pause");
         branch = branch.pipe(gate);
+        // Only when the file is smaller than the canvas.
+        if size != self.size {
+            branch = branch.pipe(CudaScaler::new(
+                "record-scale",
+                &self.device,
+                width,
+                height,
+                // Downscaling a screen recording is exactly the quality-sensitive
+                // path that enum documents: nearest on 1080p text is
+                // visibly worse, and this runs on the GPU either way.
+                CudaScalerInterp::Lanczos,
+            ));
+        }
         branch = match encoder {
             RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
             // A software encoder is not on the GPU and does not take NV12, so
@@ -370,7 +388,7 @@ impl Backend {
         fps: u32,
         settings: &RecordingSettings,
     ) -> Result<RecordEncoder, BackendError> {
-        let [width, height] = self.size;
+        let [width, height] = settings.output_size(self.size);
         let time_base = ffmpeg::Rational::new(1, fps as i32);
         let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
         let bit_rate = settings.bit_rate_bits();
