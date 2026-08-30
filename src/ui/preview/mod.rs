@@ -449,7 +449,7 @@ fn begin_drag(
                 mode: TransformDragMode::Resize(handle),
             });
         }
-    } else if let Some(item) = hit_test_item(drag_origin, viewport, editor, snapshot) {
+    } else if let Some(item) = drag_target(drag_origin, viewport, editor, snapshot) {
         editor.select(item.id);
         if !item.locked {
             let original = editor.effective_transform(item.id, item.transform);
@@ -558,6 +558,31 @@ fn selected_item<'a>(
 ) -> Option<&'a SceneItemSnapshot> {
     let selected = editor.selected_item_id()?;
     snapshot.items.iter().find(|item| item.id == selected)
+}
+
+/// What a press should act on, which is not always what a click would select.
+///
+/// The selected item keeps the pointer while it is under it, whatever is drawn
+/// in front. Without that, a source behind another cannot be moved where they
+/// overlap: the press meant to drag it picks up the one on top instead, and
+/// the only part of it you can grab is the part that is not covered.
+///
+/// Only for a press. A plain click still takes the topmost, because that is
+/// the only way back to the item in front — and a selection that swallowed
+/// every click inside it would leave a canvas-sized Drawing impossible to
+/// select past.
+fn drag_target<'a>(
+    pointer: egui::Pos2,
+    viewport: ViewportTransform,
+    editor: &SceneEditorState,
+    snapshot: &'a SourcesSnapshot,
+) -> Option<&'a SceneItemSnapshot> {
+    if let Some(item) = selected_item(editor, snapshot)
+        && item_contains_pointer(item, pointer, viewport, editor)
+    {
+        return Some(item);
+    }
+    hit_test_item(pointer, viewport, editor, snapshot)
 }
 
 fn hit_test_item<'a>(
@@ -817,5 +842,92 @@ mod tests {
 
         assert_eq!(resting.wanted, toolbar::TOOLBAR_WIDTH);
         assert!(!resting.scrolls);
+    }
+
+    /// Two items on the same spot: a small one in front, a canvas-sized one
+    /// behind it.
+    fn overlapping() -> (SourcesSnapshot, ViewportTransform) {
+        let behind = color_item();
+        let front = SceneItemSnapshot {
+            id: SceneItemId(9),
+            transform: Transform {
+                position: [960.0, 540.0],
+                scale: [0.25, 0.25],
+                ..Transform::default()
+            },
+            ..color_item()
+        };
+        let snapshot = SourcesSnapshot {
+            // Front-most first, which is the order the dock shows and the
+            // order the hit test walks.
+            items: vec![front, behind],
+            ..SourcesSnapshot::default()
+        };
+        let viewport = ViewportTransform::new(
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0)),
+            SceneCanvas::DEFAULT,
+        );
+        (snapshot, viewport)
+    }
+
+    /// A press keeps hold of what is selected, so the item behind can still be
+    /// dragged where the one in front covers it.
+    #[test]
+    fn a_press_on_the_overlap_drags_the_selected_item_not_the_one_in_front() {
+        let (snapshot, viewport) = overlapping();
+        let mut editor = SceneEditorState::default();
+        editor.select(SceneItemId(1));
+
+        let target = drag_target(egui::pos2(960.0, 540.0), viewport, &editor, &snapshot)
+            .expect("both are here");
+
+        assert_eq!(
+            target.id,
+            SceneItemId(1),
+            "the selected item behind must keep the press, or it cannot be \
+             moved where something covers it"
+        );
+    }
+
+    /// And a click still reaches the one in front, which is the only way back
+    /// to it — a selection that swallowed every click inside itself would
+    /// make a canvas-sized Drawing impossible to select past.
+    #[test]
+    fn a_click_on_the_overlap_still_takes_the_topmost() {
+        let (snapshot, viewport) = overlapping();
+        let mut editor = SceneEditorState::default();
+        editor.select(SceneItemId(1));
+
+        let clicked = hit_test_item(egui::pos2(960.0, 540.0), viewport, &editor, &snapshot)
+            .expect("both are here");
+
+        assert_eq!(clicked.id, SceneItemId(9));
+    }
+
+    /// With nothing selected a press behaves as it always did.
+    #[test]
+    fn a_press_with_no_selection_takes_the_topmost() {
+        let (snapshot, viewport) = overlapping();
+        let editor = SceneEditorState::default();
+
+        let target = drag_target(egui::pos2(960.0, 540.0), viewport, &editor, &snapshot)
+            .expect("both are here");
+
+        assert_eq!(target.id, SceneItemId(9));
+    }
+
+    /// Pressing away from the selection picks up whatever is actually there.
+    #[test]
+    fn a_press_away_from_the_selection_picks_what_is_under_it() {
+        let (snapshot, viewport) = overlapping();
+        let mut editor = SceneEditorState::default();
+        editor.select(SceneItemId(9));
+
+        // Well outside the quarter-scale item in front, still inside the one
+        // behind.
+        let target = drag_target(egui::pos2(100.0, 100.0), viewport, &editor, &snapshot)
+            .expect("the big one is here");
+
+        assert_eq!(target.id, SceneItemId(1));
     }
 }
