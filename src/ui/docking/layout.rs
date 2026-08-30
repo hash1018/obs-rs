@@ -15,6 +15,7 @@ pub enum DockPanel {
     Sources,
     AudioMixer,
     Controls,
+    Properties,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -96,6 +97,7 @@ impl Default for DockLayout {
                     DockRegion::new([
                         DockPanel::Scenes,
                         DockPanel::Sources,
+                        DockPanel::Properties,
                         DockPanel::AudioMixer,
                         DockPanel::Controls,
                     ]),
@@ -106,6 +108,7 @@ impl Default for DockLayout {
             states: HashMap::from([
                 (DockPanel::Scenes, DockState::open()),
                 (DockPanel::Sources, DockState::open()),
+                (DockPanel::Properties, DockState::open()),
                 (DockPanel::AudioMixer, DockState::open()),
                 (DockPanel::Controls, DockState::open()),
             ]),
@@ -135,6 +138,10 @@ impl DockPanel {
             // list panels' figure: this dock has a height it is complete at,
             // and a splitter should not be able to clip a button in half.
             Self::Controls => egui::vec2(180.0, 110.0),
+            // A dozen rows of label and value, which is what a source with
+            // the most to say comes to. Below this the list scrolls rather
+            // than the panel losing rows off the bottom.
+            Self::Properties => egui::vec2(180.0, 140.0),
         }
     }
 }
@@ -460,6 +467,7 @@ mod tests {
             vec![
                 DockPanel::Scenes,
                 DockPanel::Sources,
+                DockPanel::Properties,
                 DockPanel::AudioMixer,
                 DockPanel::Controls
             ]
@@ -471,6 +479,7 @@ mod tests {
             vec![
                 DockPanel::Sources,
                 DockPanel::Scenes,
+                DockPanel::Properties,
                 DockPanel::AudioMixer,
                 DockPanel::Controls
             ]
@@ -486,6 +495,7 @@ mod tests {
             layout.visible_panels(DockRegionId::Left),
             vec![
                 DockPanel::Sources,
+                DockPanel::Properties,
                 DockPanel::AudioMixer,
                 DockPanel::Controls
             ]
@@ -600,6 +610,7 @@ mod tests {
             vec![
                 DockPanel::Scenes,
                 DockPanel::Sources,
+                DockPanel::Properties,
                 DockPanel::AudioMixer,
                 DockPanel::Controls,
             ]
@@ -630,6 +641,7 @@ mod tests {
             vec![
                 DockPanel::Scenes,
                 DockPanel::Sources,
+                DockPanel::Properties,
                 DockPanel::AudioMixer,
                 DockPanel::Controls,
             ]
@@ -690,6 +702,7 @@ mod tests {
             vec![
                 DockPanel::Scenes,
                 DockPanel::Sources,
+                DockPanel::Properties,
                 DockPanel::AudioMixer,
                 DockPanel::Controls,
             ]

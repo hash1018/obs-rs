@@ -246,6 +246,7 @@ fn show_panel(
             DockPanel::Sources => TextKey::DockSources,
             DockPanel::AudioMixer => TextKey::DockAudioMixer,
             DockPanel::Controls => TextKey::DockControls,
+            DockPanel::Properties => TextKey::DockProperties,
         }),
         egui::TextStyle::Heading.resolve(child.style()),
         child.visuals().strong_text_color(),
@@ -287,6 +288,14 @@ fn show_panel(
                 &content.snapshots.status,
                 content.i18n,
                 content.actions,
+            );
+        }
+        DockPanel::Properties => {
+            panels::properties::show(
+                &mut child,
+                content.editor,
+                &content.snapshots.sources,
+                content.i18n,
             );
         }
     }
