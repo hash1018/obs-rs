@@ -9,6 +9,6 @@ pub use canvas::SceneCanvas;
 pub use scene::{Scene, SceneId};
 pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
 pub use source::{
-    ColorSourceSettings, DisplayCaptureSettings, DisplayCaptureTarget, Source, SourceId,
-    SourceKind, SourceSettings,
+    ColorSourceSettings, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
+    Source, SourceId, SourceKind, SourceSettings, Stroke,
 };

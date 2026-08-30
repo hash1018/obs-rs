@@ -150,6 +150,17 @@ fn handle_source_command(
             SourceStore::add_color(transaction, scene_id)?;
             Ok(())
         }
+        SourceCommand::AddDrawing(scene_id) => {
+            SourceStore::add_drawing(transaction, scene_id)?;
+            Ok(())
+        }
+        SourceCommand::AddStroke(item_id, stroke) => {
+            SourceStore::add_stroke(transaction, item_id, &stroke)
+        }
+        SourceCommand::RemoveStrokes(item_id, ordinals) => {
+            SourceStore::remove_strokes(transaction, item_id, &ordinals)
+        }
+        SourceCommand::ClearStrokes(item_id) => SourceStore::clear_strokes(transaction, item_id),
         SourceCommand::AddDisplayCapture { scene_id, settings } => {
             SourceStore::add_display_capture(transaction, scene_id, &settings)?;
             Ok(())
@@ -318,6 +329,7 @@ fn publish_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{SourceSettings, Stroke};
 
     #[test]
     fn scene_commands_are_persisted_and_ordered() {
@@ -396,6 +408,81 @@ mod tests {
         let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(sources.items.is_empty());
         assert_eq!(sources.scene_name.as_deref(), Some("Scene 2"));
+    }
+
+    /// A Drawing's marks survive a round trip through the database, and the
+    /// two ways of taking one off — the eraser and undo — both work by
+    /// position rather than by identity.
+    #[test]
+    fn a_drawings_strokes_survive_the_database_and_come_back_in_order() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddDrawing(scene_id)).unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+        assert_eq!(sources.items[0].name, "Drawing");
+        assert!(
+            matches!(&sources.items[0].settings, SourceSettings::Drawing(drawing) if drawing.strokes.is_empty()),
+            "a new Drawing has nothing on it"
+        );
+
+        for (index, rgba) in [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]
+            .into_iter()
+            .enumerate()
+        {
+            handle_source_command(
+                &mut database,
+                SourceCommand::AddStroke(
+                    item_id,
+                    Stroke {
+                        points: vec![[index as f32, 1.5], [index as f32 + 10.0, 2.5]],
+                        rgba,
+                        width: 4.0,
+                    },
+                ),
+            )
+            .unwrap();
+        }
+
+        let strokes = |database: &ProjectDatabase| {
+            let (_, sources, _) = project_snapshot(database).unwrap();
+            match &sources.items[0].settings {
+                SourceSettings::Drawing(drawing) => drawing.strokes.clone(),
+                other => panic!("expected a Drawing, got {other:?}"),
+            }
+        };
+
+        let drawn = strokes(&database);
+        assert_eq!(drawn.len(), 3, "every stroke came back");
+        assert_eq!(
+            drawn[1].points,
+            vec![[1.0, 1.5], [11.0, 2.5]],
+            "points survive the round trip exactly, in the order drawn"
+        );
+        assert_eq!(drawn[2].rgba, [0, 0, 255, 255]);
+        assert_eq!(drawn[0].width, 4.0);
+
+        // The eraser takes the middle one; the two either side keep their
+        // order and their colours.
+        handle_source_command(
+            &mut database,
+            SourceCommand::RemoveStrokes(item_id, vec![1]),
+        )
+        .unwrap();
+        let left = strokes(&database);
+        assert_eq!(left.len(), 2);
+        assert_eq!(
+            [left[0].rgba, left[1].rgba],
+            [[255, 0, 0, 255], [0, 0, 255, 255]],
+            "removing by position takes the one meant, not the one after it"
+        );
+
+        handle_source_command(&mut database, SourceCommand::ClearStrokes(item_id)).unwrap();
+        assert!(strokes(&database).is_empty(), "clearing leaves nothing");
     }
 
     #[test]

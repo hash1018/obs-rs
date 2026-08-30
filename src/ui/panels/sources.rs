@@ -163,6 +163,7 @@ fn source_kind_key(kind: SourceKind) -> TextKey {
         SourceKind::VideoCapture => TextKey::SourceKindVideoCapture,
         SourceKind::Image => TextKey::SourceKindImage,
         SourceKind::Color => TextKey::SourceKindColor,
+        SourceKind::Drawing => TextKey::SourceKindDrawing,
     }
 }
 

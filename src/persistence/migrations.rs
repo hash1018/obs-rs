@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -188,6 +188,38 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
                    ('Microphone',    'input',  NULL, 0, 0, 1);
 
             PRAGMA user_version = 7;",
+        )?;
+    }
+    if current_version < 8 {
+        // Strokes live in a table of their own rather than a blob on the
+        // settings row: a Drawing gains one per gesture and loses one per
+        // undo, and a row apiece is what makes those an insert and a delete
+        // instead of a rewrite of everything drawn so far.
+        //
+        // `points` is the pairs packed as little-endian `f32`, two per point.
+        // A stroke is a few hundred of them at most and they are only ever
+        // read or written whole, so a column of numbers would buy nothing for
+        // the rows it would cost.
+        transaction.execute_batch(
+            "CREATE TABLE drawing_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                width     INTEGER NOT NULL CHECK (width > 0),
+                height    INTEGER NOT NULL CHECK (height > 0)
+            );
+
+            CREATE TABLE drawing_strokes (
+                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                ordinal   INTEGER NOT NULL,
+                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
+                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
+                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
+                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255),
+                width     REAL NOT NULL CHECK (width > 0),
+                points    BLOB NOT NULL,
+                PRIMARY KEY (source_id, ordinal)
+            );
+
+            PRAGMA user_version = 8;",
         )?;
     }
     transaction.commit()?;

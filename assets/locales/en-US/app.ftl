@@ -59,6 +59,7 @@ source-display-monitor = { $name } — { $width }×{ $height }
 source-display-monitor-primary = { $name } — { $width }×{ $height } (Primary)
 source-display-none = No displays are available.
 source-kind-color = Color
+source-kind-drawing = Drawing
 source-kind-display-capture = Display Capture
 source-kind-window-capture = Window Capture
 source-kind-video-capture = Video Capture

@@ -122,7 +122,6 @@ pub(super) const RECORDING_QUEUE_DEPTH: usize = 8;
 pub(super) const RECORDING_SEND_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(500);
 
-/// A Source that is running, and the controls for its layer.
 /// The recording's video branch while one is running.
 ///
 /// Platform-independent even though what feeds it is not: both backends end
@@ -132,6 +131,21 @@ pub(super) struct VideoTrack {
     pub(super) pause: media_pp::elements::PauseGateHandle,
 }
 
+/// A Drawing's way back to the compositor.
+///
+/// Kept because a Drawing is the one Source whose pixels this side produces:
+/// everything else has a capture or a file behind it, and a Drawing has a
+/// list of strokes that only changes when someone draws.
+pub(super) struct DrawingSurface {
+    pub(super) pusher: media_pp::elements::AppSourceHandle,
+    pub(super) size: [u32; 2],
+    /// What was last drawn into it. A Scene change that left the strokes
+    /// alone — a move, a rename, anything else in the Scene at all — must not
+    /// cost a full redraw and re-upload.
+    pub(super) drawn: Vec<crate::domain::Stroke>,
+}
+
+/// A Source that is running, and the controls for its layer.
 pub(super) struct OpenSource {
     pub(super) source: RunningSource,
     pub(super) layer: Layer,
@@ -143,6 +157,8 @@ pub(super) struct OpenSource {
     /// Scene stays open but stops running, so coming back is a resume rather
     /// than another portal round trip.
     pub(super) showing: bool,
+    /// Set only for a Drawing — see [`DrawingSurface`].
+    pub(super) drawing: Option<DrawingSurface>,
 }
 
 /// The name a SceneItem's compositor input is registered under.
@@ -154,6 +170,90 @@ pub(super) fn input_name(item: &SceneItemSnapshot) -> String {
 /// Convenience for a backend that has no Source of a given kind yet.
 pub(super) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendError {
     format!("{:?} is not connected to the compositor yet", item.kind).into()
+}
+
+#[allow(dead_code)]
+/// Draws a Drawing's strokes into a BGRA frame the compositor can take.
+///
+/// # Transparent where nothing was drawn
+///
+/// A Drawing is an overlay, so its alpha is the marks themselves: the frame
+/// starts fully transparent and only the strokes write into it. That is what
+/// lets one sit over a capture without a rectangle around it.
+///
+/// # Straight-alpha, and drawn without smoothing
+///
+/// Each segment is a run of stamped discs, which is the cheapest thing that
+/// gives round ends and round joins for free — a stroke is a chain of them and
+/// its corners look drawn rather than mitred. The discs are hard-edged: the
+/// compositor scales this frame with `scale_cuda`'s bilinear filter on the way
+/// to the Canvas, which softens the edges anyway, and anti-aliasing here would
+/// be paid on every point of every stroke for something that is filtered again
+/// downstream.
+pub(super) fn drawing_bgra(
+    width: u32,
+    height: u32,
+    strokes: &[crate::domain::Stroke],
+) -> media_pp::buffer::MediaBuffer {
+    use media_pp::{buffer::MediaBuffer, ffmpeg, pool::UnboundObjectPool};
+
+    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
+    let stride = frame.stride(0);
+    let data = frame.data_mut(0);
+    data.fill(0);
+
+    for stroke in strokes {
+        let radius = (stroke.width / 2.0).max(0.5);
+        let pixel = [
+            stroke.rgba[2],
+            stroke.rgba[1],
+            stroke.rgba[0],
+            stroke.rgba[3],
+        ];
+        let mut stamp = |x: f32, y: f32| {
+            let left = ((x - radius).floor() as i64).max(0) as usize;
+            let top = ((y - radius).floor() as i64).max(0) as usize;
+            let right = ((x + radius).ceil() as i64).clamp(0, width as i64) as usize;
+            let bottom = ((y + radius).ceil() as i64).clamp(0, height as i64) as usize;
+            for row in top..bottom {
+                for column in left..right {
+                    let dx = column as f32 + 0.5 - x;
+                    let dy = row as f32 + 0.5 - y;
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                    let at = row * stride + column * 4;
+                    data[at..at + 4].copy_from_slice(&pixel);
+                }
+            }
+        };
+        match stroke.points.as_slice() {
+            // A press with no movement is a dot, which is what a click draws.
+            [] => {}
+            [[x, y]] => stamp(*x, *y),
+            points => {
+                for pair in points.windows(2) {
+                    let ([x0, y0], [x1, y1]) = (pair[0], pair[1]);
+                    // One stamp per half-radius along the segment, which is
+                    // close enough that the discs overlap into a line and far
+                    // enough that a long stroke is not stamped per pixel.
+                    let span = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+                    let steps = (span / radius.max(0.5) * 2.0).ceil().max(1.0);
+                    for step in 0..=steps as u32 {
+                        let along = step as f32 / steps;
+                        stamp(x0 + (x1 - x0) * along, y0 + (y1 - y0) * along);
+                    }
+                }
+            }
+        }
+    }
+
+    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
+    // it and never returns to one, which an unbound pool of zero expresses.
+    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
+    let mut slot = pool.get();
+    *slot = frame;
+    MediaBuffer::Video(std::sync::Arc::new(slot))
 }
 
 /// One BGRA frame filled with a single colour, ready for a backend's upload
@@ -185,4 +285,87 @@ pub(super) fn flat_bgra(width: u32, height: u32, rgba: [u8; 4]) -> media_pp::buf
     let mut slot = pool.get();
     *slot = frame;
     MediaBuffer::Video(Arc::new(slot))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::Stroke;
+
+    /// Reads one pixel back as BGRA, which is the order the frame is in.
+    fn pixel_at(buffer: &media_pp::buffer::MediaBuffer, x: usize, y: usize) -> [u8; 4] {
+        let media_pp::buffer::MediaBuffer::Video(frame) = buffer else {
+            panic!("expected a video frame");
+        };
+        let stride = frame.stride(0);
+        let data = frame.data(0);
+        let at = y * stride + x * 4;
+        [data[at], data[at + 1], data[at + 2], data[at + 3]]
+    }
+
+    /// A Drawing is an overlay, so what nobody drew on has to come out
+    /// transparent — an opaque black frame would hide whatever it sits over.
+    #[test]
+    fn an_undrawn_drawing_is_fully_transparent() {
+        let frame = drawing_bgra(64, 64, &[]);
+        for (x, y) in [(0, 0), (31, 31), (63, 63)] {
+            assert_eq!(
+                pixel_at(&frame, x, y),
+                [0, 0, 0, 0],
+                "({x}, {y}) should be untouched"
+            );
+        }
+    }
+
+    /// A press without a drag is a dot, and it lands where the pointer was.
+    #[test]
+    fn a_single_point_draws_a_dot_in_its_own_colour() {
+        let strokes = [Stroke {
+            points: vec![[32.0, 32.0]],
+            rgba: [200, 100, 50, 255],
+            width: 8.0,
+        }];
+        let frame = drawing_bgra(64, 64, &strokes);
+        // BGRA, so the red the caller asked for is the third byte.
+        assert_eq!(pixel_at(&frame, 32, 32), [50, 100, 200, 255]);
+        assert_eq!(
+            pixel_at(&frame, 32, 20),
+            [0, 0, 0, 0],
+            "well outside the dot stays transparent"
+        );
+    }
+
+    /// The gap between two points is filled rather than left as two dots —
+    /// the stamps have to overlap along the segment or a fast gesture comes
+    /// out dotted.
+    #[test]
+    fn a_segment_is_continuous_between_its_points() {
+        let strokes = [Stroke {
+            points: vec![[8.0, 32.0], [56.0, 32.0]],
+            rgba: [255, 255, 255, 255],
+            width: 4.0,
+        }];
+        let frame = drawing_bgra(64, 64, &strokes);
+        for x in 8..=56 {
+            assert_eq!(
+                pixel_at(&frame, x, 32)[3],
+                255,
+                "the line should be unbroken at x = {x}"
+            );
+        }
+    }
+
+    /// A stroke that runs off the surface is clipped, not a panic: the
+    /// pointer can leave the Drawing mid-gesture and often does.
+    #[test]
+    fn a_stroke_leaving_the_surface_is_clipped() {
+        let strokes = [Stroke {
+            points: vec![[-40.0, 32.0], [100.0, 32.0]],
+            rgba: [255, 255, 255, 255],
+            width: 6.0,
+        }];
+        let frame = drawing_bgra(64, 64, &strokes);
+        assert_eq!(pixel_at(&frame, 0, 32)[3], 255, "it crosses the left edge");
+        assert_eq!(pixel_at(&frame, 63, 32)[3], 255, "and the right one");
+    }
 }

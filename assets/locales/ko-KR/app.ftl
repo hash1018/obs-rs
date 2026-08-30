@@ -59,6 +59,7 @@ source-display-monitor = { $name } — { $width }×{ $height }
 source-display-monitor-primary = { $name } — { $width }×{ $height } (주 모니터)
 source-display-none = 사용할 수 있는 디스플레이가 없습니다.
 source-kind-color = 색상
+source-kind-drawing = 판서
 source-kind-display-capture = 디스플레이 캡처
 source-kind-window-capture = 윈도우 캡처
 source-kind-video-capture = 비디오 캡처

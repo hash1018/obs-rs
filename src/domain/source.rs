@@ -10,6 +10,7 @@ pub enum SourceKind {
     VideoCapture,
     Image,
     Color,
+    Drawing,
 }
 
 impl SourceKind {
@@ -20,6 +21,7 @@ impl SourceKind {
             Self::VideoCapture => "video_capture",
             Self::Image => "image",
             Self::Color => "color",
+            Self::Drawing => "drawing",
         }
     }
 
@@ -30,6 +32,7 @@ impl SourceKind {
             "video_capture" => Some(Self::VideoCapture),
             "image" => Some(Self::Image),
             "color" => Some(Self::Color),
+            "drawing" => Some(Self::Drawing),
             _ => None,
         }
     }
@@ -39,6 +42,37 @@ impl SourceKind {
 pub struct ColorSourceSettings {
     pub size: [f32; 2],
     pub rgba: [u8; 4],
+}
+
+/// One continuous mark, from the pointer going down to it coming up.
+///
+/// Points are in the Drawing's own coordinates, not the Canvas's — the
+/// SceneItem's Transform is undone before a point is recorded, so moving or
+/// resizing the source afterwards carries its marks with it instead of
+/// leaving them where the pointer happened to be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stroke {
+    /// Straight segments between consecutive points. A single point is a dot,
+    /// which is what a click without a drag draws.
+    pub points: Vec<[f32; 2]>,
+    pub rgba: [u8; 4],
+    /// Line width in the Drawing's own coordinates, so it scales with the
+    /// source the same way its marks do.
+    pub width: f32,
+}
+
+/// A surface to draw on, kept as the marks that were made rather than as
+/// pixels.
+///
+/// Strokes rather than an image because everything this needs falls out of
+/// it: the eraser takes whole strokes away, undo pops one, the file stays
+/// small, and redrawing at a different size stays sharp. Rasterizing is the
+/// engine's job and happens once per change.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawingSourceSettings {
+    /// The surface's own size, which is what strokes are positioned within.
+    pub size: [f32; 2],
+    pub strokes: Vec<Stroke>,
 }
 
 /// Which display a Display Capture source captures.
@@ -79,6 +113,7 @@ pub struct DisplayCaptureSettings {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
+    Drawing(DrawingSourceSettings),
     DisplayCapture(DisplayCaptureSettings),
     None,
 }
@@ -95,6 +130,7 @@ impl SourceSettings {
     pub fn source_size(&self, canvas: SceneCanvas) -> [f32; 2] {
         match self {
             Self::Color(settings) => settings.size,
+            Self::Drawing(settings) => settings.size,
             Self::DisplayCapture(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {

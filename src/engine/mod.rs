@@ -82,6 +82,11 @@ enum EngineCommand {
     Scene(Box<SourcesSnapshot>),
     /// One item's Transform mid-gesture, which the project does not hold yet.
     Dragging(SceneItemId, Transform),
+    /// A Drawing's strokes mid-gesture, for the same reason `Dragging` exists:
+    /// the mark has to appear under the pointer, and the project is not told
+    /// until the pointer comes up. Carries the whole list rather than the one
+    /// new stroke, because rasterizing is done from the list either way.
+    Drawing(SceneItemId, Vec<crate::domain::Stroke>),
     /// Whether anyone is looking at the Preview — a minimised window is
     /// nobody, and the frame then has nowhere worth going.
     PreviewVisible(bool),
@@ -291,6 +296,17 @@ impl EngineManager {
         let _ = self
             .commands
             .send(EngineCommand::Scene(Box::new(sources.clone())));
+    }
+
+    /// Redraws a Drawing while the pointer is still down.
+    ///
+    /// The same arrangement `set_dragging_transform` has, and for the same
+    /// reason: the project learns a stroke when the gesture ends, but the mark
+    /// has to be under the pointer before that or drawing is unusable. What is
+    /// sent is the whole list — every committed stroke plus the one being
+    /// made — because that is what a redraw is built from either way.
+    pub fn set_drawing_strokes(&self, item: SceneItemId, strokes: Vec<crate::domain::Stroke>) {
+        let _ = self.commands.send(EngineCommand::Drawing(item, strokes));
     }
 
     /// Moves one layer while the pointer is still down.
@@ -550,6 +566,12 @@ fn apply_command(
             reconcile(backend, project, open, scene);
             true
         }
+        EngineCommand::Drawing(item_id, strokes) => {
+            if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
+                redraw(source, &strokes);
+            }
+            false
+        }
         EngineCommand::Dragging(item_id, transform) => {
             let Some(index) = scene.items.iter().position(|item| item.id == item_id) else {
                 return false;
@@ -780,6 +802,30 @@ enum SourceState {
 }
 
 /// Brings the running Sources in line with what the project now holds.
+/// Rasterizes a Drawing's strokes and hands them to its compositor input, if
+/// they are not already what it is showing.
+///
+/// The comparison is what makes this cheap enough to call on every Scene
+/// change: a Drawing sitting in a Scene where something else moved must not
+/// redraw a canvas-sized frame and push it across the bus for nothing.
+fn redraw(source: &mut OpenSource, strokes: &[crate::domain::Stroke]) {
+    let Some(drawing) = source.drawing.as_mut() else {
+        return;
+    };
+    if drawing.drawn == strokes {
+        return;
+    }
+    let [width, height] = drawing.size;
+    if let Err(error) = drawing
+        .pusher
+        .push(backend::drawing_bgra(width, height, strokes))
+    {
+        eprintln!("could not update the drawing: {error}");
+        return;
+    }
+    drawing.drawn = strokes.to_vec();
+}
+
 fn reconcile(
     backend: &Backend,
     project: Option<&ProjectDispatcher>,
@@ -791,9 +837,12 @@ fn reconcile(
         // The snapshot is ordered front-most first, and the compositor draws
         // larger z later, so the two run opposite ways.
         let layer = layer_for(item, item.transform, (count - index) as i32);
-        match open.get(&item.id) {
+        match open.get_mut(&item.id) {
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
+                if let crate::domain::SourceSettings::Drawing(settings) = &item.settings {
+                    redraw(source, &settings.strokes);
+                }
             }
             Some(SourceState::Failed) => {}
             None => {

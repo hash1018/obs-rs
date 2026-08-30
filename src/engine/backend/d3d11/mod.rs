@@ -41,7 +41,7 @@ use crate::snapshots::SceneItemSnapshot;
 
 use super::{
     BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
-    VideoTrack, flat_bgra, input_name, software_codec, unsupported_kind,
+    VideoTrack, drawing_bgra, flat_bgra, input_name, software_codec, unsupported_kind,
 };
 
 use crate::settings::{RecordingEncoder, RecordingSettings};
@@ -518,6 +518,7 @@ impl Backend {
                 fps,
             ),
             SourceKind::Color => open_color_source(&self.device, &self.compositor, item, layer),
+            SourceKind::Drawing => open_drawing_source(&self.device, &self.compositor, item, layer),
             _ => Err(unsupported_kind(item)),
         }
     }
@@ -735,6 +736,58 @@ fn create_device() -> Result<(ID3D11Device, Arc<Mutex<ID3D11DeviceContext>>), Ba
 /// each input gave it, and a colour that never changes never needs another.
 /// Position, size and opacity are the layer's, so nothing here is redrawn
 /// when the item moves.
+/// Opens a Drawing: an `AppSource` this side pushes rasterized strokes into.
+///
+/// The same shape as a Color Source, and for the same reason — the pixels come
+/// from here rather than from a capture. What differs is that a Color Source
+/// pushes once and is done, while a Drawing pushes again every time someone
+/// draws, which is why its handle is kept.
+fn open_drawing_source(
+    device: &ID3D11Device,
+    handle: &D3d11VideoCompositorHandle,
+    item: &SceneItemSnapshot,
+    layer: VideoLayer,
+) -> Result<OpenSource, BackendError> {
+    use media_pp::elements::{AppSource, D3d11Upload};
+
+    let SourceSettings::Drawing(settings) = &item.settings else {
+        return Err("scene item is not a drawing source".into());
+    };
+    let width = (settings.size[0].round() as u32).max(2) & !1;
+    let height = (settings.size[1].round() as u32).max(2) & !1;
+
+    let name = input_name(item);
+    // One frame of capacity: a drawing gesture produces one per UI frame and
+    // only the newest matters, so a deeper queue would only add latency
+    // between the pointer and the picture.
+    let (source, pusher) = AppSource::new(name.clone(), 1);
+    let upload = D3d11Upload::new(format!("{name}-upload"), device, width, height);
+
+    let D3d11VideoCompositorInput { sink, layer } = handle
+        .add_source(name.clone(), layer)?
+        .ok_or("the compositor is no longer running")?;
+    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+        let branch = context.branch().pipe(upload).to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    pipeline.run()?;
+    pusher.push(drawing_bgra(width, height, &settings.strokes))?;
+
+    Ok(OpenSource {
+        source: RunningSource::Owned(pipeline),
+        layer,
+        name,
+        refreshed_token: None,
+        showing: true,
+        drawing: Some(super::DrawingSurface {
+            pusher,
+            size: [width, height],
+            drawn: settings.strokes.clone(),
+        }),
+    })
+}
+
 fn open_color_source(
     device: &ID3D11Device,
     handle: &D3d11VideoCompositorHandle,
@@ -772,6 +825,7 @@ fn open_color_source(
         name,
         refreshed_token: None,
         showing: true,
+        drawing: None,
     })
 }
 
@@ -863,6 +917,7 @@ fn open_display_capture(
         name,
         refreshed_token: None,
         showing: true,
+        drawing: None,
     })
 }
 

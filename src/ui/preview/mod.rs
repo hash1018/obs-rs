@@ -379,7 +379,9 @@ fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
             settings.rgba[2],
             settings.rgba[3],
         ),
-        SourceSettings::DisplayCapture(_) | SourceSettings::None => {
+        // A Drawing is transparent wherever nothing was drawn, so the
+        // placeholder is the same neutral one an unopened capture gets.
+        SourceSettings::Drawing(_) | SourceSettings::DisplayCapture(_) | SourceSettings::None => {
             ui.visuals().widgets.inactive.bg_fill
         }
     }

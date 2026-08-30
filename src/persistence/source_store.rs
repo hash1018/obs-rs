@@ -1,11 +1,50 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, SceneCanvas, SceneId,
-    SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings, Transform,
+    ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
+    SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings,
+    Stroke, Transform,
 };
 
 use super::PersistenceResult;
+
+/// A stroke's points as they are stored: pairs of little-endian `f32`.
+///
+/// Little-endian by name rather than by host order, so a project file written
+/// on one machine reads the same on another.
+fn pack_points(points: &[[f32; 2]]) -> Vec<u8> {
+    let mut packed = Vec::with_capacity(points.len() * 8);
+    for [x, y] in points {
+        packed.extend_from_slice(&x.to_le_bytes());
+        packed.extend_from_slice(&y.to_le_bytes());
+    }
+    packed
+}
+
+/// The inverse. A trailing partial pair is dropped rather than refused: half a
+/// point is not a point, and losing it costs one vertex of one stroke where
+/// failing would cost the whole project.
+fn unpack_points(packed: &[u8]) -> Vec<[f32; 2]> {
+    packed
+        .chunks_exact(8)
+        .map(|pair| {
+            let read = |bytes: &[u8]| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            [read(&pair[..4]), read(&pair[4..])]
+        })
+        .collect()
+}
+
+/// Which Source a SceneItem draws, which is where its settings live.
+///
+/// Every other Source command names an item too — an item is what the UI has
+/// selected — so the resolution belongs here rather than in each caller.
+fn source_of(transaction: &Transaction<'_>, item_id: SceneItemId) -> PersistenceResult<SourceId> {
+    Ok(SourceId(transaction.query_row(
+        "SELECT source_id FROM scene_items WHERE id = ?1",
+        params![item_id.0],
+        |row| row.get(0),
+    )?))
+}
 
 pub(crate) struct SourceStore;
 
@@ -44,18 +83,22 @@ impl SourceStore {
                 display_capture_settings.monitor_name,
                 display_capture_settings.restore_token,
                 display_capture_settings.width,
-                display_capture_settings.height
+                display_capture_settings.height,
+                drawing_source_settings.width,
+                drawing_source_settings.height
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
                 ON color_source_settings.source_id = sources.id
              LEFT JOIN display_capture_settings
                 ON display_capture_settings.source_id = sources.id
+             LEFT JOIN drawing_source_settings
+                ON drawing_source_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
 
-        Ok(statement
+        let mut rows = statement
             .query_map([scene_id.0], |row| {
                 let kind_name: String = row.get(17)?;
                 let kind = SourceKind::from_storage_name(&kind_name).ok_or_else(|| {
@@ -95,6 +138,13 @@ impl SourceStore {
                             },
                         })
                     }
+                    // The strokes are not joined here — a Drawing has many and
+                    // the rest of this query has one row per item. They are
+                    // filled in below, once the items are known.
+                    SourceKind::Drawing => SourceSettings::Drawing(DrawingSourceSettings {
+                        size: [row.get::<_, i64>(29)? as f32, row.get::<_, i64>(30)? as f32],
+                        strokes: Vec::new(),
+                    }),
                     _ => SourceSettings::None,
                 };
                 let source_id = SourceId(row.get(1)?);
@@ -127,7 +177,37 @@ impl SourceStore {
                     },
                 ))
             })?
-            .collect::<Result<Vec<_>, _>>()?)
+            .collect::<Result<Vec<_>, _>>()?;
+        for (_, source) in &mut rows {
+            if let SourceSettings::Drawing(settings) = &mut source.settings {
+                settings.strokes = Self::strokes(connection, source.id)?;
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Every stroke of one Drawing, in the order they were made.
+    fn strokes(connection: &Connection, source_id: SourceId) -> PersistenceResult<Vec<Stroke>> {
+        let mut statement = connection.prepare(
+            "SELECT red, green, blue, alpha, width, points
+               FROM drawing_strokes
+              WHERE source_id = ?1
+              ORDER BY ordinal",
+        )?;
+        Ok(statement
+            .query_map([source_id.0], |row| {
+                Ok(Stroke {
+                    rgba: [
+                        row.get::<_, i64>(0)? as u8,
+                        row.get::<_, i64>(1)? as u8,
+                        row.get::<_, i64>(2)? as u8,
+                        row.get::<_, i64>(3)? as u8,
+                    ],
+                    width: row.get(4)?,
+                    points: unpack_points(&row.get::<_, Vec<u8>>(5)?),
+                })
+            })?
+            .collect::<Result<_, _>>()?)
     }
 
     /// Every SceneItem the project holds, across all Scenes.
@@ -163,6 +243,98 @@ impl SourceStore {
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, canvas)
+    }
+
+    /// A new Drawing, the size of the Canvas and with nothing on it yet.
+    pub(crate) fn add_drawing(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, "Drawing")?;
+        let source_id = create(transaction, &name, SourceKind::Drawing)?;
+        let canvas = SceneCanvas::DEFAULT;
+        transaction.execute(
+            "INSERT INTO drawing_source_settings (source_id, width, height)
+             VALUES (?1, ?2, ?3)",
+            params![source_id.0, canvas.width as i64, canvas.height as i64],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, canvas)
+    }
+
+    /// Puts one stroke on the end of a Drawing.
+    ///
+    /// The ordinal is taken from what is already there rather than counted by
+    /// the caller, so an undo followed by a new stroke reuses the number the
+    /// undone one gave up instead of leaving a hole.
+    pub(crate) fn add_stroke(
+        transaction: &Transaction<'_>,
+        item_id: SceneItemId,
+        stroke: &Stroke,
+    ) -> PersistenceResult<()> {
+        let source_id = source_of(transaction, item_id)?;
+        transaction.execute(
+            "INSERT INTO drawing_strokes
+                (source_id, ordinal, red, green, blue, alpha, width, points)
+             VALUES (
+                ?1,
+                (SELECT COALESCE(MAX(ordinal) + 1, 0)
+                   FROM drawing_strokes WHERE source_id = ?1),
+                ?2, ?3, ?4, ?5, ?6, ?7
+             )",
+            params![
+                source_id.0,
+                stroke.rgba[0],
+                stroke.rgba[1],
+                stroke.rgba[2],
+                stroke.rgba[3],
+                stroke.width,
+                pack_points(&stroke.points),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Takes strokes off a Drawing by their position in it, which is what the
+    /// eraser and undo both do.
+    ///
+    /// Removing by ordinal rather than rewriting the list keeps a stroke's
+    /// identity stable while a gesture is in progress; the ordinals left
+    /// behind stay ordered, which is all anything reads them for.
+    pub(crate) fn remove_strokes(
+        transaction: &Transaction<'_>,
+        item_id: SceneItemId,
+        ordinals: &[usize],
+    ) -> PersistenceResult<()> {
+        let source_id = source_of(transaction, item_id)?;
+        let mut statement = transaction.prepare(
+            "DELETE FROM drawing_strokes
+              WHERE source_id = ?1
+                AND ordinal = (
+                    SELECT ordinal FROM drawing_strokes
+                     WHERE source_id = ?1 ORDER BY ordinal LIMIT 1 OFFSET ?2
+                )",
+        )?;
+        // Highest first, so each offset still names the stroke it did when the
+        // caller worked them out.
+        let mut ordinals = ordinals.to_vec();
+        ordinals.sort_unstable();
+        for ordinal in ordinals.into_iter().rev() {
+            statement.execute(params![source_id.0, ordinal as i64])?;
+        }
+        Ok(())
+    }
+
+    /// Everything drawn on one Drawing, gone.
+    pub(crate) fn clear_strokes(
+        transaction: &Transaction<'_>,
+        item_id: SceneItemId,
+    ) -> PersistenceResult<()> {
+        let source_id = source_of(transaction, item_id)?;
+        transaction.execute(
+            "DELETE FROM drawing_strokes WHERE source_id = ?1",
+            params![source_id.0],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn add_display_capture(

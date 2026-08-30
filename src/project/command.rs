@@ -1,4 +1,6 @@
-use crate::domain::{AudioSourceId, DisplayCaptureSettings, SceneId, SceneItemId, Transform};
+use crate::domain::{
+    AudioSourceId, DisplayCaptureSettings, SceneId, SceneItemId, Stroke, Transform,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProjectCommand {
@@ -29,6 +31,7 @@ pub enum AudioCommand {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceCommand {
     AddColor(SceneId),
+    AddDrawing(SceneId),
     AddDisplayCapture {
         scene_id: SceneId,
         settings: DisplayCaptureSettings,
@@ -41,6 +44,13 @@ pub enum SourceCommand {
     SetRestoreToken(SceneItemId, Option<String>),
     SetTransform(SceneItemId, Transform),
     SetVisible(SceneItemId, bool),
+    /// Puts one finished stroke on a Drawing. Sent when the pointer comes up,
+    /// not while it is down — see `UiAction::DragStroke`.
+    AddStroke(SceneItemId, Stroke),
+    /// Takes strokes off a Drawing by their position in it, which is both
+    /// what the eraser does and what undo does.
+    RemoveStrokes(SceneItemId, Vec<usize>),
+    ClearStrokes(SceneItemId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
