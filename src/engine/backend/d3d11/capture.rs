@@ -19,8 +19,10 @@ use media_pp::{
     elements::{
         CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder, TeeHandle,
     },
+    ffmpeg,
     graph::BranchId,
     pipeline::Pipeline,
+    rate::FrameRateHandle,
 };
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 
@@ -30,6 +32,10 @@ use super::BackendError;
 struct SharedCapture {
     pipeline: Arc<Pipeline>,
     tee: TeeHandle,
+    /// Taken before the source was moved into its `Pipeline`, which is the
+    /// only chance to. It is what lets the compositor's rate change without
+    /// this capture being closed and reopened underneath it.
+    frame_rate: FrameRateHandle,
     /// How many branches belong to a SceneItem in the Scene being shown. The
     /// capture runs while this is above zero and pauses when it reaches it —
     /// the shared form of "a Source whose item left the Scene stops running".
@@ -118,6 +124,18 @@ impl CaptureRegistry {
         }
     }
 
+    /// Tells every open capture to emit at `fps`.
+    ///
+    /// A handle call rather than a reopen: the compositor's rate is a setting,
+    /// and closing and reopening a display duplication to follow it would put
+    /// a gap in the Preview each time one was applied.
+    pub(in crate::engine) fn set_frame_rate(&self, fps: u32) {
+        let rate = ffmpeg::Rational::new(fps as i32, 1);
+        for capture in self.lock().values() {
+            capture.frame_rate.set(rate);
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SharedCapture>> {
         self.open
             .lock()
@@ -151,6 +169,10 @@ fn open_capture(
         format.width, format.height
     );
 
+    // Before the move below: once the `Pipeline` owns the source there is
+    // nothing left to ask it with.
+    let frame_rate = source.frame_rate();
+
     // Capture gives BGRA D3D11 textures and the compositor takes exactly
     // those, so unlike the CUDA side nothing converts between them.
     let mut handle = None;
@@ -167,6 +189,7 @@ fn open_capture(
     Ok(SharedCapture {
         pipeline,
         tee,
+        frame_rate,
         // Counted by whoever attaches the first branch.
         showing: 0,
     })

@@ -48,14 +48,22 @@ use backend::{Backend, BackendError, OpenSource};
 /// ask, where any number is wrong and a plausible one beats a panic.
 pub(in crate::engine) const TARGET_FPS: u32 = crate::settings::DEFAULT_FPS;
 
-/// How often the Preview is redrawn from those frames.
+/// The most often the Preview is redrawn from those frames.
+///
+/// A ceiling, not a rate: what it actually redraws at is this or the
+/// compositor's own rate, whichever is lower, so a Scene composited at 24
+/// gives a Preview at 24 rather than one asking for frames that are not
+/// being made.
 ///
 /// A Preview is not an output: it is a few hundred pixels wide and watched by
 /// one person. Halving its rate took this application from 10% of a
 /// twelve-core machine to 2.5%, and almost none of that is pixels —
 /// downloading and resolving at 720p instead of 1080p was measured and
 /// changed nothing. The cost is per-frame overhead, most of it the whole-UI
-/// repaint that each drawn frame asks egui for.
+/// repaint that each drawn frame asks egui for. That measurement is why this
+/// stays a ceiling rather than following the compositor all the way up:
+/// composing at 60 is a reason to record at 60, not a reason to repaint the
+/// whole window 60 times a second for one person watching a thumbnail.
 const PREVIEW_FPS: u32 = 30;
 
 /// One composited frame, already resident on the GPU.
@@ -411,7 +419,9 @@ fn run(
         &render_state,
         size,
         recording.settings.fps.max(1),
-        PREVIEW_FPS,
+        // Never above what is being composited: a Preview asking for 30 of a
+        // Scene made at 24 is asking for frames that do not exist.
+        PREVIEW_FPS.min(recording.settings.fps.max(1)),
         publish,
     )?;
 
@@ -512,20 +522,10 @@ fn apply_command(
             // timestamps it is being handed would change meaning underneath
             // it. The setting is kept either way, and takes at the next
             // change once the recording has stopped.
-            let changed = recording.running.is_none() && settings.fps != backend.frame_rate();
-            if changed {
+            if recording.running.is_none() && settings.fps != backend.frame_rate() {
                 backend.set_frame_rate(settings.fps);
             }
             recording.settings = *settings;
-            if changed {
-                // The captures have to follow. Each took its rate when it
-                // opened and has no way to be told otherwise, so a compositor
-                // moved to 60 would be filling half its ticks by repeating
-                // what a 30 fps capture last gave it, and one moved to 30
-                // would leave its captures doing twice the work for frames
-                // nothing composites.
-                reopen_sources(backend, project, open, scene);
-            }
             false
         }
         EngineCommand::StartRecording => {
@@ -694,38 +694,6 @@ enum SourceState {
     /// A retry loop here would reopen the portal dialog on every snapshot,
     /// which is a stream of modal windows rather than an error message.
     Failed,
-}
-
-/// Stops every running Source and lets [`reconcile`] open it again.
-///
-/// For a capture's own rate, which it takes at `open` and cannot be told
-/// afterwards — no capture source in `media-pp` carries a control handle, and
-/// giving all three one is a larger change than this is worth until the gap
-/// below proves visible.
-///
-/// The gap is one reconcile: each Source is stopped and immediately reopened,
-/// so the compositor keeps showing the last picture it was given until the
-/// first new frame arrives. That is the same path a Scene change already
-/// takes, at a moment the user asked for something.
-///
-/// A Source that failed to open is left alone. Retrying it here would mean a
-/// portal dialog every time a setting is applied, which is what
-/// [`SourceState::Failed`] exists to prevent.
-fn reopen_sources(
-    backend: &Backend,
-    project: Option<&ProjectDispatcher>,
-    open: &mut HashMap<SceneItemId, SourceState>,
-    scene: &SourcesSnapshot,
-) {
-    open.retain(|_, state| match state {
-        SourceState::Open(source) => {
-            source.source.stop();
-            backend.remove_source(&source.name);
-            false
-        }
-        SourceState::Failed => true,
-    });
-    reconcile(backend, project, open, scene);
 }
 
 /// Brings the running Sources in line with what the project now holds.

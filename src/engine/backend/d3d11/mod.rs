@@ -474,6 +474,12 @@ impl Backend {
     /// configured for the old rate and the timestamps it is being handed
     /// would change meaning underneath it.
     pub(in crate::engine) fn set_frame_rate(&self, fps: u32) -> bool {
+        // The captures too, not just the compositor. Each paces itself, so
+        // one left at 60 behind a compositor at 30 duplicates the desktop
+        // twice as often as anything composites it, and one left at 30
+        // behind a compositor at 60 leaves half its ticks re-emitting the
+        // picture it already had.
+        self.captures.set_frame_rate(fps);
         self.compositor
             .set_frame_rate(ffmpeg::Rational::new(fps as i32, 1))
     }

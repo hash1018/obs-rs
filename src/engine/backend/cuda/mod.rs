@@ -5,8 +5,9 @@ mod nv12;
 mod shared;
 
 use crate::engine::TARGET_FPS;
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
@@ -23,6 +24,7 @@ use media_pp::{
     ffmpeg,
     pipeline::Pipeline,
     queue::OverflowPolicy,
+    rate::FrameRateHandle,
 };
 
 use crate::domain::{SourceKind, SourceSettings};
@@ -89,6 +91,12 @@ pub(in crate::engine) struct Backend {
     device: CudaDevice,
     size: [u32; 2],
     compositor: CudaVideoCompositorHandle,
+    /// Every open capture's rate control, keyed by the name it was
+    /// registered with. Held here rather than beside the `OpenSource` the
+    /// engine keeps, so that [`Backend::set_frame_rate`] is the one place a
+    /// rate change is applied on either platform — the D3D11 backend reaches
+    /// its own through the registry that shares captures between items.
+    capture_rates: Mutex<HashMap<String, FrameRateHandle>>,
     preview: Arc<Pipeline>,
     /// Where a recording branch is attached — see
     /// [`Backend::attach_recording`].
@@ -226,6 +234,7 @@ impl Backend {
         Ok(Self {
             device,
             size,
+            capture_rates: Mutex::new(HashMap::new()),
             compositor: handle,
             preview,
             tee,
@@ -472,20 +481,6 @@ impl Backend {
         Ok(())
     }
 
-    /// Changes the rate the compositor emits at, which is also the rate a
-    /// recording is written at.
-    ///
-    /// Runtime rather than a restart: the compositor's handle takes it, so
-    /// the captures feeding it and the Preview reading it are undisturbed.
-    /// Refused by the engine while a recording is running — see
-    /// `EngineCommand::VideoSettings` — because the file's encoder was
-    /// configured for the old rate and the timestamps it is being handed
-    /// would change meaning underneath it.
-    pub(in crate::engine) fn set_frame_rate(&self, fps: u32) -> bool {
-        self.compositor
-            .set_frame_rate(ffmpeg::Rational::new(fps as i32, 1))
-    }
-
     /// What the compositor is actually emitting at, which is what a recording
     /// has to be configured for.
     ///
@@ -504,6 +499,29 @@ impl Backend {
 
     pub(in crate::engine) fn remove_source(&self, name: &str) {
         self.compositor.remove_source(name);
+        self.capture_rates
+            .lock()
+            .expect("capture rates poisoned")
+            .remove(name);
+    }
+
+    /// Tells the compositor and every open capture to emit at `fps`.
+    ///
+    /// Handle calls rather than reopening anything: a capture left at the old
+    /// rate behind a compositor at the new one either duplicates the desktop
+    /// for frames nothing composites, or leaves the compositor re-emitting a
+    /// picture it already had for half its ticks.
+    pub(in crate::engine) fn set_frame_rate(&self, fps: u32) -> bool {
+        let rate = ffmpeg::Rational::new(fps as i32, 1);
+        for capture in self
+            .capture_rates
+            .lock()
+            .expect("capture rates poisoned")
+            .values()
+        {
+            capture.set(rate);
+        }
+        self.compositor.set_frame_rate(rate)
     }
 
     pub(in crate::engine) fn open_source(
@@ -514,7 +532,15 @@ impl Backend {
     ) -> Result<OpenSource, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => {
-                open_display_capture(&self.device, &self.compositor, item, layer, fps)
+                let (source, frame_rate) =
+                    open_display_capture(&self.device, &self.compositor, item, layer, fps)?;
+                // Filed under the compositor registration this capture feeds,
+                // which is the same key `remove_source` clears it by.
+                self.capture_rates
+                    .lock()
+                    .expect("capture rates poisoned")
+                    .insert(source.name.clone(), frame_rate);
+                Ok(source)
             }
             SourceKind::Color => open_color_source(&self.device, &self.compositor, item, layer),
             _ => Err(unsupported_kind(item)),
@@ -747,7 +773,7 @@ fn open_display_capture(
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
-) -> Result<OpenSource, BackendError> {
+) -> Result<(OpenSource, FrameRateHandle), BackendError> {
     use media_pp::elements::{
         CaptureSourceKind, CudaConverter, CudaVideoCompositorInput, PipeWireScreenCaptureOptions,
         PipeWireScreenCaptureSource,
@@ -806,6 +832,11 @@ fn open_display_capture(
         }
     );
 
+    // Before the move into the `Pipeline` below, which is the only chance to
+    // take it. `open_display_capture` is a free function, so it is handed
+    // back and the caller files it — see [`Backend::set_frame_rate`].
+    let frame_rate = source.frame_rate();
+
     // Capture gives BGRA and the compositor works in NV12; nothing between
     // them converts, so this element is not optional.
     let converter = CudaConverter::new(
@@ -823,11 +854,14 @@ fn open_display_capture(
     })?;
     pipeline.run()?;
 
-    Ok(OpenSource {
-        source: RunningSource(pipeline),
-        layer,
-        name,
-        refreshed_token,
-        showing: true,
-    })
+    Ok((
+        OpenSource {
+            source: RunningSource(pipeline),
+            layer,
+            name,
+            refreshed_token,
+            showing: true,
+        },
+        frame_rate,
+    ))
 }
