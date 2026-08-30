@@ -1,9 +1,11 @@
+use std::collections::HashSet;
+
 use eframe::egui;
 
 use crate::capture::{MonitorTarget, SourcePicker, WindowTarget};
 use crate::domain::{
-    DisplayCaptureSettings, DisplayCaptureTarget, SceneId, SourceKind, WindowCaptureSettings,
-    WindowCaptureTarget,
+    DisplayCaptureSettings, DisplayCaptureTarget, SceneId, SceneItemId, SourceKind,
+    WindowCaptureSettings, WindowCaptureTarget,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
@@ -47,11 +49,15 @@ enum AddSourceKind {
     Drawing,
 }
 
+/// The gap either side of the disconnected badge.
+const BADGE_PADDING: f32 = 6.0;
+
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
+    disconnected: Option<&HashSet<SceneItemId>>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -85,7 +91,9 @@ pub(in crate::ui) fn show(
     } else {
         toolbar::scroll_content(ui, "sources_list", |ui| {
             for item in &snapshot.items {
-                show_source_row(ui, editor, item, i18n, actions);
+                let disconnected =
+                    disconnected.is_some_and(|items| items.contains(&item.id));
+                show_source_row(ui, editor, item, disconnected, i18n, actions);
             }
         });
     }
@@ -99,6 +107,7 @@ fn show_source_row(
     ui: &mut egui::Ui,
     editor: &mut SceneEditorState,
     item: &SceneItemSnapshot,
+    disconnected: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -127,10 +136,17 @@ fn show_source_row(
     paint_visibility(ui.painter(), eye.rect.center(), item.visible, color);
     paint_lock(ui.painter(), lock.rect.center(), item.locked, color);
     let left = rect.left() + ICON_WIDTH * 2.0 + 4.0;
+    // Painted before the name, because it is what the name has to fit
+    // alongside: a source that is drawing nothing has to say so even where
+    // its name is long enough to fill the row on its own.
+    let badge = disconnected.then(|| show_disconnected_badge(ui, rect, i18n));
+    let name_right = badge.as_ref().map_or(rect.right(), |badge: &egui::Response| {
+        badge.rect.left() - BADGE_PADDING
+    });
     let elided = elide::paint_one_row(
         ui,
         egui::pos2(left, rect.center().y),
-        rect.right() - left,
+        (name_right - left).max(0.0),
         &item.name,
         color,
     );
@@ -150,7 +166,9 @@ fn show_source_row(
         response.on_hover_text(kind)
     };
 
-    if eye.clicked() {
+    if badge.is_some_and(|badge| badge.clicked()) {
+        actions.push(UiAction::ReopenSource(item.id));
+    } else if eye.clicked() {
         actions.push(source_action(SourceCommand::SetVisible(
             item.id,
             !item.visible,
@@ -163,6 +181,44 @@ fn show_source_row(
     } else if response.clicked() {
         editor.select(item.id);
     }
+}
+
+/// Says at the end of a row that this Source is producing nothing, and offers
+/// to open it again.
+///
+/// A word rather than an icon: what it says is not guessable from a glyph,
+/// and the row has the width for it once the name gives way. Clickable
+/// because on Linux reopening is the user's to ask for — the portal picker is
+/// a dialog, so nothing may raise it on its own.
+fn show_disconnected_badge(
+    ui: &egui::Ui,
+    row: egui::Rect,
+    i18n: &LocalizationManager,
+) -> egui::Response {
+    let text = i18n.text(TextKey::SourceDisconnected);
+    let galley = elide::one_row(ui, &text, row.width(), &egui::TextStyle::Small);
+    let size = galley.size();
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(
+            row.right() - BADGE_PADDING - size.x,
+            row.center().y - size.y / 2.0,
+        ),
+        size,
+    );
+    let response = ui
+        .interact(
+            rect.expand2(egui::vec2(BADGE_PADDING / 2.0, 2.0)),
+            ui.id().with(("disconnected", row.top().to_bits())),
+            egui::Sense::click(),
+        )
+        .on_hover_text(i18n.text(TextKey::SourceReopen));
+    let color = if response.hovered() {
+        ui.visuals().warn_fg_color
+    } else {
+        ui.visuals().warn_fg_color.gamma_multiply(0.8)
+    };
+    ui.painter().galley(rect.min, galley, color);
+    response
 }
 
 /// The clickable area of one row icon, in the slot at `column`.

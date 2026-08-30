@@ -22,7 +22,7 @@ mod source;
 
 pub use audio::AudioManager;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -74,6 +74,9 @@ const PREVIEW_FPS: u32 = 30;
 enum EngineCommand {
     /// The selected Scene's contents, as the project now holds them.
     Scene(Box<SourcesSnapshot>),
+    /// Open this item's Source again, at the user's request — see
+    /// `EngineManager::reopen_source`.
+    ReopenSource(SceneItemId),
     /// One item's Transform mid-gesture, which the project does not hold yet.
     Dragging(SceneItemId, Transform),
     /// A Drawing's strokes mid-gesture, for the same reason `Dragging` exists:
@@ -168,6 +171,10 @@ struct Published {
     /// while paused it is what the elapsed time is measured *to*, so the
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
+    /// The SceneItems whose Source is not running: a window that has closed,
+    /// or one that never opened. The Sources list says so beside them, which
+    /// is the only thing that explains an item drawing nothing.
+    disconnected: Arc<ArcSwapOption<HashSet<SceneItemId>>>,
     /// Which encoders the backend can open — see `EngineManager::encoders`.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     /// Which audio codecs this FFmpeg build can open — see
@@ -193,6 +200,8 @@ pub struct EngineManager {
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
     recording_error: Arc<ArcSwapOption<String>>,
+    /// The SceneItems drawing nothing — see `Published::disconnected`.
+    disconnected: Arc<ArcSwapOption<HashSet<SceneItemId>>>,
     /// Which H.264 encoders the backend can open. Published once, after the
     /// backend has been built — probing needs its device, and the answer
     /// cannot change while the application runs.
@@ -227,6 +236,7 @@ impl EngineManager {
         let recording_paused_at = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
+        let disconnected = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
         let audio_codecs = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
@@ -237,6 +247,7 @@ impl EngineManager {
             let recording_since = Arc::clone(&recording_since);
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
+            let disconnected = Arc::clone(&disconnected);
             let encoders = Arc::clone(&encoders);
             let audio_codecs = Arc::clone(&audio_codecs);
             let stop = Arc::clone(&stop);
@@ -247,6 +258,7 @@ impl EngineManager {
                     recording_since,
                     recording_paused_at,
                     recording_error,
+                    disconnected,
                     encoders,
                     audio_codecs,
                 };
@@ -276,6 +288,7 @@ impl EngineManager {
             recording_since,
             recording_paused_at,
             recording_error,
+            disconnected,
             encoders,
             audio_codecs,
             commands,
@@ -430,6 +443,21 @@ impl EngineManager {
     pub fn recording_error(&self) -> Option<Arc<String>> {
         self.recording_error.load_full()
     }
+
+    /// The SceneItems that are not producing a picture right now.
+    pub fn disconnected(&self) -> Option<Arc<HashSet<SceneItemId>>> {
+        self.disconnected.load_full()
+    }
+
+    /// Asks for one Source to be opened again, whatever that costs.
+    ///
+    /// This is the only way a `Disconnected` Source comes back, and it exists
+    /// because on Linux opening a Window Capture puts the portal's picker on
+    /// screen. Nothing may do that on its own — see `SourceState::Disconnected`
+    /// — so it waits here for someone to ask.
+    pub fn reopen_source(&self, item: SceneItemId) {
+        let _ = self.commands.send(EngineCommand::ReopenSource(item));
+    }
 }
 
 impl Drop for EngineManager {
@@ -541,14 +569,20 @@ fn run(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                if looked_for_missing.elapsed() >= MISSING_RETRY {
-                    looked_for_missing = Instant::now();
-                    notice_closed_windows(&backend, &mut open, &scene);
-                    retry_missing(&backend, project.as_ref(), &mut open, &scene);
+                if looked_for_missing.elapsed() < MISSING_RETRY {
+                    continue;
                 }
+                looked_for_missing = Instant::now();
+                notice_closed_windows(&backend, &mut open, &scene);
+                retry_missing(&backend, project.as_ref(), &mut open, &scene);
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
+        // Only where something may have opened or closed, which is what the
+        // `continue`s above skip past: this is a comparison against what the
+        // UI already holds, not something to do sixty times a second for an
+        // answer that has not moved.
+        publish_disconnected(&published, &open);
     }
 
     for (_, state) in open.drain() {
@@ -575,6 +609,23 @@ fn apply_command(
         EngineCommand::Scene(snapshot) => {
             *scene = *snapshot;
             reconcile(backend, project, open, scene);
+            true
+        }
+        EngineCommand::ReopenSource(item_id) => {
+            let Some(index) = scene.items.iter().position(|item| item.id == item_id) else {
+                return false;
+            };
+            // Stopped first where something is still open: asking again for a
+            // Source that is running would leave the old one behind, holding
+            // its layer and its capture.
+            if let Some(SourceState::Open(source)) = open.get(&item_id) {
+                source.source.stop();
+                backend.remove_source(&source.name);
+            }
+            let item = &scene.items[index];
+            let layer = layer_for(item, item.transform, (scene.items.len() - index) as i32);
+            let state = open_item(backend, project, item, layer);
+            open.insert(item_id, state);
             true
         }
         EngineCommand::Drawing(item_id, strokes) => {
@@ -824,6 +875,19 @@ enum SourceState {
     /// — and nothing was opened, so there is nothing holding a dialog or a
     /// device while it waits.
     Missing,
+    /// Not running, and nothing here may open it again.
+    ///
+    /// The window a Window Capture was showing has closed, or opening it did
+    /// not work — and on this platform opening one means the portal's picker,
+    /// a modal dialog over whatever the user is doing. So this is where such a
+    /// Source stops: the Sources list says it is disconnected, and it comes
+    /// back only when someone asks for it, through
+    /// `EngineManager::reopen_source`.
+    ///
+    /// The distinction from `Missing` is who pays for the look:
+    /// `WindowCaptureTarget::can_be_reopened_silently` is what decides which
+    /// of the two a closed window lands in.
+    Disconnected,
 }
 
 /// How long a `Missing` Source waits before it is looked for again.
@@ -857,8 +921,52 @@ fn open_item(
         }
         Err(error) => {
             eprintln!("could not open \"{}\": {error}", item.name);
-            SourceState::Failed
+            // A cancelled picker arrives here as an error, and it is an answer
+            // rather than a fault: the user was asked and said not now. So a
+            // Source that has to be asked for is left disconnected — offered
+            // again by the Sources list — instead of failed, which nothing
+            // ever reopens.
+            if needs_asking(item) {
+                SourceState::Disconnected
+            } else {
+                SourceState::Failed
+            }
         }
+    }
+}
+
+/// Tells the UI which Sources are not producing a picture.
+///
+/// Stored only on a change: the Sources list reads this on every pass, and
+/// replacing the set each time would hand it a new allocation a second for a
+/// set that is almost always the same one — usually empty.
+fn publish_disconnected(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
+    let disconnected: HashSet<SceneItemId> = open
+        .iter()
+        .filter(|(_, state)| !matches!(state, SourceState::Open(_)))
+        .map(|(id, _)| *id)
+        .collect();
+    let unchanged = match published.disconnected.load_full() {
+        Some(current) => *current == disconnected,
+        // Nothing published yet, which an empty set says as well as `None`
+        // does — and the first pass has nothing to correct.
+        None => disconnected.is_empty(),
+    };
+    if unchanged {
+        return;
+    }
+    published.disconnected.store(Some(Arc::new(disconnected)));
+}
+
+/// Whether opening this item's Source would interrupt whoever is at the
+/// screen, so that it must be asked for rather than attempted.
+///
+/// Only a Window Capture can answer yes, and only where its target is one the
+/// portal owns — see `WindowCaptureTarget::can_be_reopened_silently`.
+fn needs_asking(item: &SceneItemSnapshot) -> bool {
+    match &item.settings {
+        SourceSettings::WindowCapture(settings) => !settings.target.can_be_reopened_silently(),
+        _ => false,
     }
 }
 
@@ -887,7 +995,14 @@ fn notice_closed_windows(
         }
         source.source.stop();
         backend.remove_source(&source.name);
-        open.insert(item.id, SourceState::Missing);
+        // Whether the engine may go looking by itself, or has to wait to be
+        // asked.
+        let state = if needs_asking(item) {
+            SourceState::Disconnected
+        } else {
+            SourceState::Missing
+        };
+        open.insert(item.id, state);
     }
 }
 
@@ -937,7 +1052,7 @@ fn reconcile(
                 let _ = source.layer.set_layer(layer);
                 refresh_pushed(source, item);
             }
-            Some(SourceState::Failed) => {}
+            Some(SourceState::Failed | SourceState::Disconnected) => {}
             Some(SourceState::Missing) | None => {
                 let state = open_item(backend, project, item, layer);
                 open.insert(item.id, state);
@@ -1033,6 +1148,7 @@ impl FrameRate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::WindowCaptureTarget;
 
     #[derive(Debug)]
     struct Layer {
@@ -1098,6 +1214,114 @@ mod tests {
         assert_eq!(
             describe(&error),
             "opening the file failed: access is denied"
+        );
+    }
+
+    fn window_item(id: i64, target: WindowCaptureTarget) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            id: SceneItemId(id),
+            name: "Window Capture".into(),
+            kind: SourceKind::WindowCapture,
+            settings: SourceSettings::WindowCapture(crate::domain::WindowCaptureSettings {
+                target,
+                size_hint: None,
+            }),
+            source_size: [1280.0, 720.0],
+            transform: Transform::default(),
+            crop: crate::domain::Crop::default(),
+            visible: true,
+            locked: false,
+        }
+    }
+
+    fn published() -> Published {
+        Published {
+            frame: Arc::new(ArcSwapOption::empty()),
+            active_fps: Arc::new(AtomicU32::new(0)),
+            recording_since: Arc::new(ArcSwapOption::empty()),
+            recording_paused_at: Arc::new(ArcSwapOption::empty()),
+            disconnected: Arc::new(ArcSwapOption::empty()),
+            encoders: Arc::new(ArcSwapOption::empty()),
+            audio_codecs: Arc::new(ArcSwapOption::empty()),
+            recording_error: Arc::new(ArcSwapOption::empty()),
+        }
+    }
+
+    /// The whole of option D rests on this one answer: a window the engine
+    /// can search for is searched for, and a window the portal owns is left
+    /// alone until someone asks. Getting it backwards is either a dialog
+    /// every second or a Source that never comes back.
+    #[test]
+    fn only_a_window_the_portal_owns_has_to_be_asked_for() {
+        assert!(
+            !needs_asking(&window_item(
+                1,
+                WindowCaptureTarget::Window {
+                    process: "firefox".into(),
+                    title: "obs-rs".into(),
+                }
+            )),
+            "a named window is found by looking, which costs no one anything"
+        );
+        assert!(
+            needs_asking(&window_item(
+                2,
+                WindowCaptureTarget::Portal {
+                    restore_token: Some("token".into()),
+                }
+            )),
+            "a portal window can only be reopened through its picker"
+        );
+
+        let mut colour = window_item(3, WindowCaptureTarget::Portal { restore_token: None });
+        colour.kind = SourceKind::Color;
+        colour.settings = SourceSettings::None;
+        assert!(
+            !needs_asking(&colour),
+            "nothing but a Window Capture has a picker behind it"
+        );
+    }
+
+    /// Two claims at once, because the second is what makes the first cheap:
+    /// the set says which Sources are dark, and it is replaced only when that
+    /// answer moves. The UI reads it on every pass.
+    #[test]
+    fn the_disconnected_set_names_the_dark_sources_and_holds_still() {
+        let published = published();
+        let mut open = HashMap::new();
+
+        publish_disconnected(&published, &open);
+        assert!(
+            published.disconnected.load_full().is_none(),
+            "nothing has gone wrong yet, so there is nothing to say"
+        );
+
+        open.insert(SceneItemId(1), SourceState::Disconnected);
+        open.insert(SceneItemId(2), SourceState::Missing);
+        publish_disconnected(&published, &open);
+        let first = published
+            .disconnected
+            .load_full()
+            .expect("a dark Source must be published");
+        assert_eq!(*first, HashSet::from([SceneItemId(1), SceneItemId(2)]));
+
+        publish_disconnected(&published, &open);
+        let again = published.disconnected.load_full().expect("still published");
+        assert!(
+            Arc::ptr_eq(&first, &again),
+            "an unchanged set must not be replaced"
+        );
+
+        open.remove(&SceneItemId(1));
+        open.remove(&SceneItemId(2));
+        publish_disconnected(&published, &open);
+        assert_eq!(
+            *published
+                .disconnected
+                .load_full()
+                .expect("the recovery has to be published too"),
+            HashSet::new(),
+            "a Source that came back must stop being listed"
         );
     }
 }

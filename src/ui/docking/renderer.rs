@@ -269,6 +269,7 @@ fn show_panel(
                 content.sources_state,
                 content.editor,
                 &content.snapshots.sources,
+                content.snapshots.status.disconnected_sources.as_deref(),
                 content.i18n,
                 content.actions,
             );

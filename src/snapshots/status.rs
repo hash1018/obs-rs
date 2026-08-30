@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +17,12 @@ pub struct StatusSnapshot {
     /// running clock — so this is the only thing that says it was tried.
     /// `Arc` because it is read on every pass and rarely changes.
     pub recording_error: Option<Arc<String>>,
+    /// The SceneItems whose Source is not running, from the engine.
+    ///
+    /// The Sources list says so beside them, which is the only thing that
+    /// explains a Source that is there and drawing nothing. `Arc` because it
+    /// is read on every pass and changes about as often as a window closes.
+    pub disconnected_sources: Option<Arc<HashSet<crate::domain::SceneItemId>>>,
     pub cpu_percent: Option<f32>,
     pub gpu: Option<GpuUsage>,
     /// Actual compositor output rate, not the egui repaint rate.

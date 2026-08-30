@@ -140,6 +140,10 @@ pub enum TextKey {
     DrawingWidthThick,
     DrawingUndo,
     DrawingClear,
+    /// Shown beside a Source that is not producing a picture.
+    SourceDisconnected,
+    /// The offer to open a disconnected Source again.
+    SourceReopen,
     SourceKindDisplayCapture,
     SourceKindWindowCapture,
     SourceKindVideoCapture,
@@ -296,6 +300,8 @@ impl TextKey {
             Self::DrawingWidthThick => "drawing-width-thick",
             Self::DrawingUndo => "drawing-undo",
             Self::DrawingClear => "drawing-clear",
+            Self::SourceDisconnected => "source-disconnected",
+            Self::SourceReopen => "source-reopen",
             Self::SourceKindDisplayCapture => "source-kind-display-capture",
             Self::SourceKindWindowCapture => "source-kind-window-capture",
             Self::SourceKindVideoCapture => "source-kind-video-capture",

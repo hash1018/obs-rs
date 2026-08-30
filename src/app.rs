@@ -207,6 +207,7 @@ impl ObsApp {
         self.snapshots.status.recording_elapsed = engine.recording();
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
+        self.snapshots.status.disconnected_sources = engine.disconnected();
         if self.snapshots.status.encoders.is_empty()
             && let Some(encoders) = engine.encoders()
         {
@@ -490,6 +491,11 @@ impl ObsApp {
             }
             UiAction::SetFullscreen(fullscreen) => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+            }
+            UiAction::ReopenSource(item_id) => {
+                if let Some(engine) = &self.engine {
+                    engine.reopen_source(item_id);
+                }
             }
             UiAction::StartRecording => {
                 if let Some(engine) = &self.engine {

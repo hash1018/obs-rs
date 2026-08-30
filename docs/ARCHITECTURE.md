@@ -135,12 +135,25 @@ The Preview branch is not allowed to set the compositor's pace. It sits behind a
 
 ### A window that is not there
 
-Opening a Source answers with three outcomes rather than two. A window that is not on screen is neither open nor failed: `open_source` returns `Ok(None)` and the engine holds the SceneItem as `Missing` — nothing was opened, so nothing holds a device or a dialog while it waits. `Failed` stays terminal, because a source that could not open will not open by being asked again, and on the portal path asking again means another modal window.
+Opening a Source answers with four outcomes rather than two. A window that is not on screen is neither open nor failed: `open_source` returns `Ok(None)` and the engine holds the SceneItem as `Missing` — nothing was opened, so nothing holds a device or a dialog while it waits. `Failed` stays terminal, because a source that could not open will not open by being asked again. `Disconnected` is the fourth, and it exists because on one platform looking again is itself an interruption.
 
 Two things then have to be noticed rather than waited for, and both happen on the engine loop's idle tick, once a second:
 
-- a window that comes back, which reopens the Source where it stood;
-- a window that closes while its capture is running. That ends the capture — the compositor sees the input finish and drops the layer — but nothing tells the engine, so it asks the pipeline through `Pipeline::is_running`. The endings are not alike on the bus: a closed window ends `WgcCaptureSource` as an *error*, where a file source ends with `Eos`, and whoever might reopen it has no reason to tell those apart.
+- a window that comes back, which reopens the Source where it stood — where the engine may go looking at all, see below;
+- a window that closes while its capture is running. That ends the capture — the compositor sees the input finish and drops the layer — but nothing tells the engine, so it asks the pipeline through `Pipeline::ended`. The endings are not alike on the bus: a closed window ends `WgcCaptureSource` as an *error*, where a file source ends with `Eos`, and whoever might reopen it has no reason to tell those apart.
+
+#### Who pays for looking again
+
+Which of `Missing` and `Disconnected` a closed window lands in follows from the stored target, and so from the platform:
+
+| Stored target | Looking again costs | State | What brings it back |
+|---|---|---|---|
+| `{program, title}` | enumerating windows | `Missing` | the idle tick, once the window is back |
+| portal restore token | a modal picker over whatever the user is doing | `Disconnected` | the user, through the Sources list |
+
+A portal selection cannot be checked. The portal owns the picker, a closed window's restore token is dead, and there is no way to ask whether one is still good without starting the flow that puts a dialog on screen — so the engine never starts it. The Sources dock says **끊김** beside such an item, and clicking that is the ask: `EngineManager::reopen_source` is the only path that reopens one. A picker the user then cancels comes back as an error and is treated the same way, as an answer rather than a fault, leaving the Source disconnected and offered again rather than `Failed`.
+
+The set of Sources producing nothing is published to the UI the way a recording error is, and replaced only when it changes: the Sources list reads it every pass, and it moves about as often as a window closes.
 
 Nothing else is polled this way. A display does not close, and a capture shared between SceneItems belongs to the registry rather than to one item.
 

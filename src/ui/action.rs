@@ -40,6 +40,10 @@ pub enum UiAction {
     /// End the recording properly and then quit — what the closing question
     /// asks about.
     StopRecordingAndExit,
+    /// Open one Source again after it was disconnected — on Linux this puts
+    /// the portal's window picker on screen, which is why nothing does it
+    /// without being asked.
+    ReopenSource(SceneItemId),
     /// Show the Settings dialog, seeded from what is currently set.
     OpenSettings,
     /// Commit the dialog's draft: persist it, and hand the engine the part it

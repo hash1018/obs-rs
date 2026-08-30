@@ -139,6 +139,25 @@ pub enum WindowCaptureTarget {
     Portal { restore_token: Option<String> },
 }
 
+impl WindowCaptureTarget {
+    /// Whether the window behind this can be looked for again without
+    /// interrupting anyone.
+    ///
+    /// A stored `{program, title}` is searched against the live window list,
+    /// which costs nothing and asks no one — so a window that closed and came
+    /// back is simply found again. A portal selection is not searchable at
+    /// all: the portal owns the picker, a closed window's restore token is
+    /// dead, and there is no way to ask whether one is still good without
+    /// starting the flow that puts a dialog on screen.
+    ///
+    /// So the engine only goes looking for the first kind. The second is left
+    /// where it is until someone asks for it, because looking *is* the
+    /// interruption.
+    pub fn can_be_reopened_silently(&self) -> bool {
+        matches!(self, Self::Window { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowCaptureSettings {
     pub target: WindowCaptureTarget,
