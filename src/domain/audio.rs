@@ -56,12 +56,17 @@ pub struct AudioSource {
 /// from disagreeing about where that is.
 pub const MIN_GAIN_DB: f32 = -60.0;
 
-/// The loudest a fader goes: unity, where the source is passed through
-/// untouched.
+/// The loudest a fader goes, which is above unity: a quiet source is a real
+/// thing and turning it up is what a fader is for.
 ///
-/// Not a boost range, so that the fader and the level meter beside it share
-/// one scale — a fader whose top was +20 would line up with the meter's 0 and
-/// mean something else there. Amplifying a quiet microphone past unity is a
-/// real want, and it arrives with the control that can show what it is doing
-/// rather than by stretching this one.
-pub const MAX_GAIN_DB: f32 = 0.0;
+/// It used to stop at unity so that the fader and the level meter beside it
+/// could share one set of numbers. They no longer do — a fader is what you
+/// ask for and a meter is what you got, and every physical mixer draws them
+/// as two scales for exactly that reason. What replaces the shared axis is a
+/// unity mark on the fader itself, so 0 dB is somewhere you can find rather
+/// than somewhere you have to read the number to know you are at.
+///
+/// Twelve because the meter is what says whether a boost was too much, and it
+/// only has 60 dB of scale to say it in. A range large enough to bury the
+/// meter would be a control whose effect you cannot see.
+pub const MAX_GAIN_DB: f32 = 12.0;

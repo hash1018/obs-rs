@@ -5,15 +5,17 @@
 //!
 //! # Why the channels stand up
 //!
-//! A fader is read against a scale, and a level is read against a scale. Both
-//! run from silence to unity here, so standing them side by side puts them on
-//! one axis with one set of numbers between them — which is how every mixer is
-//! built, and why a horizontal row ends up with a meter that has no scale
-//! beside it at all. See [`crate::domain::MAX_GAIN_DB`] for why the fader
-//! stops where the meter does.
+//! A fader is read against a scale, and a level is read against a scale, and
+//! standing them side by side is how every mixer is built — a horizontal row
+//! ends up with a meter that has no scale beside it at all. It also costs a
+//! fixed width per source rather than a fixed height, so a dock with room
+//! shows more sources instead of more padding.
 //!
-//! It also costs a fixed width per source rather than a fixed height, so a
-//! dock with room shows more sources instead of more padding.
+//! The two scales are not the same one. The fader runs to
+//! [`crate::domain::MAX_GAIN_DB`], which is above unity, while the meter
+//! stops at full scale and cannot go past it — a fader is what was asked for
+//! and a meter is what came back. The numbers down the side belong to the
+//! meter; what the fader has instead is a unity mark of its own.
 
 use eframe::egui;
 
@@ -265,6 +267,7 @@ fn show_fader(
             .vertical()
             .show_value(false),
     );
+    paint_unity_mark(ui, fader.rect);
     // Two destinations, because they answer different questions. What is
     // heard follows the pointer, so every frame of the drag goes to the audio
     // graph; the project hears one edit, when the gesture ends. The same
@@ -437,15 +440,67 @@ fn paint_speaker(ui: &egui::Ui, response: &egui::Response, muted: bool) {
 }
 
 /// Where a decibel value sits on the channel: `0.0` at the bottom, `1.0` at
-/// the top. Linear in decibels, which is what the scale's evenly spaced marks
+/// Where unity sits along a vertical fader's travel, as a fraction from the
+/// bottom.
+///
+/// Its own function because the fader's range is not the meter's: this one
+/// spans [`MIN_GAIN_DB`] to [`MAX_GAIN_DB`], which reaches past 0 dB, while
+/// [`fraction_of_scale`] stops there.
+fn unity_fraction() -> f32 {
+    (0.0 - MIN_GAIN_DB) / (MAX_GAIN_DB - MIN_GAIN_DB)
+}
+
+/// Marks 0 dB on a fader that now runs past it.
+///
+/// Drawn rather than left to the readout, because a number tells you where
+/// you are and a mark tells you where to aim — and unity is the position
+/// anyone setting a level is looking for first.
+///
+/// The travel is the rect inset by the handle, not the rect: egui shrinks a
+/// slider's position range by the handle's own radius at each end so the
+/// handle stays inside its widget, and a mark placed on the raw rect would
+/// sit above the handle it is meant to line up with. The shape is read from
+/// the style rather than assumed, because it is what decides that radius.
+fn paint_unity_mark(ui: &egui::Ui, rect: egui::Rect) {
+    let radius = rect.width() / 2.5;
+    let radius = match ui.visuals().handle_shape {
+        egui::style::HandleShape::Circle => radius,
+        egui::style::HandleShape::Rect { aspect_ratio } => radius * aspect_ratio,
+    };
+    let travel = rect.y_range().shrink(radius);
+    let y = travel.max - travel.span() * unity_fraction();
+    // Short, and only on the left: a line across the fader would be read as
+    // part of the handle when the handle is near it.
+    ui.painter().hline(
+        rect.left()..=rect.left() + rect.width() * 0.4,
+        y,
+        ui.visuals().widgets.noninteractive.fg_stroke,
+    );
+}
+
+/// Where a decibel value sits on the *meter's* scale: silence at the bottom,
+/// full scale at the top. Linear in decibels, which is what the scale's evenly
+/// spaced marks promise.
+///
+/// Not the fader's, which reaches past 0 dB — see [`unity_fraction`]. A level
+/// has nowhere above full scale to be shown, so a boosted source pins the
+/// meter rather than running off it.
 /// promise.
 fn fraction_of_scale(db: f32) -> f32 {
     ((db - MIN_GAIN_DB) / -MIN_GAIN_DB).clamp(0.0, 1.0)
 }
 
+/// The readout above a channel.
+///
+/// A boost carries its sign, because "6.0 dB" and "-6.0 dB" are one character
+/// apart and opposite instructions — and the whole point of a fader that goes
+/// above unity is being able to tell at a glance that one has.
 fn format_gain(gain_db: f32) -> String {
     if gain_db <= MIN_GAIN_DB {
         return "-inf dB".to_owned();
+    }
+    if gain_db > 0.0 {
+        return format!("+{gain_db:.1} dB");
     }
     format!("{gain_db:.1} dB")
 }
@@ -477,5 +532,37 @@ mod tests {
         // measured against, and nothing is louder than the top of it.
         assert_eq!(fraction_of_scale(MAX_GAIN_DB), 1.0);
         assert_eq!(fraction_of_scale(-100.0), 0.0);
+    }
+
+    /// Unity is a position on the fader, not its top, and the mark has to be
+    /// at the same place the handle stops at 0 dB or it points at the wrong
+    /// level.
+    #[test]
+    fn unity_sits_below_the_top_of_a_fader_that_boosts() {
+        let fraction = unity_fraction();
+
+        assert!(
+            (fraction - (-MIN_GAIN_DB / (MAX_GAIN_DB - MIN_GAIN_DB))).abs() < f32::EPSILON,
+            "the mark must divide the fader where 0 dB divides its range"
+        );
+        assert!(
+            fraction < 1.0,
+            "a fader that stops at unity needs no mark; this one must leave \
+             room above it, got {fraction}"
+        );
+        assert!(
+            fraction > 0.5,
+            "and most of the travel is still attenuation"
+        );
+    }
+
+    /// The sign is the whole readout for anyone glancing at it: without it a
+    /// boosted channel and a cut one differ by one character.
+    #[test]
+    fn a_boosted_readout_says_so() {
+        assert_eq!(format_gain(6.0), "+6.0 dB");
+        assert_eq!(format_gain(MAX_GAIN_DB), "+12.0 dB");
+        assert_eq!(format_gain(0.0), "0.0 dB");
+        assert_eq!(format_gain(-6.0), "-6.0 dB");
     }
 }

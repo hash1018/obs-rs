@@ -144,6 +144,9 @@ mod tests {
             (100.0, MAX_GAIN_DB),
             (f32::NAN, 0.0),
             (-12.5, -12.5),
+            // A boost is stored as asked rather than pulled back to unity,
+            // which is what the fader stopping there used to make it.
+            (6.0, 6.0),
         ] {
             database
                 .transaction(|transaction| AudioStore::set_gain_db(transaction, id, asked))
