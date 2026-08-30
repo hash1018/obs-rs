@@ -12,7 +12,7 @@
 //! so the upload is two `copy_buffer_to_texture` calls in the same submission
 //! as the pass, and nothing here crosses the bus.
 
-use super::shared::SharedNv12;
+use super::linux::SharedNv12;
 
 /// `CudaConverter` documents its output as BT.709 limited-range Y'CbCr from
 /// full-range RGB, so this is that conversion run backwards. Guessing the
@@ -57,7 +57,7 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
 /// egui's renderer documents `Rgba8Unorm` for a registered texture.
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-pub(super) struct Nv12Target {
+pub(in crate::engine) struct Nv12Target {
     luma: wgpu::Texture,
     chroma: wgpu::Texture,
     /// The resolved frame. A view keeps its texture alive on its own, so
@@ -70,7 +70,7 @@ pub(super) struct Nv12Target {
 }
 
 impl Nv12Target {
-    pub(super) fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub(in crate::engine) fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let luma = plane(
             device,
             "composite-luma",
@@ -179,13 +179,13 @@ impl Nv12Target {
     }
 
     /// The texture the Preview samples. Registered once with egui.
-    pub(super) fn output_view(&self) -> &wgpu::TextureView {
+    pub(in crate::engine) fn output_view(&self) -> &wgpu::TextureView {
         &self.output_view
     }
 
     /// The same texture, for a test that reads back what the pass resolved.
     #[cfg(test)]
-    pub(super) fn output_texture(&self) -> &wgpu::Texture {
+    pub(in crate::engine) fn output_texture(&self) -> &wgpu::Texture {
         &self._output
     }
 
@@ -193,7 +193,7 @@ impl Nv12Target {
     ///
     /// Returns `false` when the buffer was built for a different size, which
     /// would otherwise paint a torn picture rather than fail.
-    pub(super) fn draw(
+    pub(in crate::engine) fn draw(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

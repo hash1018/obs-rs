@@ -46,7 +46,7 @@ use std::sync::Mutex;
 
 use ash::vk;
 
-use super::super::BackendError;
+use crate::engine::backend::BackendError;
 
 /// What `copy_buffer_to_texture` requires of a row, so the CUDA copy writes
 /// rows at this pitch rather than the plane's natural width.
@@ -83,7 +83,7 @@ impl Nv12Layout {
 }
 
 /// The shared NV12 staging region, from both sides.
-pub(super) struct SharedNv12 {
+pub(in crate::engine) struct SharedNv12 {
     layout: Nv12Layout,
     /// The frame's last two luma rows and the chroma row under them, copied
     /// back per frame — see [`SharedNv12::tail_is_unwritten`] for what reads
@@ -114,7 +114,7 @@ unsafe impl Sync for SharedNv12 {}
 impl SharedNv12 {
     /// Allocates the region on wgpu's Vulkan device and imports it into the
     /// CUDA primary context the compositor's frames live on.
-    pub(super) fn new(
+    pub(in crate::engine) fn new(
         device: &wgpu::Device,
         width: u32,
         height: u32,
@@ -158,11 +158,11 @@ impl SharedNv12 {
         })
     }
 
-    pub(super) fn layout(&self) -> Nv12Layout {
+    pub(in crate::engine) fn layout(&self) -> Nv12Layout {
         self.layout
     }
 
-    pub(super) fn buffer(&self) -> &wgpu::Buffer {
+    pub(in crate::engine) fn buffer(&self) -> &wgpu::Buffer {
         &self.buffer
     }
 
@@ -284,7 +284,7 @@ impl SharedNv12 {
     /// being waited for. Reading them out of the shared allocation instead
     /// would be free, but memory a Vulkan buffer can export is never also
     /// host-visible on this driver.
-    pub(super) fn tail_is_unwritten(&self) -> bool {
+    pub(in crate::engine) fn tail_is_unwritten(&self) -> bool {
         let Nv12Layout { width, height, .. } = self.layout;
         if height < 2 || width < 2 {
             return false;
@@ -950,7 +950,7 @@ mod tests {
         // and the pass that resolves them, which is what the Preview draws.
         // Red again, now back in RGB — 1.0 for red saturates, and the two
         // other channels come back to zero within the rounding of a byte.
-        let target = super::super::nv12::Nv12Target::new(&device, width, height);
+        let target = super::nv12::Nv12Target::new(&device, width, height);
         assert!(
             target.draw(&device, &queue, &shared),
             "the resolve pass refused the frame"
@@ -1083,5 +1083,146 @@ mod tests {
         }))
         .ok()?;
         Some((instance, device, queue))
+    }
+}
+
+/// Puts each composited frame into the memory wgpu reads, at the Preview's
+/// own rate.
+///
+/// A `CudaFrameRenderer` normally presents to a window; this one presents to
+/// egui, which draws the frame itself. `media-pp` still does the useful half:
+/// it validates the frame, rejects one belonging to another CUDA context, and
+/// hands over exactly the plane pointers a copy needs.
+pub(in crate::engine) struct PreviewRenderer {
+    surface: Arc<PreviewSurface>,
+}
+
+impl PreviewRenderer {
+    pub(in crate::engine) fn new(surface: Arc<PreviewSurface>) -> Self {
+        Self { surface }
+    }
+}
+
+/// What the Preview is drawn from, and whether anyone is looking at it.
+///
+/// Shared between the renderer inside the pipeline and the `Backend` the UI
+/// reaches. A minimised window is nobody looking, and the resolve pass and
+/// the buffer-to-texture copies it drives are work for a texture no one will
+/// sample.
+///
+/// The CUDA copy into shared memory still happens: it is device-to-device and
+/// cheap, and keeping it current is what lets the window come back to the
+/// picture as it is then rather than as it was when it went down — the
+/// `ChangeGate` in front of this forwards changes, and a Scene that is not
+/// changing sends nothing at all.
+pub(in crate::engine) struct PreviewSurface {
+    wgpu_device: wgpu::Device,
+    queue: wgpu::Queue,
+    target: Nv12Target,
+    shared: SharedNv12,
+    /// Set when the shared memory has new content the Preview has not been
+    /// told about; the counting sink clears it as it reports.
+    drawn: Arc<AtomicBool>,
+    visible: AtomicBool,
+    /// Whether the shared memory holds a picture the target has not drawn,
+    /// which is what coming back into view has to answer.
+    undrawn: AtomicBool,
+}
+
+impl PreviewSurface {
+    /// Built here rather than field by field from the `Backend`, so what the
+    /// Preview keeps stays this module's business.
+    ///
+    /// Starts visible: whether the window is up is the UI's to say and it
+    /// says so on its next pass, and starting hidden would hold the first
+    /// frames back until it did.
+    pub(in crate::engine) fn new(
+        wgpu_device: wgpu::Device,
+        queue: wgpu::Queue,
+        target: Nv12Target,
+        shared: SharedNv12,
+        drawn: Arc<AtomicBool>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            wgpu_device,
+            queue,
+            target,
+            shared,
+            drawn,
+            visible: AtomicBool::new(true),
+            undrawn: AtomicBool::new(false),
+        })
+    }
+
+    /// Draws what is in shared memory, if there is anyone to see it.
+    fn present(&self) -> bool {
+        if !self.visible.load(Ordering::Relaxed) {
+            self.undrawn.store(true, Ordering::Relaxed);
+            return true;
+        }
+        if !self
+            .target
+            .draw(&self.wgpu_device, &self.queue, &self.shared)
+        {
+            return false;
+        }
+        self.drawn.store(true, Ordering::Relaxed);
+        true
+    }
+
+    /// Tells this whether anyone is looking. Coming back into view draws
+    /// whatever arrived while nobody was.
+    fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Relaxed);
+        if visible && self.undrawn.swap(false, Ordering::Relaxed) {
+            self.present();
+        }
+    }
+}
+
+impl CudaFrameRenderer for PreviewRenderer {
+    unsafe fn submit_nv12(
+        &self,
+        y: *const u8,
+        y_pitch: usize,
+        uv: *const u8,
+        uv_pitch: usize,
+        width: u32,
+        height: u32,
+    ) -> Result<(), SubmitError> {
+        // Everything that arrives is drawn. The rate this is held to, and
+        // the frames carrying a picture already on screen, are both the
+        // `ChangeGate` in front of it — deliberately, since a renderer that
+        // dropped frames of its own would make that gate suppress the
+        // repeats carrying a change it had just dropped.
+        //
+        // SAFETY: `CudaRenderer` has already established what this needs —
+        // an NV12 CUDA frame on the primary context, both planes present —
+        // before calling, which is the whole reason the element is in the
+        // graph rather than an `AppSink`.
+        if !unsafe {
+            self.surface
+                .shared
+                .write(y, y_pitch, uv, uv_pitch, width, height)
+        } {
+            return Err(SubmitError::InvalidFrame);
+        }
+        // Checked after the copy rather than before: the frame is only
+        // readable at all once it is in memory the CPU can see.
+        if self.surface.shared.tail_is_unwritten() {
+            return Ok(());
+        }
+        // Whether drawing it happens now is `PreviewSurface`'s answer, not
+        // this one's.
+        if !self.surface.present() {
+            return Err(SubmitError::InvalidFrame);
+        }
+        Ok(())
+    }
+
+    /// Nothing resizes: the Preview draws the Canvas, whose size the
+    /// compositor is built for and does not change while it runs.
+    fn resize(&self, _width: u32, _height: u32) -> Result<(), SubmitError> {
+        Ok(())
     }
 }

@@ -42,14 +42,18 @@ use windows::Win32::Graphics::{
 };
 use windows::core::Interface;
 
-use super::BackendError;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use media_pp::elements::{D3d11FrameRenderer, SubmitError};
+
+use crate::engine::backend::BackendError;
 
 /// `DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE`, which windows-rs
 /// generates no constants for.
 const SHARED_RESOURCE_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
 
 /// The one texture both APIs see, and the egui id naming its wgpu side.
-pub(super) struct SharedTarget {
+pub(in crate::engine) struct SharedTarget {
     /// The D3D11 view of it — what `CopyResource` writes into.
     texture: ID3D11Texture2D,
     /// The keyed mutex the texture had to be created with, cached rather than
@@ -73,7 +77,7 @@ impl SharedTarget {
     /// Both must be on the same adapter. They are: wgpu is pinned to D3D12 on
     /// the default adapter and this backend creates its D3D11 device there
     /// too.
-    pub(super) fn new(
+    pub(in crate::engine) fn new(
         device: &ID3D11Device,
         render_state: &RenderState,
         width: u32,
@@ -137,7 +141,7 @@ impl SharedTarget {
 
     /// The egui id naming this texture. Registered once and never again: its
     /// contents change, its identity does not.
-    pub(super) fn texture_id(&self) -> egui::TextureId {
+    pub(in crate::engine) fn texture_id(&self) -> egui::TextureId {
         self.texture_id
     }
 
@@ -241,4 +245,182 @@ fn import_into_wgpu(
             )
     };
     Ok(texture)
+}
+
+/// The texture the Preview is drawn from, and whether anyone is looking at
+/// it.
+///
+/// Shared between the renderer inside the pipeline and the `Backend` the UI
+/// reaches, because the two answer different halves of one question. A
+/// minimised window is nobody looking, and copying a composited frame into a
+/// texture no one will sample is 8 MiB a frame spent on nothing.
+///
+/// What arrives while nobody is looking is kept rather than dropped, and
+/// copied the moment the window comes back. Without that the Preview would
+/// show the picture from when it was minimised until something on the
+/// captured screen happened to change — the `ChangeGate` in front of this
+/// forwards changes, and a Scene that is not changing sends nothing at all.
+pub(in crate::engine) struct PreviewSurface {
+    context: Arc<Mutex<ID3D11DeviceContext>>,
+    shared: SharedTarget,
+    /// Set when the shared texture has new content the Preview has not been
+    /// told about; the counting sink clears it as it reports.
+    drawn: Arc<AtomicBool>,
+    visible: AtomicBool,
+    /// The last frame that arrived while nobody was looking.
+    ///
+    /// Only the texture, not the frame that owned it: the compositor may
+    /// compose into it again before the window comes back, and that is not a
+    /// problem worth holding a pool frame to prevent — what a restored
+    /// Preview should show is the picture as it is then, and drawing over
+    /// this one is how it becomes that.
+    pending: Mutex<Option<PendingFrame>>,
+}
+
+struct PendingFrame {
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
+// SAFETY: the COM handles here are `windows-rs` interface wrappers, thread-safe
+// to hold; every context call goes through `context`'s own mutex, and the rest
+// is plain data behind its own locks.
+unsafe impl Send for PreviewSurface {}
+unsafe impl Sync for PreviewSurface {}
+
+impl PreviewSurface {
+    /// Built here rather than field by field from the `Backend`, so what the
+    /// Preview keeps stays this module's business.
+    ///
+    /// Starts visible: whether the window is up is the UI's to say and it
+    /// says so on its next pass, and starting hidden would hold the first
+    /// frames back until it did.
+    pub(in crate::engine) fn new(
+        context: Arc<Mutex<ID3D11DeviceContext>>,
+        shared: SharedTarget,
+        drawn: Arc<AtomicBool>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            context,
+            shared,
+            drawn,
+            visible: AtomicBool::new(true),
+            pending: Mutex::new(None),
+        })
+    }
+
+    /// Takes one composited frame, copying it only if there is anyone to see
+    /// it. Returns whether the frame was accepted; a copy that fails is the
+    /// only rejection.
+    fn submit(&self, texture: ID3D11Texture2D, width: u32, height: u32) -> bool {
+        if !self.visible.load(Ordering::Relaxed) {
+            *self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PendingFrame {
+                texture,
+                width,
+                height,
+            });
+            return true;
+        }
+        self.copy(&texture, width, height)
+    }
+
+    /// Tells this whether anyone is looking. Coming back into view copies
+    /// whatever arrived while nobody was.
+    pub(in crate::engine) fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Relaxed);
+        if !visible {
+            return;
+        }
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(frame) = pending {
+            self.copy(&frame.texture, frame.width, frame.height);
+        }
+    }
+
+    fn copy(&self, texture: &ID3D11Texture2D, width: u32, height: u32) -> bool {
+        if !self.shared.copy_from(&self.context, texture, width, height) {
+            return false;
+        }
+        self.drawn.store(true, Ordering::Relaxed);
+        true
+    }
+}
+
+/// Puts each composited frame it is given into the texture wgpu shares.
+///
+/// A `D3d11FrameRenderer` normally presents to a window; this one presents to
+/// egui, which draws the frame itself. `media-pp` still does the useful half:
+/// it validates the frame, rejects one from another device, and hands over a
+/// texture that is already exactly what has to be copied.
+///
+/// What it is given is the `ChangeGate`'s business: the newest picture, at
+/// most at the Preview's rate, and never one already drawn. Whether it is
+/// copied at all is [`PreviewSurface`]'s.
+pub(in crate::engine) struct PreviewRenderer {
+    device: ID3D11Device,
+    surface: Arc<PreviewSurface>,
+}
+
+impl PreviewRenderer {
+    pub(in crate::engine) fn new(device: ID3D11Device, surface: Arc<PreviewSurface>) -> Self {
+        Self { device, surface }
+    }
+}
+
+// SAFETY: the two COM handles are `windows-rs` interface wrappers, thread-safe
+// to hold; every context call goes through `context`'s own mutex, and the
+// device is only read from. The rest is plain data behind its own locks.
+unsafe impl Send for PreviewRenderer {}
+unsafe impl Sync for PreviewRenderer {}
+
+impl D3d11FrameRenderer for PreviewRenderer {
+    fn device(&self) -> ID3D11Device {
+        self.device.clone()
+    }
+
+    unsafe fn submit_bgra_texture(
+        &self,
+        texture: ID3D11Texture2D,
+        _array_index: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), SubmitError> {
+        // Everything that arrives is taken. The rate this is held to, and the
+        // frames carrying a picture already on screen, are both the
+        // `ChangeGate` in front of it — deliberately, since a renderer that
+        // dropped frames of its own would make that gate suppress the
+        // repeats carrying a change it had just dropped. Whether taking it
+        // means copying it is `PreviewSurface`'s answer, not this one's.
+        if !self.surface.submit(texture, width, height) {
+            return Err(SubmitError::InvalidFrame);
+        }
+        Ok(())
+    }
+
+    unsafe fn submit_nv12_texture(
+        &self,
+        _texture: ID3D11Texture2D,
+        _array_index: u32,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), SubmitError> {
+        // `D3d11VideoCompositor` emits BGRA and nothing else feeds this
+        // renderer, so an NV12 frame arriving here is a graph that was not
+        // built the way this backend builds it.
+        Err(SubmitError::InvalidFrame)
+    }
+
+    fn resize(&self, _width: u32, _height: u32) -> Result<(), SubmitError> {
+        // The target is the Scene Canvas, not the window: the Viewport scales
+        // it while drawing, so a resized window changes nothing here.
+        Ok(())
+    }
 }

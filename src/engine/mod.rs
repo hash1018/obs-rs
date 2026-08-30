@@ -14,7 +14,10 @@
 
 mod audio;
 mod backend;
+mod preview;
 mod recording;
+
+pub use preview::CompositeFrame;
 mod source;
 
 pub use audio::AudioManager;
@@ -29,7 +32,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwapOption;
-use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::elements::{VideoFit, VideoLayer, VideoRect};
 use time::OffsetDateTime;
@@ -67,16 +69,6 @@ pub(in crate::engine) const TARGET_FPS: u32 = crate::settings::DEFAULT_FPS;
 /// composing at 60 is a reason to record at 60, not a reason to repaint the
 /// whole window 60 times a second for one person watching a thumbnail.
 const PREVIEW_FPS: u32 = 30;
-
-/// One composited frame, already resident on the GPU.
-///
-/// The `TextureId` stays valid for the life of the engine: the texture is
-/// created and registered once, and each frame overwrites its contents.
-/// Registering per frame would take the egui renderer's write lock every
-/// frame and stall the very thread this exists to keep free.
-pub struct CompositeFrame {
-    pub texture_id: egui::TextureId,
-}
 
 /// What the application asks the engine to change.
 enum EngineCommand {
