@@ -60,7 +60,7 @@ While a Source is moved or resized, the layer follows the pointer directly and t
 
 ## Current source support
 
-- Color Source is composited, and can be moved, resized, reordered, hidden, and locked. Its colour is stored per source but nothing sets it yet, so every one of them is black.
+- Color Source is composited, and can be moved, resized, reordered, hidden, and locked. Its colour is stored per source and there is nothing yet that sets it, so every one of them is the blue a new one is created with.
 - Drawing is composited on both backends and is the one source that carries transparency: it reaches the compositor as BGRA rather than through a converter, so what was never drawn on lets the scene beneath it through. See `drawing_bgra` for why a stroke is rasterized in two passes.
 - Display Capture is composited on Windows and Linux. Capture lands directly in GPU surfaces — D3D11 textures or CUDA surfaces — so the desktop never passes through system memory on its way to the compositor.
 - Every SceneItem is selectable, movable, and resizable in the editor regardless of whether its Source can produce a frame yet. The editor works on the item's Canvas rectangle, not on the Source's content.

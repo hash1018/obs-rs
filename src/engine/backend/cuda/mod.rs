@@ -760,7 +760,14 @@ fn open_color_source(
         name,
         refreshed_token: None,
         showing: true,
-        drawing: None,
+        // Held, not dropped here: an `AppSource` runs only while a handle to
+        // it exists, and this one used to go out of scope in the same breath
+        // as its only frame.
+        pushed: Some(super::PushedSurface {
+            pusher,
+            size: [width, height],
+            content: super::PushedContent::Color(settings.rgba),
+        }),
     })
 }
 
@@ -816,10 +823,10 @@ fn open_drawing_source(
         name,
         refreshed_token: None,
         showing: true,
-        drawing: Some(super::DrawingSurface {
+        pushed: Some(super::PushedSurface {
             pusher,
             size: [width, height],
-            drawn: settings.strokes.clone(),
+            content: super::PushedContent::Drawing(settings.strokes.clone()),
         }),
     })
 }
@@ -919,7 +926,7 @@ fn open_display_capture(
             name,
             refreshed_token,
             showing: true,
-            drawing: None,
+            pushed: None,
         },
         frame_rate,
     ))

@@ -71,8 +71,8 @@ you try it:
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
 - **Two source kinds.** Display Capture and Drawing, plus a Color source whose
-  colour is not yet choosable. Window capture, cameras, images and media files
-  are not there.
+  colour cannot be changed from the blue it is created with. Window capture,
+  cameras, images and media files are not there.
 - **No filters, transitions or hotkeys.** Switching Scenes is a cut.
 
 ## Contributing

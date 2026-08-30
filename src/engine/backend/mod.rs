@@ -131,18 +131,32 @@ pub(super) struct VideoTrack {
     pub(super) pause: media_pp::elements::PauseGateHandle,
 }
 
-/// A Drawing's way back to the compositor.
+/// A Source whose pixels this side produces, and its way back to the
+/// compositor.
 ///
-/// Kept because a Drawing is the one Source whose pixels this side produces:
-/// everything else has a capture or a file behind it, and a Drawing has a
-/// list of strokes that only changes when someone draws.
-pub(super) struct DrawingSurface {
+/// Kept for two reasons, and the first is not optional. An `AppSource` runs
+/// only while a handle to it exists: drop the last one and it sends `Eos` and
+/// finishes, and its compositor input takes that as the end of the layer. A
+/// Color Source pushed its one frame and dropped its handle in the same
+/// breath, so it composited nothing at all — a Drawing worked only because
+/// this held its handle for the second reason.
+///
+/// That second reason is pushing again. A Drawing has a list of strokes and a
+/// Color a colour, and either can change without the Source being reopened.
+pub(super) struct PushedSurface {
     pub(super) pusher: media_pp::elements::AppSourceHandle,
     pub(super) size: [u32; 2],
-    /// What was last drawn into it. A Scene change that left the strokes
-    /// alone — a move, a rename, anything else in the Scene at all — must not
-    /// cost a full redraw and re-upload.
-    pub(super) drawn: Vec<crate::domain::Stroke>,
+    /// What was last pushed. A Scene change that left it alone — a move, a
+    /// rename, anything else in the Scene at all — must not cost a redraw and
+    /// a re-upload.
+    pub(super) content: PushedContent,
+}
+
+/// What a [`PushedSurface`] last put on the compositor.
+#[derive(PartialEq)]
+pub(super) enum PushedContent {
+    Color([u8; 4]),
+    Drawing(Vec<crate::domain::Stroke>),
 }
 
 /// A Source that is running, and the controls for its layer.
@@ -157,8 +171,8 @@ pub(super) struct OpenSource {
     /// Scene stays open but stops running, so coming back is a resume rather
     /// than another portal round trip.
     pub(super) showing: bool,
-    /// Set only for a Drawing — see [`DrawingSurface`].
-    pub(super) drawing: Option<DrawingSurface>,
+    /// Set for a Source this side pushes frames into — see [`PushedSurface`].
+    pub(super) pushed: Option<PushedSurface>,
 }
 
 /// The name a SceneItem's compositor input is registered under.
