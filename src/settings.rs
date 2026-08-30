@@ -316,15 +316,6 @@ impl RecordingSettings {
         mbps as usize * 1_000_000
     }
 
-    /// The rate to write at, never above what the compositor produces.
-    ///
-    /// Clamped rather than rejected: a settings file naming 120 against a
-    /// compositor running at 60 is asking for frames that do not exist, and
-    /// the honest answer is the most it can have.
-    pub fn fps_within(&self, compositor_fps: u32) -> u32 {
-        self.fps.clamp(1, compositor_fps.max(1))
-    }
-
     /// As above, in seconds; the encoder wants it in frames.
     pub fn keyframe_seconds_clamped(&self) -> u32 {
         self.keyframe_seconds.clamp(
@@ -390,23 +381,6 @@ mod tests {
             toml::from_str::<AppSettings>(&encoded).unwrap().locale,
             Locale::KoKr
         );
-    }
-
-    /// A recording is a branch off the compositor's frames, so it can take
-    /// fewer of them but never more than exist.
-    #[test]
-    fn the_recorded_rate_never_exceeds_what_the_compositor_produces() {
-        let asking_too_much = RecordingSettings {
-            fps: 120,
-            ..RecordingSettings::default()
-        };
-        assert_eq!(asking_too_much.fps_within(60), 60);
-
-        let asking_for_less = RecordingSettings {
-            fps: 24,
-            ..RecordingSettings::default()
-        };
-        assert_eq!(asking_for_less.fps_within(60), 24);
     }
 
     /// The encoder is written under its own name, so a settings file says

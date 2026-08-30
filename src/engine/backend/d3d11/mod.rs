@@ -17,8 +17,8 @@ use media_pp::{
         AppSink, ChangeGate, D3d11Download, D3d11FrameRenderer, D3d11Renderer, D3d11VideoCodec,
         D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput,
         D3d11VideoEncoder, D3d11VideoEncoderOptions, D3d11VideoInputFormat, D3d11VideoLayerHandle,
-        FrameRateLimiter, PauseGate, SubmitError, SwEncoder, SwEncoderOptions, SwScaler,
-        TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
+        PauseGate, SubmitError, SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle,
+        TimestampOrigin, VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -55,15 +55,10 @@ use crate::settings::{RecordingEncoder, RecordingSettings};
 /// it needs, and the branch is built once the sink for it exists.
 pub(in crate::engine) struct PreparedRecording {
     encoder: RecordEncoder,
-    /// What the file's video track is stamped in, and what the branch's own
-    /// limiter is built against.
+    /// What the file's video track is stamped in — the reciprocal of the
+    /// rate the compositor is running at, which is the only rate frames can
+    /// arrive at.
     time_base: ffmpeg::Rational,
-    /// The rate frames actually reach the encoder at, which is the
-    /// compositor's unless the settings asked for less.
-    recorded_fps: u32,
-    /// The compositor's own rate, kept to decide whether a limiter is needed
-    /// at all.
-    source_fps: u32,
 }
 
 impl PreparedRecording {
@@ -270,14 +265,14 @@ impl Backend {
         fps: u32,
         settings: &crate::settings::RecordingSettings,
     ) -> Result<PreparedRecording, BackendError> {
-        // `fps` is what the compositor produces; the file is written at what
-        // the settings ask for, which can be less but never more.
-        let recorded_fps = settings.fps_within(fps);
+        // The compositor's own rate, which the settings have already been
+        // applied to — a recording is written at what is being composited,
+        // and there is nothing in between to re-rate it. Read from the
+        // compositor rather than from the setting so that a rate it refused
+        // cannot produce a file claiming frames nothing is making.
         Ok(PreparedRecording {
-            encoder: self.open_encoder(recorded_fps, settings)?,
-            time_base: ffmpeg::Rational::new(1, recorded_fps as i32),
-            recorded_fps,
-            source_fps: fps,
+            encoder: self.open_encoder(fps, settings)?,
+            time_base: ffmpeg::Rational::new(1, fps as i32),
         })
     }
 
@@ -304,12 +299,7 @@ impl Backend {
         prepared: PreparedRecording,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<VideoTrack, BackendError> {
-        let PreparedRecording {
-            encoder,
-            recorded_fps,
-            source_fps: fps,
-            ..
-        } = prepared;
+        let PreparedRecording { encoder, .. } = prepared;
         let [width, height] = self.size;
 
         let mut branch = self
@@ -322,21 +312,9 @@ impl Backend {
                 OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
             );
         // The gate first, so a paused span is gone before anything downstream
-        // has to reason about it — including a limiter, whose own spacing
-        // would otherwise be measured across the gap.
+        // has to reason about it.
         let (gate, pause) = PauseGate::new("record-pause");
         branch = branch.pipe(gate);
-        // The limiter only when it has something to do. At the compositor's
-        // own rate it would forward every frame and re-stamp each one to the
-        // number it already had; `TimestampOrigin` after the encoder is what
-        // moves that timeline to zero instead.
-        if recorded_fps < fps {
-            branch = branch.pipe(FrameRateLimiter::new(
-                "record-rate",
-                ffmpeg::Rational::new(1, fps as i32),
-                ffmpeg::Rational::new(recorded_fps as i32, 1),
-            ));
-        }
         branch = match encoder {
             RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
             // A software encoder is not on the GPU and does not take BGRA, so
