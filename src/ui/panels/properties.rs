@@ -21,7 +21,7 @@
 use eframe::egui;
 
 use crate::domain::SceneItemId;
-use crate::domain::{DisplayCaptureTarget, SourceKind, SourceSettings};
+use crate::domain::{DisplayCaptureTarget, SourceKind, SourceSettings, WindowCaptureTarget};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
@@ -165,6 +165,32 @@ fn show_settings(
                     &format!("{:.0} × {:.0}", item.source_size[0], item.source_size[1]),
                 );
             }
+        },
+        SourceSettings::WindowCapture(settings) => match &settings.target {
+            WindowCaptureTarget::Window { process, title } => {
+                row(
+                    ui,
+                    i18n.text(TextKey::PropertiesProcess).as_ref(),
+                    process.as_str(),
+                );
+                // Blank for a window that reported none, which is common
+                // enough that an empty row is the honest rendering — the
+                // process above is then the whole of what identifies it.
+                row(
+                    ui,
+                    i18n.text(TextKey::PropertiesTitle).as_ref(),
+                    title.as_str(),
+                );
+            }
+            WindowCaptureTarget::Portal { restore_token } => row(
+                ui,
+                i18n.text(TextKey::PropertiesWindow).as_ref(),
+                i18n.text(match restore_token {
+                    Some(_) => TextKey::PropertiesPortalRemembered,
+                    None => TextKey::PropertiesPortalAsks,
+                })
+                .as_ref(),
+            ),
         },
         SourceSettings::None => {}
     }

@@ -1,5 +1,6 @@
 use crate::domain::{
     AudioSourceId, DisplayCaptureSettings, SceneId, SceneItemId, Stroke, Transform,
+    WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +36,10 @@ pub enum SourceCommand {
     AddDisplayCapture {
         scene_id: SceneId,
         settings: DisplayCaptureSettings,
+    },
+    AddWindowCapture {
+        scene_id: SceneId,
+        settings: WindowCaptureSettings,
     },
     Delete(SceneItemId),
     MoveUp(SceneItemId),

@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
     SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings,
-    Stroke, Transform,
+    Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -85,7 +85,13 @@ impl SourceStore {
                 display_capture_settings.width,
                 display_capture_settings.height,
                 drawing_source_settings.width,
-                drawing_source_settings.height
+                drawing_source_settings.height,
+                window_capture_settings.target_kind,
+                window_capture_settings.process,
+                window_capture_settings.title,
+                window_capture_settings.restore_token,
+                window_capture_settings.width,
+                window_capture_settings.height
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -94,6 +100,8 @@ impl SourceStore {
                 ON display_capture_settings.source_id = sources.id
              LEFT JOIN drawing_source_settings
                 ON drawing_source_settings.source_id = sources.id
+             LEFT JOIN window_capture_settings
+                ON window_capture_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -145,6 +153,27 @@ impl SourceStore {
                         size: [row.get::<_, i64>(29)? as f32, row.get::<_, i64>(30)? as f32],
                         strokes: Vec::new(),
                     }),
+                    SourceKind::WindowCapture => {
+                        SourceSettings::WindowCapture(WindowCaptureSettings {
+                            target: window_capture_target(
+                                &row.get::<_, String>(31)?,
+                                row.get(32)?,
+                                row.get(33)?,
+                                row.get(34)?,
+                            )
+                            .ok_or_else(|| {
+                                rusqlite::Error::InvalidColumnType(
+                                    31,
+                                    "target_kind".into(),
+                                    rusqlite::types::Type::Text,
+                                )
+                            })?,
+                            size_hint: match (row.get(35)?, row.get(36)?) {
+                                (Some(width), Some(height)) => Some([width, height]),
+                                _ => None,
+                            },
+                        })
+                    }
                     _ => SourceSettings::None,
                 };
                 let source_id = SourceId(row.get(1)?);
@@ -371,6 +400,41 @@ impl SourceStore {
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
     }
 
+    pub(crate) fn add_window_capture(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        settings: &WindowCaptureSettings,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, "Window Capture")?;
+        let source_id = create(transaction, &name, SourceKind::WindowCapture)?;
+        let (kind, process, title, restore_token) = match &settings.target {
+            WindowCaptureTarget::Window { process, title } => {
+                ("window", Some(process.as_str()), Some(title.as_str()), None)
+            }
+            WindowCaptureTarget::Portal { restore_token } => {
+                ("portal", None, None, restore_token.as_deref())
+            }
+        };
+        let [width, height] = settings
+            .size_hint
+            .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
+        transaction.execute(
+            "INSERT INTO window_capture_settings
+                (source_id, target_kind, process, title, restore_token, width, height)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                source_id.0,
+                kind,
+                process,
+                title,
+                restore_token,
+                width,
+                height
+            ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
     pub(crate) fn set_transform(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
@@ -518,6 +582,24 @@ fn display_capture_target(
     match kind {
         "monitor" => monitor_name.map(DisplayCaptureTarget::MonitorName),
         "portal" => Some(DisplayCaptureTarget::Portal { restore_token }),
+        _ => None,
+    }
+}
+
+/// The stored pair back into a target, or `None` for a row the schema's own
+/// CHECK should already have refused.
+fn window_capture_target(
+    kind: &str,
+    process: Option<String>,
+    title: Option<String>,
+    restore_token: Option<String>,
+) -> Option<WindowCaptureTarget> {
+    match kind {
+        "window" => Some(WindowCaptureTarget::Window {
+            process: process?,
+            title: title?,
+        }),
+        "portal" => Some(WindowCaptureTarget::Portal { restore_token }),
         _ => None,
     }
 }

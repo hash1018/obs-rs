@@ -110,11 +110,54 @@ pub struct DisplayCaptureSettings {
     pub size_hint: Option<[u32; 2]>,
 }
 
+/// Which window a Window Capture reproduces.
+///
+/// The same two-formed problem a display has, and worse. Windows hands out an
+/// `HWND`, but one is only meaningful inside the session that issued it — it
+/// is recycled, and the window is gone the moment its application closes. So
+/// what is stored is the pair a person would use to find the window again:
+/// the owning executable and the title it had. The capture resolves that
+/// against whatever is on screen at the time, exactly as a display name is
+/// resolved against the live layout.
+///
+/// Wayland names nothing here either. The portal's picker owns the choice and
+/// the restore token is all that reproduces it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowCaptureTarget {
+    /// The owning executable's file name and the window's title.
+    ///
+    /// Neither alone is enough: a title is often empty or duplicated across
+    /// an application's windows, and a process usually has more than one.
+    /// Together they are what a person reads off a task bar, which is the
+    /// standard this can be held to — not uniqueness, which no pair of these
+    /// can promise.
+    Window { process: String, title: String },
+    /// A selection made in the desktop portal's own picker.
+    ///
+    /// `restore_token` is `None` when the compositor declined to persist the
+    /// selection, the same as for a display.
+    Portal { restore_token: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowCaptureSettings {
+    pub target: WindowCaptureTarget,
+    /// The window's outer size when it was picked, or `None` when nothing
+    /// reported one.
+    ///
+    /// A hint, and a weaker one than a display's: a window is resized by the
+    /// person using it, so this is only ever what it was at the moment it was
+    /// chosen. It gives a new SceneItem a shape to start at, and the capture
+    /// layer replaces it with what the stream actually negotiates.
+    pub size_hint: Option<[u32; 2]>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
     Drawing(DrawingSourceSettings),
     DisplayCapture(DisplayCaptureSettings),
+    WindowCapture(WindowCaptureSettings),
     None,
 }
 
@@ -132,6 +175,11 @@ impl SourceSettings {
             Self::Color(settings) => settings.size,
             Self::Drawing(settings) => settings.size,
             Self::DisplayCapture(settings) => settings
+                .size_hint
+                .map_or([canvas.width, canvas.height], |[width, height]| {
+                    [width as f32, height as f32]
+                }),
+            Self::WindowCapture(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {
                     [width as f32, height as f32]

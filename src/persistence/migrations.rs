@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -220,6 +220,41 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 8;",
+        )?;
+    }
+    if current_version < 9 {
+        // A Window Capture, shaped like a Display Capture and for the same
+        // reason: two platforms that cannot produce each other's answer.
+        //
+        // Windows and X11 identify the window by the pair a person reads off
+        // a task bar — the owning executable and the title — because the
+        // handle itself is only meaningful inside the session that issued it.
+        // Wayland's portal names nothing and hands back a restore token.
+        //
+        // The size is the window's outer size when it was picked. Nullable
+        // because nothing guarantees a picker reported one, and a hint either
+        // way: a window is resized by whoever is using it.
+        transaction.execute_batch(
+            "CREATE TABLE window_capture_settings (
+                source_id     INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                target_kind   TEXT NOT NULL CHECK (target_kind IN ('window', 'portal')),
+                process       TEXT,
+                title         TEXT,
+                restore_token TEXT,
+                width         INTEGER,
+                height        INTEGER,
+                CHECK (
+                    (target_kind = 'window'
+                        AND process IS NOT NULL
+                        AND title IS NOT NULL
+                        AND restore_token IS NULL)
+                 OR (target_kind = 'portal'
+                        AND process IS NULL
+                        AND title IS NULL)
+                )
+            );
+
+            PRAGMA user_version = 9;",
         )?;
     }
     transaction.commit()?;

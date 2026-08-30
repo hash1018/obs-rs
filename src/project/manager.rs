@@ -165,6 +165,10 @@ fn handle_source_command(
             SourceStore::add_display_capture(transaction, scene_id, &settings)?;
             Ok(())
         }
+        SourceCommand::AddWindowCapture { scene_id, settings } => {
+            SourceStore::add_window_capture(transaction, scene_id, &settings)?;
+            Ok(())
+        }
         SourceCommand::Delete(scene_item_id) => {
             SourceStore::delete_scene_item(transaction, scene_item_id)
         }
