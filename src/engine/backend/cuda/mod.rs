@@ -31,9 +31,11 @@ use crate::domain::{SourceKind, SourceSettings};
 use crate::settings::{RecordingEncoder, RecordingSettings};
 use crate::snapshots::SceneItemSnapshot;
 
+use crate::engine::source::{self, OpenSource, input_name, unsupported_kind};
+
 use super::{
-    BACKGROUND, BackendError, OpenSource, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
-    VideoTrack, drawing_bgra, flat_bgra, input_name, software_codec, unsupported_kind,
+    BACKGROUND, BackendError, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, VideoTrack,
+    software_codec,
 };
 
 /// The running recording: which branch it is, and the control that stops it
@@ -538,8 +540,10 @@ impl Backend {
                     .insert(source.name.clone(), frame_rate);
                 Ok(source)
             }
-            SourceKind::Color => open_color_source(&self.device, &self.compositor, item, layer),
-            SourceKind::Drawing => open_drawing_source(&self.device, &self.compositor, item, layer),
+            SourceKind::Color => source::color::open(&self.device, &self.compositor, item, layer),
+            SourceKind::Drawing => {
+                source::drawing::open(&self.device, &self.compositor, item, layer)
+            }
             _ => Err(unsupported_kind(item)),
         }
     }
@@ -708,127 +712,6 @@ impl RunningSource {
     pub(in crate::engine) fn stop(&self) {
         self.0.stop();
     }
-}
-
-/// Feeds the compositor one frame of flat colour and leaves it there.
-///
-/// Pushed once rather than per frame: the compositor keeps the latest frame
-/// each input gave it, and a colour that never changes never needs another.
-/// Position, size and opacity are the layer's, so nothing here is redrawn
-/// when the item moves.
-fn open_color_source(
-    device: &CudaDevice,
-    handle: &CudaVideoCompositorHandle,
-    item: &SceneItemSnapshot,
-    layer: VideoLayer,
-) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{
-        AppSource, CudaConverter, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput,
-    };
-
-    let SourceSettings::Color(settings) = &item.settings else {
-        return Err("scene item is not a color source".into());
-    };
-    let width = (settings.size[0].round() as u32).max(2) & !1;
-    let height = (settings.size[1].round() as u32).max(2) & !1;
-
-    let name = input_name(item);
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA in, so `CudaConverter` performs the RGB-to-BT.709 conversion the
-    // compositor expects instead of this having its own copy of that matrix.
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        CudaFrameFormat::Bgra,
-        width,
-        height,
-    )?;
-    let converter = CudaConverter::new(format!("{name}-convert"), device, width, height)?;
-
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(converter).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-    pusher.push(flat_bgra(width, height, settings.rgba))?;
-
-    Ok(OpenSource {
-        source: RunningSource(pipeline),
-        layer,
-        name,
-        refreshed_token: None,
-        showing: true,
-        // Held, not dropped here: an `AppSource` runs only while a handle to
-        // it exists, and this one used to go out of scope in the same breath
-        // as its only frame.
-        pushed: Some(super::PushedSurface {
-            pusher,
-            size: [width, height],
-            content: super::PushedContent::Color(settings.rgba),
-        }),
-    })
-}
-
-/// Opens a Drawing: an `AppSource` this side pushes rasterized strokes into.
-///
-/// The same shape as a Color Source, and for the same reason — the pixels come
-/// from here rather than from a capture. What differs is that a Color Source
-/// pushes once and is done, while a Drawing pushes again every time someone
-/// draws, which is why its handle is kept.
-fn open_drawing_source(
-    device: &CudaDevice,
-    handle: &CudaVideoCompositorHandle,
-    item: &SceneItemSnapshot,
-    layer: VideoLayer,
-) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
-
-    let SourceSettings::Drawing(settings) = &item.settings else {
-        return Err("scene item is not a drawing source".into());
-    };
-    let width = (settings.size[0].round() as u32).max(2) & !1;
-    let height = (settings.size[1].round() as u32).max(2) & !1;
-
-    let name = input_name(item);
-    // One frame of capacity: a drawing gesture produces one per UI frame and
-    // only the newest matters, so a deeper queue would only add latency
-    // between the pointer and the picture.
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        CudaFrameFormat::Bgra,
-        width,
-        height,
-    )?;
-
-    // No converter, unlike every other source here. A Drawing is an overlay:
-    // its alpha is the marks themselves, and NV12 has nowhere to keep one, so
-    // converting first would put opaque black over everything nobody drew on.
-    // The compositor takes BGRA for exactly this and blends per pixel.
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-    pusher.push(drawing_bgra(width, height, &settings.strokes))?;
-
-    Ok(OpenSource {
-        source: RunningSource(pipeline),
-        layer,
-        name,
-        refreshed_token: None,
-        showing: true,
-        pushed: Some(super::PushedSurface {
-            pusher,
-            size: [width, height],
-            content: super::PushedContent::Drawing(settings.strokes.clone()),
-        }),
-    })
 }
 
 /// Opens the portal's screen cast and wires it into the compositor.

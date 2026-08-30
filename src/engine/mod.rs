@@ -15,6 +15,7 @@
 mod audio;
 mod backend;
 mod recording;
+mod source;
 
 pub use audio::AudioManager;
 
@@ -37,7 +38,8 @@ use crate::domain::{SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
-use backend::{Backend, BackendError, OpenSource};
+use backend::{Backend, BackendError};
+use source::{OpenSource, PushedContent, push_content, refresh_pushed};
 
 /// The rate to assume when the compositor cannot be asked — it is gone, or
 /// there is no backend at all.
@@ -568,7 +570,7 @@ fn apply_command(
         }
         EngineCommand::Drawing(item_id, strokes) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
-                push_content(source, backend::PushedContent::Drawing(strokes));
+                push_content(source, PushedContent::Drawing(strokes));
             }
             false
         }
@@ -802,55 +804,6 @@ enum SourceState {
 }
 
 /// Brings the running Sources in line with what the project now holds.
-/// Rasterizes a Drawing's strokes and hands them to its compositor input, if
-/// they are not already what it is showing.
-///
-/// The comparison is what makes this cheap enough to call on every Scene
-/// change: a Drawing sitting in a Scene where something else moved must not
-/// redraw a canvas-sized frame and push it across the bus for nothing.
-/// Puts a Source's own pixels on the compositor again, when what it should be
-/// showing has changed.
-///
-/// One function for both kinds this side produces. It runs on every reconcile
-/// pass, which is every Scene change, so the comparison inside is what keeps a
-/// move or a rename from costing a redraw and a re-upload of something nobody
-/// touched.
-fn refresh_pushed(source: &mut OpenSource, item: &crate::snapshots::SceneItemSnapshot) {
-    use crate::domain::SourceSettings;
-    use backend::PushedContent;
-
-    let wanted = match &item.settings {
-        SourceSettings::Color(settings) => PushedContent::Color(settings.rgba),
-        SourceSettings::Drawing(settings) => PushedContent::Drawing(settings.strokes.clone()),
-        _ => return,
-    };
-    push_content(source, wanted);
-}
-
-/// The push itself, which the mid-gesture drawing path needs on its own: it
-/// has the strokes in hand and no snapshot to read them back out of, because
-/// the project has not been told about them yet.
-fn push_content(source: &mut OpenSource, wanted: backend::PushedContent) {
-    use backend::PushedContent;
-
-    let Some(surface) = source.pushed.as_mut() else {
-        return;
-    };
-    if surface.content == wanted {
-        return;
-    }
-    let [width, height] = surface.size;
-    let frame = match &wanted {
-        PushedContent::Color(rgba) => backend::flat_bgra(width, height, *rgba),
-        PushedContent::Drawing(strokes) => backend::drawing_bgra(width, height, strokes),
-    };
-    if let Err(error) = surface.pusher.push(frame) {
-        eprintln!("could not update \"{}\": {error}", source.name);
-        return;
-    }
-    surface.content = wanted;
-}
-
 fn reconcile(
     backend: &Backend,
     project: Option<&ProjectDispatcher>,

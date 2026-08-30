@@ -11,7 +11,9 @@ use media_pp::elements::VideoLayer;
 
 use crate::snapshots::SceneItemSnapshot;
 
-use super::{BackendError, OpenSource};
+use crate::engine::source::{OpenSource, unsupported_kind};
+
+use super::BackendError;
 
 /// Runtime control for one registered input. Nothing registers any.
 pub(in crate::engine) struct Layer;
@@ -57,7 +59,7 @@ impl Backend {
         _layer: VideoLayer,
         _fps: u32,
     ) -> Result<OpenSource, BackendError> {
-        Err(super::unsupported_kind(item))
+        Err(unsupported_kind(item))
     }
 
     pub(in crate::engine) fn remove_source(&self, _name: &str) {}
