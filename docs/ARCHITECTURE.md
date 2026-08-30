@@ -84,27 +84,50 @@ Monitor *position* in the virtual desktop is intentionally not persisted — it 
 
 `src/engine` owns everything that produces Preview pixels, on its own thread. It reconciles running Sources against the project snapshot rather than reacting to the actions that changed it: a restart replays no actions but must still open everything the project holds, and selecting a Scene replaces the whole set at once.
 
+It is laid out by what a part does, with the platform split inside each rather than around it — a `linux.rs` and a `windows.rs` beside a shared `mod.rs` that holds whatever both agree on:
+
+```text
+engine/
+├─ backend/      the compositor, and what a platform's Backend is
+├─ source/       opening one SceneItem's Source
+│   ├─ color.rs, drawing.rs        (no platform half: both push pixels)
+│   └─ display_capture/            (a portal here, a registry on Windows)
+├─ preview/      compositor output → egui, and nothing else
+├─ recording/    the encode chain and the muxer's tracks
+└─ audio/        capture, per-source gain, one mix
+```
+
 The CUDA path, which is the one with a conversion in it:
 
 ```text
-capture / colour  →  CudaConverter  →  CudaVideoCompositor  (NV12, on the GPU)
-                                             ↓
-                                       CudaDownload
-                                             ↓
+capture / colour  →  CudaConverter  ─┐
+                                     ├→  CudaVideoCompositor  (NV12, on the GPU)
+drawing (BGRA, keeps its alpha)  ────┘             ↓
+                                        memory Vulkan allocated
+                                        and CUDA imported
+                                                   ↓
                               two plane textures  →  resolve pass  →  CompositeFrame
 ```
 
-Windows is the same shape with `D3d11VideoCompositor` and no converter at all: capture, compositor and encoder are BGRA end to end, so there is nothing between them to convert, and the resolve pass below is a CUDA concern only.
+Nothing on that path crosses the bus. The composited frame is copied into memory wgpu already owns — Vulkan allocates it and exports a file descriptor, `cuImportExternalMemory` takes exactly that — so the two plane uploads and the resolve are one GPU submission. Reading the frame back to system memory and pushing it up again is what this replaced.
+
+Windows is the same shape with `D3d11VideoCompositor` and no converter at all: capture, compositor and encoder are BGRA end to end, so there is nothing between them to convert, and the resolve pass is a CUDA concern only — Windows shares one texture and hands wgpu a view of it.
 
 The compositor's NV12 output is resolved into one RGBA texture by a small render pass, because egui draws one texture and NV12 is two planes in a colour space that is not RGB. Doing that on the CPU would undo the reason compositing is on the GPU.
 
-The Preview is redrawn at half the compositor's rate. It is a few hundred pixels wide and watched by one person, and halving it took the application from 10% of a twelve-core machine to 2.5% — almost none of which is pixels, since downloading and resolving at 720p instead of 1080p was measured and changed nothing. The cost is per-frame overhead, most of it the whole-UI repaint each drawn frame asks egui for. The compositor keeps its own rate, because that is what a recording will be made of.
+The Preview is redrawn at 30 fps, or at the compositor's own rate when that is lower. It is a few hundred pixels wide and watched by one person, and halving it took the application from 10% of a twelve-core machine to 2.5% — almost none of which is pixels, since downloading and resolving at 720p instead of 1080p was measured and changed nothing. The cost is per-frame overhead, most of it the whole-UI repaint each drawn frame asks egui for. The compositor keeps its own rate, because that is what a recording will be made of.
 
 The Preview branch is not allowed to set the compositor's pace. It sits behind a dropping queue, so a Preview that cannot keep up drops frames rather than slowing the output every other branch will be built from. It also sleeps entirely when no shown Source is running — an empty Scene, or one whose Sources are all in other Scenes, costs nothing.
 
 Switching Scenes stops a Source rather than closing it, so returning is a resume and not another portal round trip. Only a SceneItem the project no longer holds anywhere is closed, which is why the snapshot carries every item and not just the shown Scene's.
 
 ## Recording output
+
+A recording is two tracks: the compositor's frames encoded as H.264, and the audio mixer's output as AAC or Opus. Neither half owns the file — `engine::recording` does — because an mp4's tracks are fixed before its header is written, so both encoders have to exist before a frame is written to either, and the trailer is written only once *every* track has reported done. Ending one and not the other leaves a file exactly as long as it is unplayable.
+
+A machine whose mixer never started records video alone rather than refusing, so the track list is decided per recording from what is actually running.
+
+Each track is zeroed by its own `TimestampOrigin`, because there is no clock the two share: the compositor counts composed frames and the mixer counts emitted samples, both since launch and on unrelated counters. Measured against a clip whose flash and beep are simultaneous, the two land within one video frame of each other, and a two-minute recording drifts 29 ms end to end — so nothing here needs a shared clock.
 
 The container is chosen on the Recording page and is very nearly a choice of extension: `media-pp`'s `FileMuxer` asks FFmpeg to guess a muxer from the file name, so MP4 and Matroska are the same element told a different path. Matroska is worth choosing for a long recording — MP4 is finalized in its trailer, so a session that dies with the application leaves an unplayable file, where a `.mkv` plays up to where it stopped.
 
