@@ -423,6 +423,12 @@ fn open_source(
 ///
 /// Peak rather than RMS: a meter is watched to catch a clip, and an average
 /// is exactly what hides one.
+///
+/// Not clamped at the top. A fader that boosts can push a source past full
+/// scale, and clamping here would hand the dock a `0.0` for both "reached
+/// full scale" and "is 6 dB over it" — the second of which is the clip this
+/// function exists to catch. The floor stays, because below it there is
+/// nothing to tell apart.
 fn peak_db(frame: &media_pp::ffmpeg::frame::Audio) -> f32 {
     use media_pp::ffmpeg::format::Sample;
 
@@ -445,7 +451,7 @@ fn peak_db(frame: &media_pp::ffmpeg::frame::Audio) -> f32 {
     if peak <= 0.0 {
         return METER_FLOOR_DB;
     }
-    (20.0 * peak.log10()).clamp(METER_FLOOR_DB, 0.0)
+    (20.0 * peak.log10()).max(METER_FLOOR_DB)
 }
 
 /// Opens the endpoint a source names, or the system default when it names
@@ -909,6 +915,41 @@ mod tests {
             done.recv_timeout(Duration::from_secs(10)).is_ok(),
             "dropping AudioManager did not return: its worker is still waiting on a sender \
              nothing will drop"
+        );
+    }
+
+    /// The one thing a boosting fader made possible, and the one thing the
+    /// old clamp threw away: a level past full scale has to arrive as a
+    /// number greater than zero, or nothing downstream can tell a clip from a
+    /// take that merely touched the ceiling.
+    #[test]
+    fn a_level_past_full_scale_is_reported_rather_than_flattened() {
+        use media_pp::ffmpeg;
+
+        let frame = |loudest: f32| {
+            let mut frame = ffmpeg::frame::Audio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                4,
+                ffmpeg::ChannelLayout::default(1),
+            );
+            frame.set_rate(48_000);
+            frame.plane_mut::<f32>(0).fill(loudest);
+            frame
+        };
+
+        // Twice full scale is +6 dB, and that is what has to come back.
+        let over = peak_db(&frame(2.0));
+        assert!(
+            (over - 6.0206).abs() < 0.01,
+            "a sample at twice full scale must read about +6 dB, got {over}"
+        );
+
+        assert!((peak_db(&frame(1.0))).abs() < 0.001, "full scale is 0 dB");
+        assert!(peak_db(&frame(0.5)) < 0.0, "and anything under it is below");
+        assert_eq!(
+            peak_db(&frame(0.0)),
+            METER_FLOOR_DB,
+            "the floor is still a floor"
         );
     }
 }

@@ -57,6 +57,14 @@ const SCALE_MARKS: [f32; 6] = [0.0, -12.0, -24.0, -36.0, -48.0, -60.0];
 const WARN_DB: f32 = -20.0;
 const CLIP_DB: f32 = -9.0;
 
+/// How long the clip lamp stays lit after the peak that lit it.
+///
+/// A clip is one buffer wide and gone before anyone has looked up. Two
+/// seconds is long enough to catch out of the corner of an eye and short
+/// enough that it is reporting the take you are on rather than one from
+/// earlier.
+const CLIP_HOLD_SECONDS: f64 = 2.0;
+
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     snapshot: &AudioSnapshot,
@@ -167,7 +175,10 @@ fn show_channel(
         ui.vertical(|ui| {
             ui.set_width(SOURCE_WIDTH);
             show_name(ui, source, devices, i18n, actions);
-            ui.monospace(format_gain(source.gain_db));
+            ui.horizontal(|ui| {
+                ui.monospace(format_gain(source.gain_db));
+                show_clip_lamp(ui, source, i18n);
+            });
             ui.horizontal(|ui| {
                 show_fader(ui, source, channel_height, actions);
                 show_meter(ui, source, channel_height);
@@ -478,6 +489,69 @@ fn paint_unity_mark(ui: &egui::Ui, rect: egui::Rect) {
     );
 }
 
+/// Whether the clip lamp should be lit, and when it was last lit.
+///
+/// Pure so it can be tested: everything else about a lamp is a timestamp in
+/// egui's memory and a red rectangle.
+///
+/// Latched rather than shown live. A clip is one buffer wide — at 48 kHz and
+/// a few hundred samples a buffer, it is gone in the time it takes a frame to
+/// be drawn — so a lamp that only followed the level would be a lamp that is
+/// never seen on. What it reports is "this clipped", not "this is clipping".
+fn clip_lamp(last_clip: f64, now: f64, peak_db: Option<f32>) -> (f64, bool) {
+    // At full scale, not merely near it: `CLIP_DB` is where the meter turns
+    // red to warn, and warning is not the same as having gone over.
+    let last_clip = match peak_db {
+        Some(peak) if peak >= 0.0 => now,
+        _ => last_clip,
+    };
+    (last_clip, now - last_clip < CLIP_HOLD_SECONDS)
+}
+
+/// The lamp above each channel's readout.
+///
+/// Beside the gain rather than on the meter: the meter has no room above full
+/// scale to put it, and a channel that clipped is nearly always a channel
+/// somebody boosted — so the number that caused it and the lamp that reports
+/// it are read together.
+fn show_clip_lamp(ui: &mut egui::Ui, source: &AudioSourceSnapshot, i18n: &LocalizationManager) {
+    let key = egui::Id::new(("audio-clip-lamp", source.id));
+    let now = ui.input(|input| input.time);
+    let was = ui
+        .data(|data| data.get_temp::<f64>(key))
+        .unwrap_or(f64::MIN);
+    // Muted is silence whatever the source is doing, the same reading the
+    // meter takes — a muted channel cannot be clipping anything.
+    let peak = source.peak_db.filter(|_| !source.muted);
+    let (last_clip, lit) = clip_lamp(was, now, peak);
+    if last_clip != was {
+        ui.data_mut(|data| data.insert_temp(key, last_clip));
+    }
+
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
+    let rounding = egui::CornerRadius::same(2);
+    if lit {
+        ui.painter()
+            .rect_filled(rect, rounding, egui::Color32::from_rgb(230, 60, 50));
+        // Nothing else here would ask for a frame once the audio stops
+        // changing, and a lamp that stayed lit until something did would be
+        // reporting a clip that had long since aged out.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
+        response.on_hover_text(i18n.text(TextKey::AudioClipped));
+    } else {
+        // Drawn dark rather than left out, so the lamp has a resting place
+        // and lighting up is a change in one thing instead of a new thing
+        // appearing and shifting the row.
+        ui.painter().rect_stroke(
+            rect,
+            rounding,
+            ui.visuals().widgets.noninteractive.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
 /// Where a decibel value sits on the *meter's* scale: silence at the bottom,
 /// full scale at the top. Linear in decibels, which is what the scale's evenly
 /// spaced marks promise.
@@ -564,5 +638,42 @@ mod tests {
         assert_eq!(format_gain(MAX_GAIN_DB), "+12.0 dB");
         assert_eq!(format_gain(0.0), "0.0 dB");
         assert_eq!(format_gain(-6.0), "-6.0 dB");
+    }
+
+    /// A clip lights the lamp and it stays lit, because the buffer that
+    /// clipped is gone long before anyone looks.
+    #[test]
+    fn the_clip_lamp_latches_and_then_lets_go() {
+        let never = f64::MIN;
+
+        // Below full scale, however loud: the meter's red band is a warning,
+        // not a clip.
+        let (last, lit) = clip_lamp(never, 100.0, Some(CLIP_DB / 2.0));
+        assert_eq!(last, never);
+        assert!(!lit, "a hot level that did not go over must not report one");
+
+        // At it, and the lamp takes the time.
+        let (clipped_at, lit) = clip_lamp(never, 100.0, Some(0.0));
+        assert_eq!(clipped_at, 100.0);
+        assert!(lit);
+
+        // Silence right after does not put it out.
+        let (held, lit) = clip_lamp(clipped_at, 100.5, Some(MIN_GAIN_DB));
+        assert_eq!(held, clipped_at, "a later quiet frame must not re-time it");
+        assert!(lit, "the lamp has to outlast the buffer that lit it");
+
+        // The hold runs out.
+        let (_, lit) = clip_lamp(clipped_at, 100.0 + CLIP_HOLD_SECONDS, None);
+        assert!(!lit);
+    }
+
+    /// A muted channel is silence whatever is behind it, so it cannot be the
+    /// one clipping — the same reading the meter takes.
+    #[test]
+    fn a_muted_channel_has_nothing_to_report() {
+        let (last, lit) = clip_lamp(f64::MIN, 100.0, None);
+
+        assert_eq!(last, f64::MIN);
+        assert!(!lit);
     }
 }

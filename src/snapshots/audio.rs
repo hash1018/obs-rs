@@ -19,8 +19,14 @@ pub struct AudioSourceSnapshot {
     pub device: Option<String>,
     pub gain_db: f32,
     pub muted: bool,
-    /// The loudest sample seen since the last update, in decibels below full
-    /// scale, or `None` when nothing is measuring yet.
+    /// The loudest sample seen since the last update, in decibels relative to
+    /// full scale, or `None` when nothing is measuring yet.
+    ///
+    /// Positive above full scale rather than clamped at it: a fader that
+    /// boosts can push a source past full scale, and a meter that cannot tell
+    /// a level which merely reached it from one well over it cannot report a
+    /// clip. Pinning the bar at the top of its scale is the dock's own
+    /// business.
     ///
     /// `None` is what the mixer shows today: the meter is drawn but has
     /// nothing behind it until an audio pipeline exists to report from. It is

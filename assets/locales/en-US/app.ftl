@@ -25,6 +25,7 @@ audio-kind-output = Output
 audio-kind-input = Input
 audio-device-default = Default
 audio-no-devices = No devices found
+audio-clipped = Clipped — the level went past full scale
 control-start-recording = Start Recording
 control-pause-recording = Pause Recording
 control-resume-recording = Resume Recording

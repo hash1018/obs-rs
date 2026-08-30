@@ -25,6 +25,7 @@ audio-kind-output = 출력
 audio-kind-input = 입력
 audio-device-default = 기본 장치
 audio-no-devices = 장치를 찾을 수 없습니다
+audio-clipped = 클리핑 — 레벨이 최대치를 넘었습니다
 control-start-recording = 녹화 시작
 control-pause-recording = 녹화 일시정지
 control-resume-recording = 녹화 재개
