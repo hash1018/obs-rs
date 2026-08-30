@@ -36,6 +36,11 @@ pub(super) fn show(
         )
         .show(ui, |ui| {
             let available_rect = ui.available_rect_before_wrap();
+            // The toolbar's own band, taken off the top of what the picture
+            // may fill. `workspace_rect` is what the picture is *sized*
+            // against and what the editor treats as the workspace; where the
+            // picture is *placed* is settled below, because the two are not
+            // the same question.
             let workspace_rect = egui::Rect::from_min_max(
                 available_rect.min,
                 egui::pos2(
@@ -45,8 +50,23 @@ pub(super) fn show(
             );
             let viewport_bounds = workspace_rect.size() * view_state.scale();
             let viewport_size = fit_aspect_ratio(viewport_bounds, snapshot.canvas.aspect_ratio());
-            let viewport_rect =
-                egui::Rect::from_center_size(workspace_rect.center(), viewport_size);
+            // The picture and the toolbar under it are centred as one block,
+            // not the picture alone. Centring the picture in the band-less
+            // half and then drawing the toolbar against it left the reserved
+            // band stranded at the very bottom: the gap above the picture was
+            // always a toolbar shorter than the gap below, by exactly the
+            // amount taken off above and never given back.
+            //
+            // The toolbar stays attached to the picture rather than pinned to
+            // the bottom edge, because it belongs to the picture — it is what
+            // that picture is zoomed to — and one pinned there reads as the
+            // panel's own furniture instead.
+            let block_height = viewport_size.y + toolbar::TOOLBAR_GAP + toolbar::TOOLBAR_HEIGHT;
+            let block_top = available_rect.center().y - block_height / 2.0;
+            let viewport_rect = egui::Rect::from_min_size(
+                egui::pos2(available_rect.center().x - viewport_size.x / 2.0, block_top),
+                viewport_size,
+            );
             let viewport = ViewportTransform::new(viewport_rect, snapshot.canvas);
             let response = ui.interact(
                 workspace_rect,
