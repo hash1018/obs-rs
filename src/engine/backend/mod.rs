@@ -64,7 +64,7 @@ use media_pp::elements::VideoCodec;
 )]
 mod platform;
 
-pub(in crate::engine) use platform::{Backend, Layer, PreparedRecording, RunningSource};
+pub(in crate::engine) use platform::{Backend, Layer, RunningSource};
 
 pub(in crate::engine) type BackendError = Box<dyn Error + Send + Sync>;
 

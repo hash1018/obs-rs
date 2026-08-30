@@ -40,6 +40,12 @@
 //! is not a reason to refuse a recording, so the track list is decided here,
 //! per recording, from what is actually running.
 
+#[cfg_attr(target_os = "linux", path = "linux.rs")]
+#[cfg_attr(target_os = "windows", path = "windows.rs")]
+mod platform;
+
+pub(in crate::engine) use platform::PreparedRecording;
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -57,8 +63,7 @@ use media_pp::{
 
 use super::audio::DEFAULT_MIX_FORMAT;
 use super::backend::{
-    Backend, BackendError, PreparedRecording, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
-    VideoTrack,
+    Backend, BackendError, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, VideoTrack,
 };
 use crate::settings::{DEFAULT_AUDIO_BIT_RATE_KBPS, RecordingAudioCodec, RecordingSplit};
 
