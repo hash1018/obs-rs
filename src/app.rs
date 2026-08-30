@@ -473,6 +473,11 @@ impl ObsApp {
                     source.gain_db = gain_db;
                 }
             }
+            UiAction::DrawStrokes(item_id, strokes) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_drawing_strokes(item_id, strokes);
+                }
+            }
             UiAction::DragSceneItem(item_id, transform) => {
                 if let Some(engine) = &self.engine {
                     engine.set_dragging_transform(item_id, transform);

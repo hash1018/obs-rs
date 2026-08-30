@@ -13,6 +13,10 @@ pub enum UiAction {
     /// compositor and not to the project: a drag is one edit, recorded when it
     /// ends, but the picture has to follow the pointer meanwhile.
     DragSceneItem(SceneItemId, Transform),
+    /// A Drawing's strokes while the pointer is still down, for the same
+    /// reason `DragSceneItem` exists: the mark has to be under the pointer,
+    /// and the stroke is recorded once when the gesture ends.
+    DrawStrokes(SceneItemId, Vec<crate::domain::Stroke>),
     /// One source's gain while the fader is still held. Goes to the audio
     /// graph and not to the project, for the same reason `DragSceneItem`
     /// does: what is heard has to follow the pointer, and the edit is

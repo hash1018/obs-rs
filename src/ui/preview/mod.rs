@@ -5,13 +5,13 @@ mod viewport_transform;
 
 use eframe::egui;
 
-use crate::domain::{SourceSettings, Transform};
+use crate::domain::{SourceSettings, Stroke, Transform};
 use crate::engine::CompositeFrame;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
-use super::editor::{SceneEditorState, TransformDrag, TransformDragMode};
+use super::editor::{SceneEditorState, Tool, TransformDrag, TransformDragMode};
 use super::{UiAction, UiResources};
 use viewport_transform::{ViewportTransform, fit_aspect_ratio};
 
@@ -82,12 +82,30 @@ pub(super) fn show(
             paint_composite_frame(ui, viewport, resources.composite_frame, i18n);
             paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
 
+            // A Drawing brings its own tools, and only while it is the thing
+            // selected: they are what says "this is what you are editing", and
+            // the toolbar goes back to its resting width the moment it is not.
+            let drawing = editor.selected_item_id().and_then(|item_id| {
+                snapshot
+                    .items
+                    .iter()
+                    .find(|item| item.id == item_id)
+                    .and_then(|item| match &item.settings {
+                        SourceSettings::Drawing(drawing) => Some((item_id, drawing.strokes.len())),
+                        _ => None,
+                    })
+            });
+            let toolbar_width = if drawing.is_some() {
+                toolbar::TOOLBAR_WIDTH + toolbar::PEN_TOOLBAR_WIDTH
+            } else {
+                toolbar::TOOLBAR_WIDTH
+            };
             let toolbar_rect = egui::Rect::from_min_size(
                 egui::pos2(
                     viewport_rect.left(),
                     viewport_rect.bottom() + toolbar::TOOLBAR_GAP,
                 ),
-                egui::vec2(toolbar::TOOLBAR_WIDTH, toolbar::TOOLBAR_HEIGHT),
+                egui::vec2(toolbar_width, toolbar::TOOLBAR_HEIGHT),
             );
             let mut toolbar_ui = ui.new_child(
                 egui::UiBuilder::new()
@@ -97,6 +115,16 @@ pub(super) fn show(
             );
             toolbar_ui.set_clip_rect(toolbar_rect);
             toolbar::show(&mut toolbar_ui, view_state, i18n);
+            if let Some((item_id, strokes)) = drawing {
+                toolbar::show_pen(
+                    &mut toolbar_ui,
+                    &mut editor.pen,
+                    item_id,
+                    strokes,
+                    i18n,
+                    actions,
+                );
+            }
         });
 }
 
@@ -112,6 +140,14 @@ fn handle_pointer(
 
     if response.clicked() || response.drag_started() {
         response.request_focus();
+    }
+
+    // Before anything else: with a pen or an eraser in hand the pointer draws,
+    // and none of the selecting, dragging or resizing below should see it.
+    if editor.pen.tool != Tool::Select
+        && handle_drawing(ui, response, viewport, editor, snapshot, actions)
+    {
+        return;
     }
 
     if response.hovered()
@@ -189,6 +225,143 @@ fn handle_pointer(
             SourceCommand::Delete(item_id),
         )));
         editor.clear_selection();
+    }
+}
+
+/// The pointer while a Drawing is being drawn on, rather than moved.
+///
+/// Returns whether it took the gesture — it declines when the selected item
+/// is not a Drawing after all, which leaves the ordinary editor behaviour in
+/// place rather than swallowing the click.
+fn handle_drawing(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    viewport: ViewportTransform,
+    editor: &mut SceneEditorState,
+    snapshot: &SourcesSnapshot,
+    actions: &mut Vec<UiAction>,
+) -> bool {
+    let Some(item_id) = editor.selected_item_id() else {
+        return false;
+    };
+    let Some(item) = snapshot.items.iter().find(|item| item.id == item_id) else {
+        return false;
+    };
+    let SourceSettings::Drawing(drawing) = &item.settings else {
+        return false;
+    };
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    // Where the pointer is on the Drawing itself, which is what a stroke is
+    // recorded in — see `SceneItemSnapshot::canvas_point_to_source`.
+    let transform = editor.effective_transform(item_id, item.transform);
+    let at = |point: egui::Pos2| {
+        let canvas = viewport.screen_to_canvas(point);
+        item.canvas_point_to_source(transform, [canvas.x, canvas.y])
+    };
+
+    match editor.pen.tool {
+        Tool::Select => false,
+        Tool::Pen => {
+            if response.drag_started() || response.clicked() {
+                editor.pen.stroke = Some(Vec::new());
+            }
+            if let Some(point) = response.interact_pointer_pos().and_then(at)
+                && let Some(stroke) = editor.pen.stroke.as_mut()
+                // A pointer that has not moved a whole unit adds nothing but
+                // points to rasterize.
+                && stroke.last().is_none_or(|last| {
+                    (last[0] - point[0]).abs() >= 1.0 || (last[1] - point[1]).abs() >= 1.0
+                })
+            {
+                stroke.push(point);
+                let mut strokes = drawing.strokes.clone();
+                strokes.push(Stroke {
+                    points: stroke.clone(),
+                    rgba: editor.pen.rgba,
+                    width: editor.pen.width,
+                });
+                actions.push(UiAction::DrawStrokes(item_id, strokes));
+                ui.ctx().request_repaint();
+            }
+            if (response.drag_stopped() || response.clicked())
+                && let Some(points) = editor.pen.stroke.take()
+                && !points.is_empty()
+            {
+                actions.push(UiAction::Project(ProjectCommand::Source(
+                    SourceCommand::AddStroke(
+                        item_id,
+                        Stroke {
+                            points,
+                            rgba: editor.pen.rgba,
+                            width: editor.pen.width,
+                        },
+                    ),
+                )));
+            }
+            true
+        }
+        Tool::Eraser => {
+            if (response.dragged() || response.clicked())
+                && let Some(point) = response.interact_pointer_pos().and_then(at)
+            {
+                let hit: Vec<usize> = drawing
+                    .strokes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, stroke)| touches(stroke, point, editor.pen.width))
+                    .map(|(index, _)| index)
+                    .collect();
+                if !hit.is_empty() {
+                    let kept: Vec<Stroke> = drawing
+                        .strokes
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| !hit.contains(index))
+                        .map(|(_, stroke)| stroke.clone())
+                        .collect();
+                    // Shown at once and recorded at once: an eraser has no
+                    // gesture to wait out the way a stroke does, and each
+                    // sweep that finds something is its own undo step.
+                    actions.push(UiAction::DrawStrokes(item_id, kept));
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::RemoveStrokes(item_id, hit),
+                    )));
+                }
+            }
+            true
+        }
+    }
+}
+
+/// Whether the eraser at `point` is over any part of `stroke`.
+///
+/// Distance to each segment rather than to its endpoints: a long stroke drawn
+/// in one sweep has very few points in it, and testing only those would let
+/// an eraser pass straight through the middle of a line.
+fn touches(stroke: &Stroke, point: [f32; 2], reach: f32) -> bool {
+    let limit = (stroke.width / 2.0 + reach).powi(2);
+    let distance_squared = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
+    match stroke.points.as_slice() {
+        [] => false,
+        [only] => distance_squared(*only, point) <= limit,
+        points => points.windows(2).any(|pair| {
+            let (start, end) = (pair[0], pair[1]);
+            let span = distance_squared(start, end);
+            if span == 0.0 {
+                return distance_squared(start, point) <= limit;
+            }
+            let along = (((point[0] - start[0]) * (end[0] - start[0])
+                + (point[1] - start[1]) * (end[1] - start[1]))
+                / span)
+                .clamp(0.0, 1.0);
+            let nearest = [
+                start[0] + (end[0] - start[0]) * along,
+                start[1] + (end[1] - start[1]) * along,
+            ];
+            distance_squared(nearest, point) <= limit
+        }),
     }
 }
 

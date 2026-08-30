@@ -53,6 +53,35 @@ impl SceneItemSnapshot {
             height,
         ]
     }
+
+    /// Where a Canvas point falls inside the Source's own picture, in that
+    /// picture's own coordinates.
+    ///
+    /// The inverse of [`SceneItemSnapshot::canvas_rect`], which is what
+    /// drawing needs: the pointer names a place on the Canvas, and a stroke
+    /// has to be recorded where it lands on the Drawing so that moving or
+    /// resizing the item afterwards carries its marks along.
+    ///
+    /// Crop is undone as well as scale, so a point lands in the picture
+    /// rather than in the visible part of it. A zero-sized rectangle — which
+    /// `canvas_rect` cannot produce, since both extents are clamped — would
+    /// have no inverse, so this answers `None` rather than dividing by it.
+    pub fn canvas_point_to_source(
+        &self,
+        transform: Transform,
+        point: [f32; 2],
+    ) -> Option<[f32; 2]> {
+        let [x, y, width, height] = self.canvas_rect(transform);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let visible_width = (self.source_size[0] - self.crop.left - self.crop.right).max(1.0);
+        let visible_height = (self.source_size[1] - self.crop.top - self.crop.bottom).max(1.0);
+        Some([
+            self.crop.left + (point[0] - x) / width * visible_width,
+            self.crop.top + (point[1] - y) / height * visible_height,
+        ])
+    }
 }
 
 #[derive(Clone)]
@@ -67,4 +96,85 @@ pub struct SceneItemSnapshot {
     pub locked: bool,
     pub transform: Transform,
     pub crop: Crop,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{Crop, SourceKind, SourceSettings};
+
+    fn item(source_size: [f32; 2], crop: Crop) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            id: SceneItemId(1),
+            name: "Drawing".into(),
+            kind: SourceKind::Drawing,
+            settings: SourceSettings::None,
+            source_size,
+            transform: Transform::default(),
+            crop,
+            visible: true,
+            locked: false,
+        }
+    }
+
+    /// Drawing needs the exact inverse of the placement, not something close
+    /// to it: a stroke recorded through a mismatched mapping lands somewhere
+    /// other than the pointer, and the further from the middle the worse.
+    #[test]
+    fn a_canvas_point_maps_back_to_where_the_source_put_it() {
+        let item = item([1920.0, 1080.0], Crop::default());
+        for transform in [
+            Transform::default(),
+            Transform {
+                position: [300.0, 200.0],
+                scale: [0.5, 0.25],
+                ..Transform::default()
+            },
+            Transform {
+                position: [50.0, 900.0],
+                scale: [2.0, 1.5],
+                anchor: [0.0, 1.0],
+                ..Transform::default()
+            },
+        ] {
+            let [x, y, width, height] = item.canvas_rect(transform);
+            // The picture's own corners and middle, put on the Canvas by the
+            // placement and asked for back.
+            for (source, canvas) in [
+                ([0.0, 0.0], [x, y]),
+                ([1920.0, 1080.0], [x + width, y + height]),
+                ([960.0, 540.0], [x + width / 2.0, y + height / 2.0]),
+            ] {
+                let back = item
+                    .canvas_point_to_source(transform, canvas)
+                    .expect("a placed item has an inverse");
+                assert!(
+                    (back[0] - source[0]).abs() < 0.01 && (back[1] - source[1]).abs() < 0.01,
+                    "{canvas:?} should be {source:?} in the source, got {back:?}"
+                );
+            }
+        }
+    }
+
+    /// Crop shifts the picture under the rectangle, so undoing the placement
+    /// has to undo it too — otherwise drawing on a cropped source lands by
+    /// however much was cropped away.
+    #[test]
+    fn cropping_moves_where_a_canvas_point_lands() {
+        let crop = Crop {
+            left: 100.0,
+            top: 50.0,
+            right: 0.0,
+            bottom: 0.0,
+        };
+        let item = item([1920.0, 1080.0], crop);
+        let [x, y, ..] = item.canvas_rect(Transform::default());
+        let back = item
+            .canvas_point_to_source(Transform::default(), [x, y])
+            .expect("a placed item has an inverse");
+        assert!(
+            (back[0] - 100.0).abs() < 0.01 && (back[1] - 50.0).abs() < 0.01,
+            "the rectangle's corner is the first pixel left after cropping, got {back:?}"
+        );
+    }
 }

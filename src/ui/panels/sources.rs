@@ -33,6 +33,7 @@ enum AddSourceKind {
     DisplayCapture,
     #[default]
     Color,
+    Drawing,
 }
 
 pub(in crate::ui) fn show(
@@ -274,6 +275,16 @@ fn show_add_dialog(
                 if response.double_clicked() {
                     add_requested = true;
                 }
+
+                let drawing_label = i18n.text(TextKey::SourceKindDrawing);
+                let response =
+                    list_row(ui, &drawing_label, state.add_kind == AddSourceKind::Drawing);
+                if response.clicked() {
+                    state.add_kind = AddSourceKind::Drawing;
+                }
+                if response.double_clicked() {
+                    add_requested = true;
+                }
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -294,6 +305,14 @@ fn show_add_dialog(
                 if let Some(scene_id) = snapshot.scene_id {
                     actions.push(UiAction::Project(ProjectCommand::Source(
                         SourceCommand::AddColor(scene_id),
+                    )));
+                    state.select_new_item = true;
+                }
+            }
+            AddSourceKind::Drawing => {
+                if let Some(scene_id) = snapshot.scene_id {
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::AddDrawing(scene_id),
                     )));
                     state.select_new_item = true;
                 }

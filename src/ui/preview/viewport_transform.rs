@@ -28,6 +28,13 @@ impl ViewportTransform {
         )
     }
 
+    /// The inverse of [`ViewportTransform::canvas_to_screen`], for a gesture
+    /// that names a place rather than a movement — drawing, where every point
+    /// is its own position, unlike a drag where only the delta matters.
+    pub fn screen_to_canvas(self, point: egui::Pos2) -> egui::Pos2 {
+        ((point - self.viewport.min) / self.scale).to_pos2()
+    }
+
     pub fn screen_delta_to_canvas(self, delta: egui::Vec2) -> egui::Vec2 {
         delta / self.scale
     }
@@ -48,6 +55,28 @@ pub(super) fn fit_aspect_ratio(available: egui::Vec2, aspect_ratio: f32) -> egui
 
 #[cfg(test)]
 mod tests {
+    /// A point converted out and back is the point it started as, which is
+    /// what drawing needs: a stroke is a list of positions, and one that
+    /// drifted by a scale factor would land somewhere other than the pointer.
+    #[test]
+    fn a_canvas_point_survives_the_round_trip_to_the_screen() {
+        let viewport = ViewportTransform::new(
+            egui::Rect::from_min_size(egui::pos2(40.0, 25.0), egui::vec2(960.0, 540.0)),
+            SceneCanvas::DEFAULT,
+        );
+        for point in [
+            egui::pos2(0.0, 0.0),
+            egui::pos2(1920.0, 1080.0),
+            egui::pos2(733.5, 219.25),
+        ] {
+            let round_trip = viewport.screen_to_canvas(viewport.canvas_to_screen(point));
+            assert!(
+                (round_trip - point).length() < 0.01,
+                "{point:?} came back as {round_trip:?}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
