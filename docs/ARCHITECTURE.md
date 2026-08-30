@@ -146,6 +146,28 @@ Nothing else is polled this way. A display does not close, and a capture shared 
 
 Switching Scenes stops a Source rather than closing it, so returning is a resume and not another portal round trip. Only a SceneItem the project no longer holds anywhere is closed, which is why the snapshot carries every item and not just the shown Scene's.
 
+## One instance
+
+Two copies would open the same project database and write the same log, and
+each would open its own captures — one desktop duplicated twice, two claims on
+the same audio endpoints, two compositors on one GPU. So the first thing
+`main` does, before any file of its own is opened, is claim a lock in the data
+directory; a launch that cannot have it raises the running window and stops.
+
+The claim is a file *held open* rather than a flag written into one: the
+operating system releases a handle however the process ended, a crash
+included, where a flag has to be cleared by whoever stopped running. Windows
+needs no lock call for this — a handle opened for writing while sharing only
+reads refuses every later writer, which is the claim itself — and Linux takes
+a `flock`. The file's contents are only the process id, so the launch being
+turned away can find the window to raise; a wrong or missing id costs that
+raise and nothing else.
+
+Raising is written for Windows and deliberately not guessed at for Linux: it
+is `_NET_ACTIVE_WINDOW` under X11 and something a Wayland compositor may
+refuse outright, focus-stealing being what that protocol is designed to
+prevent. There, a second launch says so on stderr and stops.
+
 ## The Properties dock
 
 What the selected SceneItem is, as it currently stands: name and kind, its place and size on the Canvas, whether it is visible and locked, and then whatever its kind has to say — the monitor and its rectangle in the virtual desktop, a window's program and title, a Drawing's stroke count, a Color's colour.

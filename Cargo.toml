@@ -66,6 +66,9 @@ ashpd = { version = "0.13.13", default-features = false, features = [
     "async-io",
     "screencast",
 ] }
+# `flock`, for the single-instance lock. Already in the tree through several
+# dependencies; named here because `instance::platform` calls it directly.
+libc = "0.2"
 libloading = "0.8.9"
 # Drives the portal handshake to completion on the picker's own thread. The
 # same thing `media-pp` uses, and the reason no async runtime has to be

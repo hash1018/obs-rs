@@ -33,6 +33,8 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
   source's colour is edited there.
 - **A workspace that stays put.** Docks can be moved, resized and closed, and
   where they were is remembered along with the window and the Preview's zoom.
+  Launching obs-rs while it is already running brings that window forward
+  rather than opening a second one.
 - **English and Korean**, chosen from `View → Language`.
 
 ## Using it

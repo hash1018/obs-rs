@@ -16,6 +16,7 @@ mod capture;
 mod domain;
 mod engine;
 mod i18n;
+mod instance;
 mod paths;
 mod persistence;
 mod project;
@@ -29,6 +30,21 @@ use eframe::egui;
 use app::ObsApp;
 
 fn main() -> eframe::Result {
+    // Before anything opens a file of its own. Two instances would write one
+    // log and one project database between them, so the second is turned away
+    // ahead of both — see `instance`.
+    let _instance = match instance::claim() {
+        instance::Claim::Ours(instance) => instance,
+        instance::Claim::Taken { pid } => {
+            // The user asked for obs-rs and there is one. Showing it is what
+            // they meant; saying nothing at all would read as a failed launch.
+            if !pid.is_some_and(instance::raise) {
+                eprintln!("obs-rs is already running");
+            }
+            return Ok(());
+        }
+    };
+
     // Held for the whole process: dropping it stops `media-pp`'s file logger.
     let _log = start_media_pp_log();
 
