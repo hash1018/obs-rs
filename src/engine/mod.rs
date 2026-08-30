@@ -677,6 +677,7 @@ fn start_recording(
         // platforms, which this is; UTC is then a worse name rather than no
         // recording.
         OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
+        settings.format,
     );
     let running = recording::Recording::start(
         backend,

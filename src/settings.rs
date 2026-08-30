@@ -216,6 +216,25 @@ pub struct RecordingSettings {
     pub audio_bit_rate_kbps: u32,
     /// Seconds between keyframes.
     pub keyframe_seconds: u32,
+    /// Which container the file is written into.
+    ///
+    /// A recording setting rather than a video one: it changes nothing the
+    /// compositor does, only what the next file's header is.
+    pub format: RecordingFormat,
+    /// Whether one recording is cut into several files, and by what.
+    ///
+    /// Ignored for [`RecordingFormat::Hls`], which segments on its own terms
+    /// — see [`RecordingFormat::segments_itself`].
+    pub split: RecordingSplit,
+    /// Minutes per file for [`RecordingSplit::Time`].
+    pub split_minutes: u32,
+    /// Megabytes per file for [`RecordingSplit::Size`].
+    ///
+    /// A floor, not a cap: the cut happens at the first keyframe past it, so
+    /// a file runs over by up to one GOP. A hard limit would mean cutting
+    /// mid-GOP, and a segment that does not start at a keyframe is one no
+    /// player can open on its own.
+    pub split_megabytes: u32,
 }
 
 impl Default for RecordingSettings {
@@ -229,6 +248,10 @@ impl Default for RecordingSettings {
             audio_codec: RecordingAudioCodec::default(),
             audio_bit_rate_kbps: DEFAULT_AUDIO_BIT_RATE_KBPS,
             keyframe_seconds: DEFAULT_KEYFRAME_SECONDS,
+            format: RecordingFormat::default(),
+            split: RecordingSplit::default(),
+            split_minutes: DEFAULT_SPLIT_MINUTES,
+            split_megabytes: DEFAULT_SPLIT_MEGABYTES,
             output_height: 0,
         }
     }
@@ -426,6 +449,105 @@ pub const BIT_RATE_MBPS_RANGE: std::ops::RangeInclusive<u32> = 1..=200;
 /// far from where it aimed.
 pub const KEYFRAME_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 1..=10;
 
+/// Which container a recording is written into.
+///
+/// One `media-pp` element writes all three: `FileMuxer` asks FFmpeg to guess
+/// a muxer from the file name, so the choice here is very nearly a choice of
+/// extension. HLS is the exception — it is a playlist and a directory of
+/// segments rather than a file, and a different element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingFormat {
+    /// The default, and the one every player and editor takes. Its weakness
+    /// is that it is finalized at the end: a recording that dies with the
+    /// application leaves an unplayable file.
+    #[default]
+    Mp4,
+    /// Matroska. Worth offering for exactly the weakness above — a `.mkv`
+    /// that was never finalized still plays up to where it stopped, which is
+    /// why OBS recommends it for long recordings.
+    Mkv,
+    /// An HLS playlist and its segments, in a directory of their own. Not a
+    /// convenience for playback but for what a recording can be handed to:
+    /// it is servable as-is, and every completed segment is on disk before
+    /// the recording ends.
+    Hls,
+}
+
+impl RecordingFormat {
+    /// In the order the dialog lists them.
+    pub const ALL: [Self; 3] = [Self::Mp4, Self::Mkv, Self::Hls];
+
+    /// What the recording's own path ends in. For HLS that is the playlist's,
+    /// not a segment's.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Mp4 => "mp4",
+            Self::Mkv => "mkv",
+            Self::Hls => "m3u8",
+        }
+    }
+
+    /// Whether this format writes more than one file even when nothing asked
+    /// it to, and therefore wants a directory to itself.
+    ///
+    /// Also what makes [`RecordingSettings::split`] meaningless here: HLS
+    /// already cuts on its own target duration, and a second policy cutting
+    /// the same stream would be two muxers arguing about one keyframe.
+    pub fn segments_itself(self) -> bool {
+        matches!(self, Self::Hls)
+    }
+
+    /// What to call it in a list.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Mp4 => "MP4 (.mp4)",
+            Self::Mkv => "Matroska (.mkv)",
+            Self::Hls => "HLS (.m3u8)",
+        }
+    }
+}
+
+/// What cuts one recording into several files.
+///
+/// The cut always lands on a keyframe, whichever of these asked for it, so
+/// every file opens on its own. Which means a file runs past the figure
+/// rather than stopping at it — see [`RecordingSettings::split_megabytes`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingSplit {
+    /// One file, however long the recording runs.
+    #[default]
+    Off,
+    /// A new file every [`RecordingSettings::split_minutes`].
+    Time,
+    /// A new file every [`RecordingSettings::split_megabytes`].
+    Size,
+}
+
+impl RecordingSplit {
+    /// In the order the dialog lists them.
+    pub const ALL: [Self; 3] = [Self::Off, Self::Time, Self::Size];
+}
+
+/// Long enough that a normal recording is still one file, short enough that
+/// splitting on time is doing something.
+pub const DEFAULT_SPLIT_MINUTES: u32 = 15;
+
+/// A quarter-hour at the default bit rate lands near here, so the two
+/// defaults cut at roughly the same place.
+pub const DEFAULT_SPLIT_MEGABYTES: u32 = 1_024;
+
+/// A minute at the bottom because a keyframe every two seconds makes anything
+/// shorter mostly keyframes; twelve hours at the top because that is past any
+/// recording this is the right tool for.
+pub const SPLIT_MINUTES_RANGE: std::ops::RangeInclusive<u32> = 1..=720;
+
+/// The floor is one GOP's worth at any sane bit rate — below it the keyframe
+/// wait, not the figure, is what decides the size. The ceiling is FAT32's
+/// file limit, which is the practical reason to split by size at all.
+pub const SPLIT_MEGABYTES_RANGE: std::ops::RangeInclusive<u32> = 50..=4_096;
+
 impl RecordingSettings {
     /// Where recordings actually go: the configured directory, or the
     /// platform's own when none was set.
@@ -487,6 +609,35 @@ impl RecordingSettings {
             *KEYFRAME_SECONDS_RANGE.start(),
             *KEYFRAME_SECONDS_RANGE.end(),
         )
+    }
+
+    /// Which split policy is actually in force, which is none at all for a
+    /// format that segments itself.
+    ///
+    /// Asked here rather than at each call site so the dialog and the
+    /// recording cannot disagree about whether HLS is being split — the
+    /// dialog greys the control out, and this is what makes that true.
+    pub fn effective_split(&self) -> RecordingSplit {
+        if self.format.segments_itself() {
+            RecordingSplit::Off
+        } else {
+            self.split
+        }
+    }
+
+    /// As above, clamped so a hand-edited settings file cannot ask for a
+    /// segment shorter than its own keyframe interval.
+    pub fn split_minutes_clamped(&self) -> u32 {
+        self.split_minutes
+            .clamp(*SPLIT_MINUTES_RANGE.start(), *SPLIT_MINUTES_RANGE.end())
+    }
+
+    /// As above, in bytes — which is what a segment policy counts.
+    pub fn split_bytes(&self) -> u64 {
+        let megabytes = self
+            .split_megabytes
+            .clamp(*SPLIT_MEGABYTES_RANGE.start(), *SPLIT_MEGABYTES_RANGE.end());
+        megabytes as u64 * 1_024 * 1_024
     }
 }
 

@@ -6,13 +6,13 @@
 //! which the [`Backend`] owns and which is platform-specific down to its
 //! frame format; the audio comes from the mixer's `Tee`, which
 //! [`crate::engine::audio`] owns and which is the same on every platform.
-//! Neither can build the file, because an mp4's tracks are fixed before its
+//! Neither can build the file, because a container's tracks are fixed before its
 //! header is written — so *both* encoders have to exist, and have to be
 //! described to the muxer, before a single frame is written to either.
 //!
 //! ```text
 //! compositor Tee ─ Queue ─ PauseGate ─ [FrameRateLimiter] ─ H.264 ─ Origin ─┐
-//!                                                                           ├─ Mp4Muxer
+//!                                                                           ├─ muxer
 //!     mixer Tee ─── Queue ─ PauseGate ─────────────────────── AAC ─ Origin ─┘
 //! ```
 //!
@@ -41,10 +41,13 @@
 //! per recording, from what is actually running.
 
 use std::path::Path;
+use std::time::Duration;
 
 use media_pp::{
+    element::Sink,
     elements::{
-        AudioCodec, MixFormat, MixerHandle, Mp4Muxer, PauseGate, PauseGateHandle, SwAudioEncoder,
+        AudioCodec, FileMuxer, HlsMode, HlsMuxer, HlsOptions, HlsSegmentFormat, MixFormat,
+        MixerHandle, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer, SwAudioEncoder,
         SwAudioEncoderOptions, TeeHandle, TimestampOrigin,
     },
     ffmpeg,
@@ -57,7 +60,7 @@ use super::backend::{
     Backend, BackendError, PreparedRecording, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
     VideoTrack,
 };
-use crate::settings::{DEFAULT_AUDIO_BIT_RATE_KBPS, RecordingAudioCodec};
+use crate::settings::{DEFAULT_AUDIO_BIT_RATE_KBPS, RecordingAudioCodec, RecordingSplit};
 
 /// Which audio codecs this FFmpeg build can actually open, at the mix format
 /// the encoder would be given.
@@ -96,6 +99,100 @@ fn media_codec(codec: RecordingAudioCodec) -> AudioCodec {
         RecordingAudioCodec::Opus => AudioCodec::Opus,
     }
 }
+
+/// One track, as every muxer here wants to be told about it.
+///
+/// The three take the same `add_stream(name, parameters, time_base)`, so the
+/// tracks are described once and the choice below is only about which muxer
+/// hears them.
+struct TrackDef {
+    name: &'static str,
+    parameters: ffmpeg::codec::Parameters,
+    time_base: ffmpeg::Rational,
+}
+
+/// Opens whichever muxer the settings ask for, into one [`Sink`] per track in
+/// the order `tracks` gave them.
+///
+/// Three cases, and the container is only one of them: `.mp4` and `.mkv` are
+/// the same [`FileMuxer`] told a different path — FFmpeg guesses the muxer
+/// from the file name — so what actually branches here is whether anything
+/// cuts the recording into more than one file, and who does the cutting.
+fn open_muxer(
+    path: &Path,
+    settings: &crate::settings::RecordingSettings,
+    tracks: Vec<TrackDef>,
+) -> Result<Vec<Box<dyn Sink>>, BackendError> {
+    let split = settings.effective_split();
+    if settings.format.segments_itself() {
+        return open_hls_muxer(path, tracks);
+    }
+    let policy = match split {
+        RecordingSplit::Off => None,
+        RecordingSplit::Time => Some(SegmentPolicy::Duration(Duration::from_secs(
+            settings.split_minutes_clamped() as u64 * 60,
+        ))),
+        RecordingSplit::Size => Some(SegmentPolicy::Size(settings.split_bytes())),
+    };
+    let Some(policy) = policy else {
+        let mut muxer = FileMuxer::create(path)?;
+        for track in tracks {
+            muxer.add_stream(track.name, track.parameters, track.time_base)?;
+        }
+        return Ok(muxer.open()?);
+    };
+
+    // `path` named the recording; each segment is that name with its index
+    // before the extension, so a listing keeps them together and in order.
+    // Three digits because a thousand segments of the shortest split this
+    // offers is more than ten days of recording.
+    let directory = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let extension = settings.format.extension().to_owned();
+    let mut muxer = SegmentedFileMuxer::create(policy, move |index| {
+        directory.join(format!("{stem}_{index:03}.{extension}"))
+    });
+    for track in tracks {
+        muxer.add_stream(track.name, track.parameters, track.time_base);
+    }
+    Ok(muxer.open()?)
+}
+
+/// The HLS case: a playlist at `path` and its segments beside it.
+///
+/// [`HlsMode::Vod`] rather than a live window, because this is a recording:
+/// a sliding window would delete the beginning of it while the end was still
+/// being written. fMP4 segments rather than MPEG-TS for the audio's sake —
+/// Opus is one of the codecs this application offers, and TS carries it
+/// badly where fMP4 carries it as readily as AAC.
+///
+/// The segment length is fixed rather than settable. Six seconds is what
+/// Apple's own guidance asks for, and this is a recording format here rather
+/// than a delivery one — nothing in this application is tuning latency
+/// against segment count.
+fn open_hls_muxer(path: &Path, tracks: Vec<TrackDef>) -> Result<Vec<Box<dyn Sink>>, BackendError> {
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let mut muxer = HlsMuxer::create(HlsOptions {
+        playlist_path: path.to_path_buf(),
+        segment_pattern: directory.join("segment_%05d.m4s"),
+        segment_duration: HLS_SEGMENT_DURATION,
+        mode: HlsMode::Vod,
+        segment_format: HlsSegmentFormat::Fmp4,
+        init_filename: String::from("init.mp4"),
+        base_url: None,
+    })?;
+    for track in tracks {
+        muxer.add_stream(track.name, track.parameters, track.time_base)?;
+    }
+    Ok(muxer.open()?)
+}
+
+/// See [`open_hls_muxer`] for why this is a constant.
+const HLS_SEGMENT_DURATION: Duration = Duration::from_secs(6);
 
 /// A recording that is running, and everything needed to end it.
 pub(super) struct Recording {
@@ -161,12 +258,19 @@ impl Recording {
             .transpose()?;
 
         // The tracks, in the order their sinks come back.
-        let mut muxer = Mp4Muxer::create(path)?;
-        muxer.add_stream("video", video.parameters(), video.time_base())?;
+        let mut tracks = vec![TrackDef {
+            name: "video",
+            parameters: video.parameters(),
+            time_base: video.time_base(),
+        }];
         if let Some((_, encoder)) = &audio {
-            muxer.add_stream("audio", encoder.parameters(), audio_time_base)?;
+            tracks.push(TrackDef {
+                name: "audio",
+                parameters: encoder.parameters(),
+                time_base: audio_time_base,
+            });
         }
-        let mut sinks = muxer.open()?;
+        let mut sinks = open_muxer(path, settings, tracks)?;
         // Taken from the front, so each sink is the stream added at that
         // index — `add_stream` order is what `open` answers in.
         if sinks.is_empty() {

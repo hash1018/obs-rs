@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use time::OffsetDateTime;
 
+use crate::settings::RecordingFormat;
+
 /// The directory name both trees hang under.
 /// Also the default prefix a recording is named with — see
 /// [`crate::settings::RecordingSettings::prefix_or_default`].
@@ -34,7 +36,13 @@ pub fn recordings_dir() -> PathBuf {
     videos_dir().join(APPLICATION)
 }
 
-/// One recording's full path, named for the moment it started.
+/// One recording's own path, named for the moment it started.
+///
+/// For a format that is a single file, that path *is* the file. For one
+/// that segments itself — HLS, which writes a playlist and a directory of
+/// media segments — it is the playlist, inside a directory of its own: a
+/// recording that scatters two hundred segment files beside the user's other
+/// videos is one they cannot find the rest of.
 ///
 /// `started` is a parameter rather than read in here so the naming can be
 /// asserted against a fixed instant instead of whatever the clock says
@@ -43,11 +51,22 @@ pub fn recordings_dir() -> PathBuf {
 /// The timestamp is not part of what a caller chooses. It is what keeps two
 /// recordings from colliding, and a name a user could strip it from would
 /// make the second one overwrite the first.
-pub fn recording_file_in(directory: &Path, prefix: &str, started: OffsetDateTime) -> PathBuf {
+pub fn recording_file_in(
+    directory: &Path,
+    prefix: &str,
+    started: OffsetDateTime,
+    format: RecordingFormat,
+) -> PathBuf {
     let stamp = started
         .format(STAMP)
         .unwrap_or_else(|_| String::from("unknown"));
-    directory.join(format!("{prefix}-{stamp}.mp4"))
+    let name = format!("{prefix}-{stamp}");
+    let extension = format.extension();
+    if format.segments_itself() {
+        directory.join(&name).join(format!("{name}.{extension}"))
+    } else {
+        directory.join(format!("{name}.{extension}"))
+    }
 }
 
 /// Sortable, and legal on every filesystem this runs on — which rules out
@@ -155,7 +174,12 @@ mod tests {
     fn a_recording_is_named_for_when_it_started() {
         let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
 
-        let file = recording_file_in(&recordings_dir(), APPLICATION, started);
+        let file = recording_file_in(
+            &recordings_dir(),
+            APPLICATION,
+            started,
+            RecordingFormat::Mp4,
+        );
 
         assert_eq!(
             file.file_name().unwrap(),
@@ -172,8 +196,51 @@ mod tests {
     fn a_chosen_prefix_and_directory_are_both_used() {
         let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
 
-        let file = recording_file_in(Path::new("/tmp/clips"), "demo", started);
+        let file = recording_file_in(
+            Path::new("/tmp/clips"),
+            "demo",
+            started,
+            RecordingFormat::Mp4,
+        );
 
         assert_eq!(file, Path::new("/tmp/clips/demo-2026-08-29-143005.mp4"));
+    }
+
+    /// The extension is the format's, and nothing else about the name moves
+    /// with it.
+    #[test]
+    fn the_format_chooses_the_extension() {
+        let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
+
+        let file = recording_file_in(
+            Path::new("/tmp/clips"),
+            "demo",
+            started,
+            RecordingFormat::Mkv,
+        );
+
+        assert_eq!(file, Path::new("/tmp/clips/demo-2026-08-29-143005.mkv"));
+    }
+
+    /// HLS gets a directory of its own, because it writes a playlist and
+    /// every segment beside it — all of which would otherwise land in the
+    /// same folder as the user's finished recordings.
+    #[test]
+    fn hls_puts_its_playlist_in_a_directory_of_its_own() {
+        let started = time::macros::datetime!(2026-08-29 14:30:05 +09:00);
+
+        let file = recording_file_in(
+            Path::new("/tmp/clips"),
+            "demo",
+            started,
+            RecordingFormat::Hls,
+        );
+
+        assert_eq!(
+            file,
+            Path::new("/tmp/clips/demo-2026-08-29-143005/demo-2026-08-29-143005.m3u8"),
+            "the playlist is named for the recording and sits in a folder \
+             of the same name, so the segments beside it stay together"
+        );
     }
 }

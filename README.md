@@ -98,6 +98,14 @@ The Preview branch is not allowed to set the compositor's pace. It sits behind a
 
 Switching Scenes stops a Source rather than closing it, so returning is a resume and not another portal round trip. Only a SceneItem the project no longer holds anywhere is closed, which is why the snapshot carries every item and not just the shown Scene's.
 
+## Recording output
+
+The container is chosen on the Recording page and is very nearly a choice of extension: `media-pp`'s `FileMuxer` asks FFmpeg to guess a muxer from the file name, so MP4 and Matroska are the same element told a different path. Matroska is worth choosing for a long recording — MP4 is finalized in its trailer, so a session that dies with the application leaves an unplayable file, where a `.mkv` plays up to where it stopped.
+
+HLS is the third option and a different element. It writes a VOD playlist and fMP4 segments into a directory named for the recording, so a session is servable as it stands and every completed segment is on disk before the recording ends. fMP4 rather than MPEG-TS because Opus is one of the audio encoders offered here, and TS carries it badly.
+
+One recording can also be cut into several files, by elapsed time or by bytes written. Either way the cut lands on the next keyframe rather than on the figure itself, so every file opens on its own — which means a file runs past what was asked for by up to one GOP. Splitting is disabled for HLS, which is already segmenting on its own target duration.
+
 ## Status bar
 
 CPU is this process's share of total machine capacity. GPU prefers a per-process figure and falls back to whole-adapter usage, marked with a trailing `*`, when the platform offers no per-process counter — NVIDIA's Linux driver exposes neither `drm-engine-*` fdinfo nor working per-process NVML samples on GeForce parts, so a device figure is all that exists there. Hovering the reading names its scope.

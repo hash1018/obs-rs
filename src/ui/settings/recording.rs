@@ -11,7 +11,8 @@ use time::OffsetDateTime;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{
     AUDIO_BIT_RATE_KBPS_RANGE, AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE,
-    RecordingAudioCodec, RecordingEncoder,
+    RecordingAudioCodec, RecordingEncoder, RecordingFormat, RecordingSplit, SPLIT_MEGABYTES_RANGE,
+    SPLIT_MINUTES_RANGE,
 };
 
 /// Room for "Browse…" in either language, fixed so the field beside it does
@@ -95,6 +96,66 @@ pub(super) fn show(
                 egui::TextEdit::singleline(&mut draft.recording.name_prefix)
                     .desired_width(f32::INFINITY),
             );
+            ui.end_row();
+
+            // Above the example rather than below it, because it is what
+            // decides the extension the example ends in — and, for HLS, that
+            // the example is a playlist inside a folder of its own.
+            ui.label(i18n.text(TextKey::SettingsRecordingFormat));
+            egui::ComboBox::from_id_salt("settings_recording_format")
+                .selected_text(draft.recording.format.label())
+                .show_ui(ui, |ui| {
+                    for format in RecordingFormat::ALL {
+                        ui.selectable_value(&mut draft.recording.format, format, format.label());
+                    }
+                });
+            ui.end_row();
+
+            ui.label(i18n.text(TextKey::SettingsRecordingSplit));
+            // Disabled for a format that segments itself, which is what
+            // `effective_split` already decides for the recording — the
+            // control is greyed so the two cannot appear to disagree.
+            let splittable = !draft.recording.format.segments_itself();
+            ui.add_enabled_ui(splittable, |ui| {
+                ui.horizontal(|ui| {
+                    let combo = egui::ComboBox::from_id_salt("settings_recording_split")
+                        .selected_text(i18n.text(split_key(draft.recording.split)))
+                        .show_ui(ui, |ui| {
+                            for split in RecordingSplit::ALL {
+                                ui.selectable_value(
+                                    &mut draft.recording.split,
+                                    split,
+                                    i18n.text(split_key(split)),
+                                );
+                            }
+                        });
+                    if !splittable {
+                        combo
+                            .response
+                            .on_disabled_hover_text(i18n.text(TextKey::SettingsRecordingSplitHls));
+                    }
+                    // Only the figure the chosen policy actually reads. Two
+                    // fields, one of which does nothing, is two things to
+                    // check when a recording split somewhere unexpected.
+                    match draft.recording.split {
+                        RecordingSplit::Off => {}
+                        RecordingSplit::Time => {
+                            ui.add(
+                                egui::DragValue::new(&mut draft.recording.split_minutes)
+                                    .range(SPLIT_MINUTES_RANGE)
+                                    .suffix(" min"),
+                            );
+                        }
+                        RecordingSplit::Size => {
+                            ui.add(
+                                egui::DragValue::new(&mut draft.recording.split_megabytes)
+                                    .range(SPLIT_MEGABYTES_RANGE)
+                                    .suffix(" MB"),
+                            );
+                        }
+                    }
+                });
+            });
             ui.end_row();
 
             // What the two fields above actually produce. A prefix and a
@@ -209,7 +270,17 @@ fn example_path(settings: &crate::settings::RecordingSettings) -> String {
         &settings.directory_or_default(),
         settings.prefix_or_default(),
         started,
+        settings.format,
     )
     .display()
     .to_string()
+}
+
+/// What to call a split policy in the list.
+fn split_key(split: RecordingSplit) -> TextKey {
+    match split {
+        RecordingSplit::Off => TextKey::SettingsRecordingSplitOff,
+        RecordingSplit::Time => TextKey::SettingsRecordingSplitTime,
+        RecordingSplit::Size => TextKey::SettingsRecordingSplitSize,
+    }
 }
