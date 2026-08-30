@@ -184,6 +184,9 @@ fn handle_source_command(
         SourceCommand::SetTransform(scene_item_id, transform) => {
             SourceStore::set_transform(transaction, scene_item_id, transform)
         }
+        SourceCommand::SetColor(scene_item_id, rgba) => {
+            SourceStore::set_color(transaction, scene_item_id, rgba)
+        }
     })
 }
 

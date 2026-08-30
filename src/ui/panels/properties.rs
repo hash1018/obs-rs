@@ -20,10 +20,13 @@
 
 use eframe::egui;
 
+use crate::domain::SceneItemId;
 use crate::domain::{DisplayCaptureTarget, SourceKind, SourceSettings};
 use crate::i18n::{LocalizationManager, TextKey};
+use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
+use super::super::UiAction;
 use super::super::editor::SceneEditorState;
 
 pub(in crate::ui) fn show(
@@ -31,6 +34,7 @@ pub(in crate::ui) fn show(
     editor: &SceneEditorState,
     snapshot: &SourcesSnapshot,
     i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
 ) {
     let Some(item) = editor
         .selected_item_id()
@@ -52,7 +56,7 @@ pub(in crate::ui) fn show(
                     i18n.text(kind_key(item.kind)).as_ref(),
                 );
                 show_placement(ui, item, editor, i18n);
-                show_settings(ui, item, i18n);
+                show_settings(ui, item, i18n, actions);
             });
     });
 }
@@ -101,26 +105,18 @@ fn show_placement(
 }
 
 /// What only this kind of Source has to say.
-fn show_settings(ui: &mut egui::Ui, item: &SceneItemSnapshot, i18n: &LocalizationManager) {
+fn show_settings(
+    ui: &mut egui::Ui,
+    item: &SceneItemSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
     match &item.settings {
         SourceSettings::Color(settings) => {
-            ui.label(i18n.text(TextKey::PropertiesColour));
-            ui.horizontal(|ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                ui.painter().rect_filled(
-                    rect,
-                    2.0,
-                    egui::Color32::from_rgb(settings.rgba[0], settings.rgba[1], settings.rgba[2]),
-                );
-                ui.monospace(format!(
-                    "#{:02X}{:02X}{:02X}",
-                    settings.rgba[0], settings.rgba[1], settings.rgba[2]
-                ));
-            });
-            ui.end_row();
+            show_colour(ui, item.id, settings.rgba, i18n, actions);
             // The alpha is the layer's opacity rather than something in the
-            // pixels — see `layer_for` — so it is reported as one.
+            // pixels — see `layer_for` — so it is reported as one, and the
+            // picker above edits only the three that are.
             row(
                 ui,
                 i18n.text(TextKey::PropertiesOpacity).as_ref(),
@@ -172,6 +168,49 @@ fn show_settings(ui: &mut egui::Ui, item: &SceneItemSnapshot, i18n: &Localizatio
         },
         SourceSettings::None => {}
     }
+}
+
+/// The one thing here that is not read-only.
+///
+/// Split the way every other gesture in this application is: what is
+/// composited follows the pointer, and the project is told once, when the
+/// pointer comes up. A picker dragged across its square changes on every
+/// frame, and a database write per frame is what this split exists to avoid.
+///
+/// The alpha is left alone. It is the layer's opacity rather than anything in
+/// the pixels — see `layer_for` — so editing it here would be editing a
+/// different thing under the same name, and it is reported on its own row.
+fn show_colour(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: [u8; 4],
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.label(i18n.text(TextKey::PropertiesColour));
+    ui.horizontal(|ui| {
+        let mut rgb = [stored[0], stored[1], stored[2]];
+        let picker = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
+        let rgba = [rgb[0], rgb[1], rgb[2], stored[3]];
+
+        if rgba != stored {
+            // What is composited follows every change; the project hears
+            // one. `changed` fires per frame while a swatch is dragged, so
+            // the release is what stands in for the `drag_stopped` a fader
+            // has — and a change with the pointer already up is a preset
+            // being clicked.
+            actions.push(UiAction::DragSourceColour(item, rgba));
+            let released = ui.input(|input| input.pointer.any_released());
+            let held = ui.input(|input| input.pointer.any_down());
+            if released || (picker.changed() && !held) {
+                actions.push(UiAction::Project(ProjectCommand::Source(
+                    SourceCommand::SetColor(item, rgba),
+                )));
+            }
+        }
+        ui.monospace(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2]));
+    });
+    ui.end_row();
 }
 
 /// Where this display is and how big it is, as one rectangle, read now rather

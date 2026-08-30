@@ -422,6 +422,29 @@ impl SourceStore {
         Ok(())
     }
 
+    /// Repaints a Color Source.
+    ///
+    /// Keyed by the SceneItem the caller has in hand rather than by the
+    /// Source, the same way every other command here is: which Source an item
+    /// stands for is this store's to resolve, not each caller's. Two items on
+    /// one Color Source therefore change together, which is what sharing a
+    /// Source means.
+    pub(crate) fn set_color(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        rgba: [u8; 4],
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE color_source_settings
+                SET red = ?2, green = ?3, blue = ?4, alpha = ?5
+              WHERE source_id = (
+                  SELECT source_id FROM scene_items WHERE id = ?1
+              )",
+            params![scene_item_id.0, rgba[0], rgba[1], rgba[2], rgba[3]],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_visible(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,

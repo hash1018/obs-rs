@@ -17,6 +17,10 @@ pub enum UiAction {
     /// reason `DragSceneItem` exists: the mark has to be under the pointer,
     /// and the stroke is recorded once when the gesture ends.
     DrawStrokes(SceneItemId, Vec<crate::domain::Stroke>),
+    /// A Color Source.s colour while the picker is still held, for the same
+    /// reason `DragSceneItem` exists: the picture has to follow the pointer,
+    /// and the repaint is recorded once when it is let go.
+    DragSourceColour(SceneItemId, [u8; 4]),
     /// One source's gain while the fader is still held. Goes to the audio
     /// graph and not to the project, for the same reason `DragSceneItem`
     /// does: what is heard has to follow the pointer, and the edit is

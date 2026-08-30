@@ -51,6 +51,9 @@ pub enum SourceCommand {
     /// what the eraser does and what undo does.
     RemoveStrokes(SceneItemId, Vec<usize>),
     ClearStrokes(SceneItemId),
+    /// Repaints a Color Source. Sent when the picker is let go, not while it
+    /// is being dragged — see `UiAction::DragSourceColour`.
+    SetColor(SceneItemId, [u8; 4]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

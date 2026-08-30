@@ -296,6 +296,7 @@ fn show_panel(
                 content.editor,
                 &content.snapshots.sources,
                 content.i18n,
+                content.actions,
             );
         }
     }

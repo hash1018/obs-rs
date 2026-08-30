@@ -81,6 +81,10 @@ enum EngineCommand {
     /// until the pointer comes up. Carries the whole list rather than the one
     /// new stroke, because rasterizing is done from the list either way.
     Drawing(SceneItemId, Vec<crate::domain::Stroke>),
+    /// A Color Source.s colour while the picker is still held, for the same
+    /// reason `Drawing` exists: the picture has to follow the pointer, and
+    /// the project is told once when it is let go.
+    Colour(SceneItemId, [u8; 4]),
     /// Whether anyone is looking at the Preview — a minimised window is
     /// nobody, and the frame then has nowhere worth going.
     PreviewVisible(bool),
@@ -301,6 +305,12 @@ impl EngineManager {
     /// made — because that is what a redraw is built from either way.
     pub fn set_drawing_strokes(&self, item: SceneItemId, strokes: Vec<crate::domain::Stroke>) {
         let _ = self.commands.send(EngineCommand::Drawing(item, strokes));
+    }
+
+    /// Repaints a Color Source while its picker is still held, for the same
+    /// reason [`Self::set_drawing_strokes`] exists.
+    pub fn set_source_colour(&self, item: SceneItemId, rgba: [u8; 4]) {
+        let _ = self.commands.send(EngineCommand::Colour(item, rgba));
     }
 
     /// Moves one layer while the pointer is still down.
@@ -563,6 +573,12 @@ fn apply_command(
         EngineCommand::Drawing(item_id, strokes) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
                 push_content(source, PushedContent::Drawing(strokes));
+            }
+            false
+        }
+        EngineCommand::Colour(item_id, rgba) => {
+            if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
+                push_content(source, PushedContent::Color(rgba));
             }
             false
         }

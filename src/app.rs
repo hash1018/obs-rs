@@ -478,6 +478,11 @@ impl ObsApp {
                     engine.set_drawing_strokes(item_id, strokes);
                 }
             }
+            UiAction::DragSourceColour(item_id, rgba) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_source_colour(item_id, rgba);
+                }
+            }
             UiAction::DragSceneItem(item_id, transform) => {
                 if let Some(engine) = &self.engine {
                     engine.set_dragging_transform(item_id, transform);
