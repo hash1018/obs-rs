@@ -36,12 +36,41 @@ pub(super) fn show(
         )
         .show(ui, |ui| {
             let available_rect = ui.available_rect_before_wrap();
+            // A Drawing brings its own tools, and only while it is the thing
+            // selected: they are what says "this is what you are editing", and
+            // the toolbar goes back to its resting width the moment it is not.
+            //
+            // Asked before anything is placed because the band under the
+            // picture is sized from it — a toolbar that has to scroll is a
+            // scrollbar taller than one that does not.
+            let drawing = editor.selected_item_id().and_then(|item_id| {
+                snapshot
+                    .items
+                    .iter()
+                    .find(|item| item.id == item_id)
+                    .and_then(|item| match &item.settings {
+                        SourceSettings::Drawing(drawing) => Some((item_id, drawing.strokes.len())),
+                        _ => None,
+                    })
+            });
+            // Solid rather than egui's default floating bar. A floating one
+            // allocates no space and is two pixels wide until it is hovered,
+            // which is no answer at all to a button you cannot reach — the
+            // whole point here is that the bar is visible enough to grab.
+            let scroll_style = egui::style::ScrollStyle::solid();
+            let band = toolbar_band(
+                available_rect.width(),
+                drawing.is_some(),
+                scroll_style.allocated_width(),
+            );
+            let toolbar_height = band.height;
+
             // How large the picture may get. The toolbar's band is taken off
             // the bottom here so that a picture scaled to fill still leaves
             // room for it — this rect answers *how big*, and nothing else.
             let sizing_bounds = egui::vec2(
                 available_rect.width(),
-                available_rect.height() - toolbar::TOOLBAR_HEIGHT - toolbar::TOOLBAR_GAP,
+                available_rect.height() - toolbar_height - toolbar::TOOLBAR_GAP,
             );
             let viewport_bounds = sizing_bounds * view_state.scale();
             let viewport_size = fit_aspect_ratio(viewport_bounds, snapshot.canvas.aspect_ratio());
@@ -56,7 +85,7 @@ pub(super) fn show(
             // the bottom edge, because it belongs to the picture — it is what
             // that picture is zoomed to — and one pinned there reads as the
             // panel's own furniture instead.
-            let block_height = viewport_size.y + toolbar::TOOLBAR_GAP + toolbar::TOOLBAR_HEIGHT;
+            let block_height = viewport_size.y + toolbar::TOOLBAR_GAP + toolbar_height;
             let block_top = available_rect.center().y - block_height / 2.0;
             let viewport_rect = egui::Rect::from_min_size(
                 egui::pos2(available_rect.center().x - viewport_size.x / 2.0, block_top),
@@ -82,30 +111,17 @@ pub(super) fn show(
             paint_composite_frame(ui, viewport, resources.composite_frame, i18n);
             paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
 
-            // A Drawing brings its own tools, and only while it is the thing
-            // selected: they are what says "this is what you are editing", and
-            // the toolbar goes back to its resting width the moment it is not.
-            let drawing = editor.selected_item_id().and_then(|item_id| {
-                snapshot
-                    .items
-                    .iter()
-                    .find(|item| item.id == item_id)
-                    .and_then(|item| match &item.settings {
-                        SourceSettings::Drawing(drawing) => Some((item_id, drawing.strokes.len())),
-                        _ => None,
-                    })
-            });
-            let toolbar_width = if drawing.is_some() {
-                toolbar::TOOLBAR_WIDTH + toolbar::PEN_TOOLBAR_WIDTH
-            } else {
-                toolbar::TOOLBAR_WIDTH
-            };
+            // Kept inside the panel, and shifted left rather than allowed to
+            // run past its edge — the picture is centred, so a narrow window
+            // leaves less room to the right of the viewport than the toolbar
+            // wants even when the panel itself has enough.
+            let toolbar_left = viewport_rect
+                .left()
+                .min(available_rect.right() - band.width)
+                .max(available_rect.left());
             let toolbar_rect = egui::Rect::from_min_size(
-                egui::pos2(
-                    viewport_rect.left(),
-                    viewport_rect.bottom() + toolbar::TOOLBAR_GAP,
-                ),
-                egui::vec2(toolbar_width, toolbar::TOOLBAR_HEIGHT),
+                egui::pos2(toolbar_left, viewport_rect.bottom() + toolbar::TOOLBAR_GAP),
+                egui::vec2(band.width, band.height),
             );
             let mut toolbar_ui = ui.new_child(
                 egui::UiBuilder::new()
@@ -114,18 +130,71 @@ pub(super) fn show(
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
             toolbar_ui.set_clip_rect(toolbar_rect);
-            toolbar::show(&mut toolbar_ui, view_state, i18n);
-            if let Some((item_id, strokes)) = drawing {
-                toolbar::show_pen(
-                    &mut toolbar_ui,
-                    &mut editor.pen,
-                    item_id,
-                    strokes,
-                    i18n,
-                    actions,
-                );
-            }
+            toolbar_ui.spacing_mut().scroll = scroll_style;
+            // Scrolled only when it has to be. A bar under a toolbar that
+            // already fits is furniture, and the band it is drawn in is 26
+            // pixels tall — there is no room to spend on nothing.
+            egui::ScrollArea::horizontal()
+                .id_salt("preview_toolbar_scroll")
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(if band.scrolls {
+                    egui::scroll_area::ScrollBarVisibility::AlwaysVisible
+                } else {
+                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+                })
+                .show(&mut toolbar_ui, |ui| {
+                    // Told how wide it is. Inside a scroll area the inner ui
+                    // is handed the viewport's width, so a toolbar laying
+                    // itself out against that reports content exactly as wide
+                    // as the space it had — and an area whose content fits has
+                    // nothing to scroll and draws no bar.
+                    ui.set_min_width(band.wanted);
+                    toolbar::show(ui, view_state, i18n);
+                    if let Some((item_id, strokes)) = drawing {
+                        toolbar::show_pen(ui, &mut editor.pen, item_id, strokes, i18n, actions);
+                    }
+                });
         });
+}
+
+/// The band under the picture that the toolbar is drawn in.
+struct ToolbarBand {
+    /// What the toolbar would like, which is what the contents are laid out
+    /// to inside the scroll area — an area whose content is only as wide as
+    /// its viewport has nothing to scroll.
+    wanted: f32,
+    /// What it gets, which is never more than the panel has.
+    width: f32,
+    /// [`toolbar::TOOLBAR_HEIGHT`], plus room for a scrollbar when there is
+    /// one.
+    height: f32,
+    scrolls: bool,
+}
+
+/// How wide and tall the toolbar's band is, given the panel it must fit in.
+///
+/// The panel is the limit. A toolbar allowed its full width in a window too
+/// narrow for it ran off the side and took its last buttons with it — undo
+/// and clear are drawn last, so those were the ones that could not be
+/// reached.
+///
+/// `scrollbar` is what a bar costs in this style, asked of egui rather than
+/// assumed: its default bar floats and allocates nothing, so a band sized for
+/// that would have no room for the solid one this draws.
+fn toolbar_band(available: f32, has_pen: bool, scrollbar: f32) -> ToolbarBand {
+    let wanted = if has_pen {
+        toolbar::TOOLBAR_WIDTH + toolbar::PEN_TOOLBAR_WIDTH
+    } else {
+        toolbar::TOOLBAR_WIDTH
+    };
+    let width = wanted.min(available);
+    let scrolls = width < wanted;
+    ToolbarBand {
+        wanted,
+        width,
+        height: toolbar::TOOLBAR_HEIGHT + if scrolls { scrollbar } else { 0.0 },
+        scrolls,
+    }
 }
 
 fn handle_pointer(
@@ -704,5 +773,49 @@ mod tests {
             editor.drag.map(|drag| drag.mode),
             Some(TransformDragMode::Move)
         ));
+    }
+
+    /// The bug this exists for: a toolbar wider than the panel used to keep
+    /// its full width and hang off the side, taking undo and clear with it.
+    #[test]
+    fn a_toolbar_too_wide_for_the_panel_is_cut_to_it_and_scrolls() {
+        let scrollbar = 10.0;
+        let wanted = toolbar::TOOLBAR_WIDTH + toolbar::PEN_TOOLBAR_WIDTH;
+
+        let squeezed = toolbar_band(wanted - 200.0, true, scrollbar);
+
+        assert_eq!(
+            squeezed.width,
+            wanted - 200.0,
+            "it must take the panel's width, not its own"
+        );
+        assert_eq!(squeezed.wanted, wanted, "and still lay out to its own");
+        assert!(squeezed.scrolls);
+        assert_eq!(
+            squeezed.height,
+            toolbar::TOOLBAR_HEIGHT + scrollbar,
+            "the band grows by the bar, or the bar is drawn outside the clip"
+        );
+    }
+
+    /// And costs nothing when it fits, which is the usual case: a bar under a
+    /// toolbar with nothing to scroll is furniture, and the band it would be
+    /// drawn in is 26 pixels tall.
+    #[test]
+    fn a_toolbar_that_fits_keeps_its_width_and_grows_no_band() {
+        let roomy = toolbar_band(4000.0, true, 10.0);
+
+        assert_eq!(roomy.width, roomy.wanted);
+        assert!(!roomy.scrolls);
+        assert_eq!(roomy.height, toolbar::TOOLBAR_HEIGHT);
+    }
+
+    /// Without a Drawing selected the pen half is not there to make room for.
+    #[test]
+    fn the_resting_toolbar_is_the_narrow_one() {
+        let resting = toolbar_band(4000.0, false, 10.0);
+
+        assert_eq!(resting.wanted, toolbar::TOOLBAR_WIDTH);
+        assert!(!resting.scrolls);
     }
 }
