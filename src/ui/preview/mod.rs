@@ -36,19 +36,14 @@ pub(super) fn show(
         )
         .show(ui, |ui| {
             let available_rect = ui.available_rect_before_wrap();
-            // The toolbar's own band, taken off the top of what the picture
-            // may fill. `workspace_rect` is what the picture is *sized*
-            // against and what the editor treats as the workspace; where the
-            // picture is *placed* is settled below, because the two are not
-            // the same question.
-            let workspace_rect = egui::Rect::from_min_max(
-                available_rect.min,
-                egui::pos2(
-                    available_rect.right(),
-                    available_rect.bottom() - toolbar::TOOLBAR_HEIGHT - toolbar::TOOLBAR_GAP,
-                ),
+            // How large the picture may get. The toolbar's band is taken off
+            // the bottom here so that a picture scaled to fill still leaves
+            // room for it — this rect answers *how big*, and nothing else.
+            let sizing_bounds = egui::vec2(
+                available_rect.width(),
+                available_rect.height() - toolbar::TOOLBAR_HEIGHT - toolbar::TOOLBAR_GAP,
             );
-            let viewport_bounds = workspace_rect.size() * view_state.scale();
+            let viewport_bounds = sizing_bounds * view_state.scale();
             let viewport_size = fit_aspect_ratio(viewport_bounds, snapshot.canvas.aspect_ratio());
             // The picture and the toolbar under it are centred as one block,
             // not the picture alone. Centring the picture in the band-less
@@ -67,6 +62,14 @@ pub(super) fn show(
                 egui::pos2(available_rect.center().x - viewport_size.x / 2.0, block_top),
                 viewport_size,
             );
+            // The whole panel is the workspace: what the editor takes clicks
+            // in, and what a selected source's overflow is drawn against. Not
+            // the sizing rect above — that one stops a toolbar short of the
+            // bottom edge, so a selection spilling past the picture was
+            // clipped higher below than above while the picture itself sat
+            // centred. The band the toolbar occupies is drawn over by the
+            // toolbar itself, which is painted last.
+            let workspace_rect = available_rect;
             let viewport = ViewportTransform::new(viewport_rect, snapshot.canvas);
             let response = ui.interact(
                 workspace_rect,
