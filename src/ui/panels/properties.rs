@@ -29,6 +29,7 @@ use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
 use super::super::UiAction;
 use super::super::editor::SceneEditorState;
+use super::elide;
 
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
@@ -302,13 +303,27 @@ fn show_desktop_rect(
 fn row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.label(label);
     let mut shown = value;
-    ui.add(
+    let field = ui.add(
         egui::TextEdit::singleline(&mut shown)
             .desired_width(f32::INFINITY)
             .font(egui::TextStyle::Monospace),
     );
+    // A window title is the one value here regularly wider than the dock. The
+    // field can be clicked into and read through, but nothing says so, and a
+    // value cut off mid-word reads as the whole value.
+    if elide::overflows(
+        ui,
+        value,
+        field.rect.width() - FIELD_MARGIN,
+        &egui::TextStyle::Monospace,
+    ) {
+        field.on_hover_text(value);
+    }
     ui.end_row();
 }
+
+/// What a `TextEdit` keeps for itself either side of its text.
+const FIELD_MARGIN: f32 = 8.0;
 
 fn kind_key(kind: SourceKind) -> TextKey {
     match kind {

@@ -6,9 +6,12 @@ use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::ScenesSnapshot;
 
 use super::super::UiAction;
+use super::elide;
 use super::toolbar::{self, ToolIcon};
 
 const SCENE_ROW_HEIGHT: f32 = 28.0;
+/// What a `Button` keeps for itself either side of its label.
+const BUTTON_PADDING: f32 = 12.0;
 
 #[derive(Default)]
 pub(in crate::ui) struct ScenesPanelState {
@@ -56,10 +59,24 @@ pub(in crate::ui) fn show(
                 continue;
             }
 
+            // Laid out here rather than left to the button, which would
+            // rather grow than give anything up — and a dock cannot grow.
+            let label = elide::one_row(
+                ui,
+                &scene.name,
+                row_width - BUTTON_PADDING,
+                &egui::TextStyle::Button,
+            );
+            let elided = label.elided;
             let response = ui.add_sized(
                 [row_width, SCENE_ROW_HEIGHT],
-                egui::Button::new(&scene.name).selected(selected),
+                egui::Button::new(label).selected(selected),
             );
+            let response = if elided {
+                response.on_hover_text(&scene.name)
+            } else {
+                response
+            };
             if response.clicked() {
                 actions.push(scene_action(SceneCommand::Select(scene.id)));
             }

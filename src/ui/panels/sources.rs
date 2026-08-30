@@ -11,6 +11,7 @@ use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 use crate::ui::UiAction;
 use crate::ui::editor::SceneEditorState;
 
+use super::elide;
 use super::toolbar::{self, ToolIcon};
 
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
@@ -105,7 +106,6 @@ fn show_source_row(
         egui::vec2(ui.available_width(), SOURCE_ROW_HEIGHT),
         egui::Sense::click(),
     );
-    let response = response.on_hover_text(i18n.text(source_kind_key(item.kind)));
     let selected = editor.selected_item_id() == Some(item.id);
     if selected {
         ui.painter()
@@ -126,13 +126,29 @@ fn show_source_row(
     let lock = icon_hit(ui, rect, 1, ("locked", item.id.0));
     paint_visibility(ui.painter(), eye.rect.center(), item.visible, color);
     paint_lock(ui.painter(), lock.rect.center(), item.locked, color);
-    ui.painter().text(
-        egui::pos2(rect.left() + ICON_WIDTH * 2.0 + 4.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
+    let left = rect.left() + ICON_WIDTH * 2.0 + 4.0;
+    let elided = elide::paint_one_row(
+        ui,
+        egui::pos2(left, rect.center().y),
+        rect.right() - left,
         &item.name,
-        egui::TextStyle::Body.resolve(ui.style()),
         color,
     );
+
+    // The kind is what this row does not otherwise say. A name that had to be
+    // cut is added above it rather than instead of it: one hover should not
+    // have to choose between telling you what the source is and telling you
+    // what it is called.
+    let kind = i18n.text(source_kind_key(item.kind));
+    let response = if elided {
+        response.on_hover_text(format!(
+            "{}
+{kind}",
+            item.name
+        ))
+    } else {
+        response.on_hover_text(kind)
+    };
 
     if eye.clicked() {
         actions.push(source_action(SourceCommand::SetVisible(
@@ -676,14 +692,21 @@ fn list_row(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
         (egui::Color32::TRANSPARENT, ui.visuals().text_color())
     };
     ui.painter().rect_filled(rect, 2.0, fill);
-    ui.painter().text(
-        rect.left_center() + egui::vec2(6.0, 0.0),
-        egui::Align2::LEFT_CENTER,
+    let left = rect.left() + 6.0;
+    let elided = elide::paint_one_row(
+        ui,
+        egui::pos2(left, rect.center().y),
+        rect.right() - left - 6.0,
         text,
-        egui::TextStyle::Body.resolve(ui.style()),
         text_color,
     );
-    response
+    // A window title is the worst case in these lists and the one that has to
+    // survive: it is what tells two windows of one program apart.
+    if elided {
+        response.on_hover_text(text)
+    } else {
+        response
+    }
 }
 
 fn paint_visibility(
