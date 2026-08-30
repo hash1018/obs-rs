@@ -141,11 +141,14 @@ fn show_settings(ui: &mut egui::Ui, item: &SceneItemSnapshot, i18n: &Localizatio
         }
         SourceSettings::DisplayCapture(settings) => {
             match &settings.target {
-                DisplayCaptureTarget::MonitorName(name) => row(
-                    ui,
-                    i18n.text(TextKey::PropertiesMonitor).as_ref(),
-                    name.as_str(),
-                ),
+                DisplayCaptureTarget::MonitorName(name) => {
+                    row(
+                        ui,
+                        i18n.text(TextKey::PropertiesMonitor).as_ref(),
+                        name.as_str(),
+                    );
+                    show_desktop_position(ui, name, i18n);
+                }
                 // The portal's token is opaque and long; whether there is one
                 // is the whole of what a reader can use it for — it is the
                 // difference between reopening silently and being asked
@@ -171,6 +174,37 @@ fn show_settings(ui: &mut egui::Ui, item: &SceneItemSnapshot, i18n: &Localizatio
         }
         SourceSettings::None => {}
     }
+}
+
+/// Where this display sits in the virtual desktop, read now rather than
+/// remembered.
+///
+/// Deliberately not stored anywhere: a monitor's position changes whenever
+/// displays are rearranged and nothing in this application resolves against
+/// it, which is why a Display Capture keeps only the name. Reading it live is
+/// a different thing from persisting it — this dock is a view of how things
+/// stand, so it asks the system each frame it draws this row. That is one
+/// `EnumDisplayMonitors`, and only while a Display Capture is the selection.
+///
+/// The size is not repeated here: `Stream size` below is what the capture
+/// actually negotiated, which is the more useful of the two when they differ.
+///
+/// Nothing is shown for a name the system does not currently report — an
+/// unplugged display leaves the stored name above it and no coordinates,
+/// which is the truth about it.
+fn show_desktop_position(ui: &mut egui::Ui, monitor: &str, i18n: &LocalizationManager) {
+    let crate::capture::SourcePicker::Enumerated { monitors, .. } = crate::capture::source_picker()
+    else {
+        return;
+    };
+    let Some(target) = monitors.iter().find(|target| target.name == monitor) else {
+        return;
+    };
+    row(
+        ui,
+        i18n.text(TextKey::PropertiesDesktopPosition).as_ref(),
+        &format!("{}, {}", target.rect.x, target.rect.y),
+    );
 }
 
 /// One label and its value, with the value able to be selected and copied —
