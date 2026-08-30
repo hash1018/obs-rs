@@ -239,9 +239,22 @@ fn property_u32(connection: &RustConnection, window: Window, property: Atom) -> 
         .unwrap_or_default()
 }
 
+/// The name of the executable behind a window, for the picker to show
+/// beside its title.
 fn process_name(pid: u32) -> Option<String> {
     let path = fs::read_link(PathBuf::from("/proc").join(pid.to_string()).join("exe")).ok()?;
-    path.file_name()?.to_str().map(ToOwned::to_owned)
+    Some(executable_name(path.file_name()?.to_str()?))
+}
+
+/// What `/proc/<pid>/exe` points at, without the kernel's own annotation.
+///
+/// A process whose executable has been replaced since it started — every
+/// application still running across a package upgrade — has ` (deleted)`
+/// appended to that link by the kernel. It describes the inode rather than
+/// the program, and a picker offering "firefox (deleted)" is telling the user
+/// about their package manager rather than about the window they want.
+fn executable_name(link: &str) -> String {
+    link.strip_suffix(" (deleted)").unwrap_or(link).to_owned()
 }
 
 /// Result of one system-owned Wayland display selection.
@@ -507,6 +520,17 @@ pub fn displays() -> Vec<MonitorRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window belonging to an application that was upgraded while running
+    /// is still that application, and the picker has to say so.
+    #[test]
+    fn an_upgraded_executable_keeps_its_own_name() {
+        assert_eq!(executable_name("firefox (deleted)"), "firefox");
+        assert_eq!(executable_name("firefox"), "firefox");
+        // Only the kernel's suffix, and only at the end: a program is
+        // entitled to those words in its own name.
+        assert_eq!(executable_name("my (deleted) tool"), "my (deleted) tool");
+    }
 
     #[test]
     fn wayland_uses_the_portal_even_when_xwayland_is_available() {

@@ -15,6 +15,12 @@ pub(super) fn hold(path: &Path) -> io::Result<Option<File>> {
         .read(true)
         .write(true)
         .create(true)
+        // Not truncated on open, and that matters: this runs before the lock
+        // is known to be ours, so truncating here would wipe the running
+        // instance's pid on the way to discovering it is running — costing
+        // the raise the pid is written for. The holder clears it itself once
+        // it has won, in `record_pid`.
+        .truncate(false)
         .open(path)?;
     // SAFETY: `file` owns the descriptor for the whole call, and `flock`
     // does nothing with it beyond the lock.
