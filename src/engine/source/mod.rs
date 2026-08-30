@@ -11,6 +11,7 @@
 //! two genuinely unlike implementations and keeps its own directory.
 
 pub(in crate::engine) mod color;
+pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
 
 use crate::snapshots::SceneItemSnapshot;

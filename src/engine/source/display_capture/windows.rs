@@ -25,11 +25,17 @@ use media_pp::{
     rate::FrameRateHandle,
 };
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 
-use super::BackendError;
+use media_pp::elements::{D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer};
+
+use crate::domain::{DisplayCaptureTarget, SourceSettings};
+use crate::engine::backend::{BackendError, RunningSource};
+use crate::engine::source::{OpenSource, input_name};
+use crate::snapshots::SceneItemSnapshot;
 
 /// One display's capture, and what is currently drawing from it.
-struct SharedCapture {
+pub(in crate::engine) struct SharedCapture {
     pipeline: Arc<Pipeline>,
     tee: TeeHandle,
     /// Taken before the source was moved into its `Pipeline`, which is the
@@ -149,7 +155,7 @@ fn open_capture(
     device: &ID3D11Device,
     fps: u32,
 ) -> Result<SharedCapture, BackendError> {
-    let output_index = super::resolve_output_index(monitor)?;
+    let output_index = resolve_output_index(monitor)?;
     let name = format!("display-{output_index}");
     // GPU capture: the desktop lands in D3D11 textures on this backend's own
     // device and never reaches system memory. A monitor on another adapter is
@@ -193,4 +199,84 @@ fn open_capture(
         // Counted by whoever attaches the first branch.
         showing: 0,
     })
+}
+
+/// Points one SceneItem at a display's capture, opening it if this is the
+/// first item to want it.
+pub(in crate::engine) fn open(
+    device: &ID3D11Device,
+    handle: &D3d11VideoCompositorHandle,
+    captures: &Arc<CaptureRegistry>,
+    item: &SceneItemSnapshot,
+    layer: VideoLayer,
+    fps: u32,
+) -> Result<OpenSource, BackendError> {
+    let SourceSettings::DisplayCapture(settings) = &item.settings else {
+        return Err("scene item is not a display capture".into());
+    };
+    let DisplayCaptureTarget::MonitorName(monitor) = &settings.target else {
+        // A portal restore token belongs to a Wayland compositor; nothing on
+        // Windows can resolve it, so a project moved across platforms gets an
+        // error naming the actual problem rather than a capture of the wrong
+        // display.
+        return Err("a portal selection names no display Windows can resolve".into());
+    };
+
+    let name = input_name(item);
+    let D3d11VideoCompositorInput { sink, layer } = handle
+        .add_source(name.clone(), layer)?
+        .ok_or("the compositor is no longer running")?;
+    // The capture is shared, so what this item gets is a branch of it. Its
+    // own compositor input is still its own: position, size and z-order stay
+    // per item even when the pixels behind two of them are the same.
+    let branch = captures.attach(monitor, device, fps, sink)?;
+
+    Ok(OpenSource {
+        source: RunningSource::Shared {
+            captures: Arc::clone(captures),
+            monitor: monitor.clone(),
+            branch,
+        },
+        layer,
+        name,
+        refreshed_token: None,
+        showing: true,
+        pushed: None,
+    })
+}
+
+/// Resolves a stable display name such as `\\.\DISPLAY1` to the flat output
+/// index [`CaptureArea::Output`] takes — adapter 0's outputs, then adapter
+/// 1's, matching that variant's own documented order.
+///
+/// Resolved at open time against whatever layout is live, not persisted: the
+/// name is the stable half, the index is whatever it maps to today.
+fn resolve_output_index(monitor: &str) -> Result<u32, BackendError> {
+    // SAFETY: enumeration creates and reads only its own COM objects, and
+    // `GetDesc` writes one fully-sized descriptor into a live local.
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
+        let mut flat_index = 0u32;
+        for adapter_index in 0.. {
+            let Ok(adapter) = factory.EnumAdapters1(adapter_index) else {
+                break;
+            };
+            for output_index in 0.. {
+                let Ok(output) = adapter.EnumOutputs(output_index) else {
+                    break;
+                };
+                let desc = output.GetDesc()?;
+                let name_end = desc
+                    .DeviceName
+                    .iter()
+                    .position(|unit| *unit == 0)
+                    .unwrap_or(desc.DeviceName.len());
+                if String::from_utf16_lossy(&desc.DeviceName[..name_end]) == monitor {
+                    return Ok(flat_index);
+                }
+                flat_index += 1;
+            }
+        }
+    }
+    Err(format!("display \"{monitor}\" was not found in the current layout").into())
 }

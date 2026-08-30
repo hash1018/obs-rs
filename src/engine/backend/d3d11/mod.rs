@@ -1,8 +1,6 @@
 //! The D3D11 backend: DXGI desktop duplication straight into D3D11 textures,
 //! a BGRA compositor, and a shared texture to reach wgpu without a readback.
 
-mod capture;
-
 use crate::engine::TARGET_FPS;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,10 +12,10 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, ChangeGate, D3d11Download, D3d11Renderer, D3d11Scaler, D3d11ScalerFormat,
-        D3d11VideoCodec, D3d11VideoCompositor, D3d11VideoCompositorHandle,
-        D3d11VideoCompositorInput, D3d11VideoEncoder, D3d11VideoEncoderOptions,
-        D3d11VideoInputFormat, D3d11VideoLayerHandle, PauseGate, SwEncoder, SwEncoderOptions,
-        SwScaler, TeeBuilder, TeeHandle, TimestampOrigin, VideoCompositorOptions, VideoLayer,
+        D3d11VideoCodec, D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoEncoder,
+        D3d11VideoEncoderOptions, D3d11VideoInputFormat, D3d11VideoLayerHandle, PauseGate,
+        SwEncoder, SwEncoderOptions, SwScaler, TeeBuilder, TeeHandle, TimestampOrigin,
+        VideoCompositorOptions, VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -31,13 +29,12 @@ use windows::Win32::Graphics::{
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
         ID3D11DeviceContext,
     },
-    Dxgi::{CreateDXGIFactory1, IDXGIFactory1},
 };
 
-use crate::domain::{DisplayCaptureTarget, SourceKind, SourceSettings};
+use crate::domain::SourceKind;
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::{self, OpenSource, input_name, unsupported_kind};
+use crate::engine::source::{self, OpenSource, unsupported_kind};
 
 use super::{
     BACKGROUND, BackendError, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, VideoTrack,
@@ -91,7 +88,7 @@ enum RecordEncoder {
 use media_pp::graph::BranchId;
 
 use crate::engine::preview::{PreviewRenderer, PreviewSurface, SharedTarget};
-use capture::CaptureRegistry;
+use crate::engine::source::display_capture::{self, CaptureRegistry};
 
 /// The compositor's layer control already offers exactly what a backend must.
 pub(in crate::engine) type Layer = D3d11VideoLayerHandle;
@@ -497,7 +494,7 @@ impl Backend {
         fps: u32,
     ) -> Result<OpenSource, BackendError> {
         match item.kind {
-            SourceKind::DisplayCapture => open_display_capture(
+            SourceKind::DisplayCapture => display_capture::open(
                 &self.device,
                 &self.compositor,
                 &self.captures,
@@ -614,84 +611,4 @@ impl RunningSource {
             } => captures.detach(monitor, *branch),
         }
     }
-}
-
-/// Points one SceneItem at a display's capture, opening it if this is the
-/// first item to want it.
-fn open_display_capture(
-    device: &ID3D11Device,
-    handle: &D3d11VideoCompositorHandle,
-    captures: &Arc<CaptureRegistry>,
-    item: &SceneItemSnapshot,
-    layer: VideoLayer,
-    fps: u32,
-) -> Result<OpenSource, BackendError> {
-    let SourceSettings::DisplayCapture(settings) = &item.settings else {
-        return Err("scene item is not a display capture".into());
-    };
-    let DisplayCaptureTarget::MonitorName(monitor) = &settings.target else {
-        // A portal restore token belongs to a Wayland compositor; nothing on
-        // Windows can resolve it, so a project moved across platforms gets an
-        // error naming the actual problem rather than a capture of the wrong
-        // display.
-        return Err("a portal selection names no display Windows can resolve".into());
-    };
-
-    let name = input_name(item);
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
-    // The capture is shared, so what this item gets is a branch of it. Its
-    // own compositor input is still its own: position, size and z-order stay
-    // per item even when the pixels behind two of them are the same.
-    let branch = captures.attach(monitor, device, fps, sink)?;
-
-    Ok(OpenSource {
-        source: RunningSource::Shared {
-            captures: Arc::clone(captures),
-            monitor: monitor.clone(),
-            branch,
-        },
-        layer,
-        name,
-        refreshed_token: None,
-        showing: true,
-        pushed: None,
-    })
-}
-
-/// Resolves a stable display name such as `\\.\DISPLAY1` to the flat output
-/// index [`CaptureArea::Output`] takes — adapter 0's outputs, then adapter
-/// 1's, matching that variant's own documented order.
-///
-/// Resolved at open time against whatever layout is live, not persisted: the
-/// name is the stable half, the index is whatever it maps to today.
-fn resolve_output_index(monitor: &str) -> Result<u32, BackendError> {
-    // SAFETY: enumeration creates and reads only its own COM objects, and
-    // `GetDesc` writes one fully-sized descriptor into a live local.
-    unsafe {
-        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
-        let mut flat_index = 0u32;
-        for adapter_index in 0.. {
-            let Ok(adapter) = factory.EnumAdapters1(adapter_index) else {
-                break;
-            };
-            for output_index in 0.. {
-                let Ok(output) = adapter.EnumOutputs(output_index) else {
-                    break;
-                };
-                let desc = output.GetDesc()?;
-                let name_end = desc
-                    .DeviceName
-                    .iter()
-                    .position(|unit| *unit == 0)
-                    .unwrap_or(desc.DeviceName.len());
-                if String::from_utf16_lossy(&desc.DeviceName[..name_end]) == monitor {
-                    return Ok(flat_index);
-                }
-                flat_index += 1;
-            }
-        }
-    }
-    Err(format!("display \"{monitor}\" was not found in the current layout").into())
 }
