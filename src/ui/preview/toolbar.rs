@@ -104,26 +104,131 @@ pub(super) fn show_pen(
     .on_hover_text(i18n.text(TextKey::DrawingWidth));
 
     ui.separator();
-    if ui
-        .add_enabled(strokes > 0, egui::Button::new("↶"))
-        .on_hover_text(i18n.text(TextKey::DrawingUndo))
-        .clicked()
-    {
+    if icon_button(
+        ui,
+        strokes > 0,
+        i18n.text(TextKey::DrawingUndo).as_ref(),
+        paint_undo,
+    ) {
         // Undo is the eraser's own command aimed at the last stroke: there is
         // no separate history, because the strokes *are* the history.
         actions.push(UiAction::Project(ProjectCommand::Source(
             SourceCommand::RemoveStrokes(item_id, vec![strokes - 1]),
         )));
     }
-    if ui
-        .add_enabled(strokes > 0, egui::Button::new("⌦"))
-        .on_hover_text(i18n.text(TextKey::DrawingClear))
-        .clicked()
-    {
+    if icon_button(
+        ui,
+        strokes > 0,
+        i18n.text(TextKey::DrawingClear).as_ref(),
+        paint_bin,
+    ) {
         actions.push(UiAction::Project(ProjectCommand::Source(
             SourceCommand::ClearStrokes(item_id),
         )));
     }
+}
+
+/// A button whose face is drawn rather than typed.
+///
+/// Drawn for the reason the Sources panel draws its eye and its padlock: a
+/// glyph is at the mercy of whatever font the system handed us, and these two
+/// have no character that is both obvious and certain to be present. The
+/// shapes are a few line segments either way.
+fn icon_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    hover: &str,
+    paint: fn(&egui::Painter, egui::Pos2, egui::Color32),
+) -> bool {
+    let size = egui::vec2(22.0, 20.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let response = response.on_hover_text(hover);
+    let visuals = ui.style().interact(&response);
+    if enabled && (response.hovered() || response.is_pointer_button_down_on()) {
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+    }
+    let color = if enabled {
+        visuals.fg_stroke.color
+    } else {
+        ui.visuals().widgets.noninteractive.fg_stroke.color
+    };
+    paint(ui.painter(), rect.center(), color);
+    enabled && response.clicked()
+}
+
+/// An arrow curving back on itself: undo.
+fn paint_undo(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.4, color);
+    // Three quarters of a circle, left open so the head has somewhere to
+    // point — a closed ring would read as a refresh rather than a step back.
+    const RADIUS: f32 = 5.0;
+    const START: f32 = std::f32::consts::PI * 0.85;
+    const SWEEP: f32 = std::f32::consts::PI * 1.5;
+    let at = |angle: f32| center + egui::vec2(angle.cos() * RADIUS, angle.sin() * RADIUS);
+    let arc: Vec<egui::Pos2> = (0..=24)
+        .map(|step| at(START + SWEEP * step as f32 / 24.0))
+        .collect();
+    painter.add(egui::Shape::line(arc, stroke));
+
+    // The head sits on the end the arc starts from and points back the way it
+    // came, along the tangent there — an arrowhead at any other angle reads
+    // as a smudge rather than as a direction.
+    let along = egui::vec2(START.sin(), -START.cos());
+    let across = egui::vec2(-along.y, along.x);
+    let base = at(START);
+    painter.add(egui::Shape::convex_polygon(
+        vec![base + along * 3.2, base + across * 2.0, base - across * 2.0],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// A bin: everything drawn, thrown away.
+///
+/// A bin rather than another eraser, because the eraser is the tool beside it
+/// and these two must not read as the same thing — one takes the stroke under
+/// the pointer, the other takes all of them.
+fn paint_bin(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.2, color);
+    let top = center.y - 3.5;
+    // Lid, with a handle above it.
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 5.0, top),
+            egui::pos2(center.x + 5.0, top),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 1.8, top - 2.0),
+            egui::pos2(center.x + 1.8, top - 2.0),
+        ],
+        stroke,
+    );
+    // Body, narrowing towards the bottom.
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 4.0, top),
+            egui::pos2(center.x - 3.0, center.y + 5.5),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x + 4.0, top),
+            egui::pos2(center.x + 3.0, center.y + 5.5),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 3.0, center.y + 5.5),
+            egui::pos2(center.x + 3.0, center.y + 5.5),
+        ],
+        stroke,
+    );
 }
 
 pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState, i18n: &LocalizationManager) {
