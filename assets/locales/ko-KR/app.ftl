@@ -121,6 +121,7 @@ exit-stop-and-quit = 녹화 종료하고 끝내기
 exit-keep-recording = 녹화 계속하기
 drawing-tool-select = 선택
 drawing-tool-pen = 펜
+drawing-tool-highlighter = 형광펜
 drawing-tool-eraser = 지우개
 drawing-width = 굵기
 drawing-width-thin = 얇게

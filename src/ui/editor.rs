@@ -41,27 +41,99 @@ pub(super) enum Tool {
     #[default]
     Select,
     Pen,
+    /// A pen you can read through: the same stroke at an alpha that leaves
+    /// whatever it was drawn over legible. Which is why it is a tool rather
+    /// than a colour in the palette — its width, its colour, and the fact
+    /// that it does not cover are one choice, not three.
+    Highlighter,
     Eraser,
+}
+
+impl Tool {
+    /// How opaque this tool's strokes are.
+    ///
+    /// A third of the way is enough to read a colour off and little enough to
+    /// read through — a highlighter that hides what it marks has marked
+    /// nothing.
+    fn alpha(self) -> u8 {
+        match self {
+            Self::Highlighter => 90,
+            _ => u8::MAX,
+        }
+    }
+}
+
+/// One tool's colour and width, remembered while another is in use.
+///
+/// Shared settings would mean picking up the highlighter and finding it thin
+/// and red, then picking the pen back up and finding it thick and yellow.
+/// They are different implements and each keeps what it was set to.
+pub(super) struct Nib {
+    /// Without alpha: how much shows through is [`Tool::alpha`]'s to say, and
+    /// a palette entry that carried its own would let the two disagree.
+    pub rgb: [u8; 3],
+    pub width: f32,
 }
 
 /// The pen's own settings, and the stroke it is part-way through.
 pub(super) struct PenState {
     pub tool: Tool,
-    pub rgba: [u8; 4],
-    pub width: f32,
+    pub pen: Nib,
+    pub highlighter: Nib,
     /// The stroke being drawn, in the Drawing's own coordinates. `None`
     /// between gestures.
     pub stroke: Option<Vec<[f32; 2]>>,
+}
+
+impl PenState {
+    /// The nib in use, which the toolbar edits and a stroke is made with.
+    ///
+    /// Select and Eraser have no implement of their own and answer with the
+    /// pen's — for the eraser that is also how far it reaches, so it sweeps
+    /// as wide as the line it is there to take away.
+    pub fn nib(&self) -> &Nib {
+        match self.tool {
+            Tool::Highlighter => &self.highlighter,
+            _ => &self.pen,
+        }
+    }
+
+    pub fn nib_mut(&mut self) -> &mut Nib {
+        match self.tool {
+            Tool::Highlighter => &mut self.highlighter,
+            _ => &mut self.pen,
+        }
+    }
+
+    /// What a stroke made now is coloured: the nib's, at the tool's own
+    /// opacity.
+    pub fn rgba(&self) -> [u8; 4] {
+        let [red, green, blue] = self.nib().rgb;
+        [red, green, blue, self.tool.alpha()]
+    }
+
+    pub fn width(&self) -> f32 {
+        self.nib().width
+    }
 }
 
 impl Default for PenState {
     fn default() -> Self {
         Self {
             tool: Tool::default(),
-            // Red, because annotation is nearly always over someone else's
-            // picture and this is the one colour that is rarely in it.
-            rgba: [220, 40, 40, 255],
-            width: 6.0,
+            pen: Nib {
+                // Red, because annotation is nearly always over someone else's
+                // picture and this is the one colour that is rarely in it.
+                rgb: [220, 40, 40],
+                width: 6.0,
+            },
+            highlighter: Nib {
+                // Yellow and broad, which is what the implement it is named
+                // for looks like — and a highlighter as narrow as a pen would
+                // only be a fainter pen.
+                rgb: [250, 220, 60],
+                width: 24.0,
+            },
             stroke: None,
         }
     }

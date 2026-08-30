@@ -190,6 +190,21 @@ pub(super) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendError {
 /// to the Canvas, which softens the edges anyway, and anti-aliasing here would
 /// be paid on every point of every stroke for something that is filtered again
 /// downstream.
+///
+/// # Why a stroke is drawn in two passes
+///
+/// A stroke marks its own coverage plane first, and only then reaches the
+/// frame — once per pixel, whatever the discs did. Stamping straight into the
+/// frame would be fine while every stroke was opaque, and wrong the moment one
+/// is not: the discs overlap heavily along a segment, so a translucent stroke
+/// blended per disc would build up into an opaque, blotchy line and be no
+/// highlighter at all.
+///
+/// Between strokes it is ordinary "over" compositing, so a translucent stroke
+/// laid across an earlier one lets it show through instead of cutting a hole
+/// in it. Straight alpha rather than premultiplied, because that is what both
+/// compositors read: D3D11 blends `SRC_ALPHA`/`INV_SRC_ALPHA` and CUDA lifts
+/// the alpha byte out into a plane of its own.
 pub(super) fn drawing_bgra(
     width: u32,
     height: u32,
@@ -202,48 +217,74 @@ pub(super) fn drawing_bgra(
     let data = frame.data_mut(0);
     data.fill(0);
 
+    // Reused across strokes and left clear behind each one, so this is
+    // allocated once for a whole drawing rather than per stroke.
+    let mut coverage = vec![0u8; (width as usize) * (height as usize)];
+
     for stroke in strokes {
         let radius = (stroke.width / 2.0).max(0.5);
-        let pixel = [
-            stroke.rgba[2],
-            stroke.rgba[1],
-            stroke.rgba[0],
-            stroke.rgba[3],
-        ];
-        let mut stamp = |x: f32, y: f32| {
-            let left = ((x - radius).floor() as i64).max(0) as usize;
-            let top = ((y - radius).floor() as i64).max(0) as usize;
-            let right = ((x + radius).ceil() as i64).clamp(0, width as i64) as usize;
-            let bottom = ((y + radius).ceil() as i64).clamp(0, height as i64) as usize;
-            for row in top..bottom {
-                for column in left..right {
-                    let dx = column as f32 + 0.5 - x;
-                    let dy = row as f32 + 0.5 - y;
-                    if dx * dx + dy * dy > radius * radius {
-                        continue;
+        // What the stroke touched, so compositing walks its own marks rather
+        // than the whole canvas once per stroke.
+        let marked = {
+            let mut marked: Option<[usize; 4]> = None;
+            let mut stamp = |x: f32, y: f32| {
+                let left = ((x - radius).floor() as i64).max(0) as usize;
+                let top = ((y - radius).floor() as i64).max(0) as usize;
+                let right = ((x + radius).ceil() as i64).clamp(0, width as i64) as usize;
+                let bottom = ((y + radius).ceil() as i64).clamp(0, height as i64) as usize;
+                for row in top..bottom {
+                    for column in left..right {
+                        let dx = column as f32 + 0.5 - x;
+                        let dy = row as f32 + 0.5 - y;
+                        if dx * dx + dy * dy > radius * radius {
+                            continue;
+                        }
+                        coverage[row * width as usize + column] = 1;
+                        marked = Some(match marked {
+                            None => [column, row, column + 1, row + 1],
+                            Some([l, t, r, b]) => {
+                                [l.min(column), t.min(row), r.max(column + 1), b.max(row + 1)]
+                            }
+                        });
                     }
-                    let at = row * stride + column * 4;
-                    data[at..at + 4].copy_from_slice(&pixel);
+                }
+            };
+            match stroke.points.as_slice() {
+                // A press with no movement is a dot, which is what a click draws.
+                [] => {}
+                [[x, y]] => stamp(*x, *y),
+                points => {
+                    for pair in points.windows(2) {
+                        let ([x0, y0], [x1, y1]) = (pair[0], pair[1]);
+                        // One stamp per half-radius along the segment, which is
+                        // close enough that the discs overlap into a line and far
+                        // enough that a long stroke is not stamped per pixel.
+                        let span = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+                        let steps = (span / radius.max(0.5) * 2.0).ceil().max(1.0);
+                        for step in 0..=steps as u32 {
+                            let along = step as f32 / steps;
+                            stamp(x0 + (x1 - x0) * along, y0 + (y1 - y0) * along);
+                        }
+                    }
                 }
             }
+            marked
         };
-        match stroke.points.as_slice() {
-            // A press with no movement is a dot, which is what a click draws.
-            [] => {}
-            [[x, y]] => stamp(*x, *y),
-            points => {
-                for pair in points.windows(2) {
-                    let ([x0, y0], [x1, y1]) = (pair[0], pair[1]);
-                    // One stamp per half-radius along the segment, which is
-                    // close enough that the discs overlap into a line and far
-                    // enough that a long stroke is not stamped per pixel.
-                    let span = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
-                    let steps = (span / radius.max(0.5) * 2.0).ceil().max(1.0);
-                    for step in 0..=steps as u32 {
-                        let along = step as f32 / steps;
-                        stamp(x0 + (x1 - x0) * along, y0 + (y1 - y0) * along);
-                    }
+
+        let Some([left, top, right, bottom]) = marked else {
+            continue;
+        };
+        for row in top..bottom {
+            for column in left..right {
+                let mark = &mut coverage[row * width as usize + column];
+                if *mark == 0 {
+                    continue;
                 }
+                // Cleared as it is read, so the plane is blank again for the
+                // next stroke without a second pass over the region.
+                *mark = 0;
+                let at = row * stride + column * 4;
+                over(&mut data[at..at + 4], stroke.rgba);
             }
         }
     }
@@ -254,6 +295,32 @@ pub(super) fn drawing_bgra(
     let mut slot = pool.get();
     *slot = frame;
     MediaBuffer::Video(std::sync::Arc::new(slot))
+}
+
+/// Composites one RGBA colour over one BGRA pixel, both straight-alpha.
+///
+/// The opaque case is the common one and is a write, which is also what keeps
+/// a pen stroke exact: rounding a colour through the general form and back
+/// would move it by a bit or two for no reason.
+fn over(dst: &mut [u8], rgba: [u8; 4]) {
+    let source_alpha = rgba[3] as f32 / 255.0;
+    if rgba[3] == u8::MAX {
+        dst.copy_from_slice(&[rgba[2], rgba[1], rgba[0], u8::MAX]);
+        return;
+    }
+    let dest_alpha = dst[3] as f32 / 255.0;
+    let out_alpha = source_alpha + dest_alpha * (1.0 - source_alpha);
+    if out_alpha <= 0.0 {
+        dst.fill(0);
+        return;
+    }
+    for (index, source) in [rgba[2], rgba[1], rgba[0]].into_iter().enumerate() {
+        let blended = (source as f32 * source_alpha
+            + dst[index] as f32 * dest_alpha * (1.0 - source_alpha))
+            / out_alpha;
+        dst[index] = blended.round().clamp(0.0, 255.0) as u8;
+    }
+    dst[3] = (out_alpha * 255.0).round() as u8;
 }
 
 /// One BGRA frame filled with a single colour, ready for a backend's upload
@@ -367,5 +434,74 @@ mod tests {
         let frame = drawing_bgra(64, 64, &strokes);
         assert_eq!(pixel_at(&frame, 0, 32)[3], 255, "it crosses the left edge");
         assert_eq!(pixel_at(&frame, 63, 32)[3], 255, "and the right one");
+    }
+
+    /// The property a highlighter exists for: it does not get darker where it
+    /// crosses itself.
+    ///
+    /// A stroke is stamped from discs a half-radius apart, so every pixel
+    /// along it is covered several times over, and a corner is covered
+    /// several times more than that. Blended per disc, a translucent stroke
+    /// would come out opaque along its length and blotchy at its turns — a
+    /// thick faint line, not a highlighter. Marking coverage first is what
+    /// makes each pixel take the colour exactly once.
+    #[test]
+    fn a_translucent_stroke_does_not_build_up_where_it_overlaps_itself() {
+        let strokes = vec![Stroke {
+            // Doubles back on itself, so the corner is drawn over twice on
+            // top of the overlap every straight run already has.
+            points: vec![[10.0, 10.0], [50.0, 10.0], [50.0, 50.0], [20.0, 10.0]],
+            rgba: [250, 220, 60, 90],
+            width: 8.0,
+        }];
+
+        let frame = drawing_bgra(64, 64, &strokes);
+
+        let straight = pixel_at(&frame, 30, 10);
+        let corner = pixel_at(&frame, 50, 10);
+        assert_eq!(
+            straight[3], 90,
+            "a pixel under one stroke must carry that stroke's own alpha"
+        );
+        assert_eq!(
+            corner, straight,
+            "the corner is covered many times over and must come out the same \
+             as a single pass, or the stroke is darker where it doubles back"
+        );
+    }
+
+    /// And it lets what was drawn before it show through, rather than cutting
+    /// a hole in it.
+    ///
+    /// Stamping straight into the frame overwrote whatever was already there,
+    /// alpha and all. That was invisible while every stroke was opaque and is
+    /// the difference between marking a line and erasing it once one is not.
+    #[test]
+    fn a_translucent_stroke_blends_with_what_is_under_it() {
+        let pen = Stroke {
+            points: vec![[0.0, 20.0], [64.0, 20.0]],
+            rgba: [255, 0, 0, 255],
+            width: 8.0,
+        };
+        let highlighter = Stroke {
+            points: vec![[32.0, 0.0], [32.0, 64.0]],
+            rgba: [0, 0, 255, 128],
+            width: 8.0,
+        };
+
+        let frame = drawing_bgra(64, 64, &[pen, highlighter]);
+
+        // Where only the pen is, it is untouched.
+        assert_eq!(pixel_at(&frame, 8, 20), [0, 0, 255, 255]);
+        // Where only the highlighter is, it is itself over nothing.
+        assert_eq!(pixel_at(&frame, 32, 50), [255, 0, 0, 128]);
+        // Where they cross, both are in it: blue over red at half, on an
+        // opaque pixel, so the result is opaque and neither pure colour.
+        let crossing = pixel_at(&frame, 32, 20);
+        assert_eq!(crossing[3], 255, "an opaque mark stays opaque underneath");
+        assert!(
+            crossing[0] > 100 && crossing[2] > 100,
+            "the crossing must hold both colours, got {crossing:?}"
+        );
     }
 }

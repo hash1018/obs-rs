@@ -121,6 +121,7 @@ exit-stop-and-quit = Stop Recording and Quit
 exit-keep-recording = Keep Recording
 drawing-tool-select = Select
 drawing-tool-pen = Pen
+drawing-tool-highlighter = Highlighter
 drawing-tool-eraser = Eraser
 drawing-width = Width
 drawing-width-thin = Thin

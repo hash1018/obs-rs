@@ -263,7 +263,7 @@ fn handle_drawing(
 
     match editor.pen.tool {
         Tool::Select => false,
-        Tool::Pen => {
+        Tool::Pen | Tool::Highlighter => {
             if response.drag_started() || response.clicked() {
                 editor.pen.stroke = Some(Vec::new());
             }
@@ -279,8 +279,8 @@ fn handle_drawing(
                 let mut strokes = drawing.strokes.clone();
                 strokes.push(Stroke {
                     points: stroke.clone(),
-                    rgba: editor.pen.rgba,
-                    width: editor.pen.width,
+                    rgba: editor.pen.rgba(),
+                    width: editor.pen.width(),
                 });
                 actions.push(UiAction::DrawStrokes(item_id, strokes));
                 ui.ctx().request_repaint();
@@ -294,8 +294,8 @@ fn handle_drawing(
                         item_id,
                         Stroke {
                             points,
-                            rgba: editor.pen.rgba,
-                            width: editor.pen.width,
+                            rgba: editor.pen.rgba(),
+                            width: editor.pen.width(),
                         },
                     ),
                 )));
@@ -310,7 +310,7 @@ fn handle_drawing(
                     .strokes
                     .iter()
                     .enumerate()
-                    .filter(|(_, stroke)| touches(stroke, point, editor.pen.width))
+                    .filter(|(_, stroke)| touches(stroke, point, editor.pen.width()))
                     .map(|(index, _)| index)
                     .collect();
                 if !hit.is_empty() {

@@ -13,7 +13,7 @@ pub(super) const TOOLBAR_HEIGHT: f32 = 26.0;
 pub(super) const TOOLBAR_WIDTH: f32 = 210.0;
 /// What the pen's own controls need beside the zoom ones. Only claimed while
 /// a Drawing is selected — the toolbar is its resting width otherwise.
-pub(super) const PEN_TOOLBAR_WIDTH: f32 = 330.0;
+pub(super) const PEN_TOOLBAR_WIDTH: f32 = 400.0;
 pub(super) const TOOLBAR_GAP: f32 = 6.0;
 
 /// The palette a stroke's colour is chosen from.
@@ -21,21 +21,36 @@ pub(super) const TOOLBAR_GAP: f32 = 6.0;
 /// A short row rather than a picker: annotating is a fast, interrupting sort
 /// of thing, and six that read against most pictures beats a wheel that has
 /// to be aimed at. The picker is still there for anything else.
-const PALETTE: [[u8; 4]; 6] = [
-    [220, 40, 40, 255],
-    [250, 190, 40, 255],
-    [60, 200, 90, 255],
-    [60, 150, 240, 255],
-    [20, 20, 20, 255],
-    [245, 245, 245, 255],
+const PALETTE: [[u8; 3]; 6] = [
+    [220, 40, 40],
+    [250, 190, 40],
+    [60, 200, 90],
+    [60, 150, 240],
+    [20, 20, 20],
+    [245, 245, 245],
 ];
 
-/// The widths on offer, in Canvas units.
-const WIDTHS: [(f32, TextKey); 3] = [
-    (3.0, TextKey::DrawingWidthThin),
-    (6.0, TextKey::DrawingWidthMedium),
-    (14.0, TextKey::DrawingWidthThick),
-];
+/// The widths on offer, in Canvas units, for whichever implement is in hand.
+///
+/// Two sets rather than one: the same three names, because thin/medium/thick
+/// is what a reader wants to pick from either way, but a highlighter's thin
+/// is wider than a pen's thick. One shared list would either give the pen
+/// widths no one draws a line at or give the highlighter a stripe too narrow
+/// to mark a word with.
+fn widths(tool: Tool) -> [(f32, TextKey); 3] {
+    match tool {
+        Tool::Highlighter => [
+            (16.0, TextKey::DrawingWidthThin),
+            (28.0, TextKey::DrawingWidthMedium),
+            (48.0, TextKey::DrawingWidthThick),
+        ],
+        _ => [
+            (3.0, TextKey::DrawingWidthThin),
+            (6.0, TextKey::DrawingWidthMedium),
+            (14.0, TextKey::DrawingWidthThick),
+        ],
+    }
+}
 
 /// The pen's own half of the toolbar, shown only while a Drawing is selected.
 pub(super) fn show_pen(
@@ -50,6 +65,7 @@ pub(super) fn show_pen(
     for (tool, key) in [
         (Tool::Select, TextKey::DrawingToolSelect),
         (Tool::Pen, TextKey::DrawingToolPen),
+        (Tool::Highlighter, TextKey::DrawingToolHighlighter),
         (Tool::Eraser, TextKey::DrawingToolEraser),
     ] {
         let label = i18n.text(key);
@@ -69,7 +85,7 @@ pub(super) fn show_pen(
         let colour = egui::Color32::from_rgb(rgba[0], rgba[1], rgba[2]);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
         ui.painter().rect_filled(rect, 2.0, colour);
-        if pen.rgba == rgba {
+        if pen.nib().rgb == rgba {
             ui.painter().rect_stroke(
                 rect,
                 2.0,
@@ -78,24 +94,25 @@ pub(super) fn show_pen(
             );
         }
         if response.clicked() {
-            pen.rgba = rgba;
+            pen.nib_mut().rgb = rgba;
         }
     }
 
     ui.separator();
+    let offered = widths(pen.tool);
     let current = i18n.text(
-        WIDTHS
+        offered
             .iter()
-            .find(|(width, _)| (*width - pen.width).abs() < 0.01)
+            .find(|(width, _)| (*width - pen.width()).abs() < 0.01)
             .map_or(TextKey::DrawingWidthMedium, |(_, key)| *key),
     );
     ui.menu_button(current, |ui| {
-        for (width, key) in WIDTHS {
+        for (width, key) in offered {
             if ui
-                .selectable_label((width - pen.width).abs() < 0.01, i18n.text(key))
+                .selectable_label((width - pen.width()).abs() < 0.01, i18n.text(key))
                 .clicked()
             {
-                pen.width = width;
+                pen.nib_mut().width = width;
                 ui.close();
             }
         }
