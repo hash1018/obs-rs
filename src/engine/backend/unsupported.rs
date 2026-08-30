@@ -34,6 +34,9 @@ pub(in crate::engine) struct RunningSource;
 impl RunningSource {
     pub(in crate::engine) fn pause(&self) {}
     pub(in crate::engine) fn resume(&self) {}
+    pub(in crate::engine) fn ended(&self) -> bool {
+        false
+    }
     pub(in crate::engine) fn stop(&self) {}
 }
 
@@ -58,7 +61,7 @@ impl Backend {
         item: &SceneItemSnapshot,
         _layer: VideoLayer,
         _fps: u32,
-    ) -> Result<OpenSource, BackendError> {
+    ) -> Result<Option<OpenSource>, BackendError> {
         Err(unsupported_kind(item))
     }
 

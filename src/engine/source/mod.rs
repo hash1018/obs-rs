@@ -13,6 +13,7 @@
 pub(in crate::engine) mod color;
 pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
+pub(in crate::engine) mod window_capture;
 
 use crate::snapshots::SceneItemSnapshot;
 

@@ -84,4 +84,4 @@ features = ["cuda", "pipewire-screen-capture", "pipewire-audio-capture"]
 
 [target.'cfg(target_os = "windows")'.dependencies.media-pp]
 path = "../media-pp/lib"
-features = ["d3d11", "dxgi-capture", "wasapi-capture"]
+features = ["d3d11", "dxgi-capture", "wasapi-capture", "wgc-capture"]

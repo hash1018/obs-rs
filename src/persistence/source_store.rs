@@ -474,8 +474,20 @@ impl SourceStore {
         scene_item_id: SceneItemId,
         restore_token: Option<&str>,
     ) -> PersistenceResult<()> {
+        // Both tables, because both kinds of capture are opened through the
+        // portal on the platforms that have one, and only one of them holds a
+        // row for any given Source.
         transaction.execute(
             "UPDATE display_capture_settings
+                SET restore_token = ?1
+              WHERE target_kind = 'portal'
+                AND source_id = (
+                    SELECT source_id FROM scene_items WHERE id = ?2
+                )",
+            params![restore_token, scene_item_id.0],
+        )?;
+        transaction.execute(
+            "UPDATE window_capture_settings
                 SET restore_token = ?1
               WHERE target_kind = 'portal'
                 AND source_id = (

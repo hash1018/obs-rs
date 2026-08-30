@@ -625,6 +625,98 @@ mod tests {
     }
 
     #[test]
+    fn window_capture_source_persists_the_pair_that_finds_its_window() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddWindowCapture {
+                scene_id,
+                settings: crate::domain::WindowCaptureSettings {
+                    target: crate::domain::WindowCaptureTarget::Window {
+                        process: "notepad.exe".into(),
+                        title: "Untitled - Notepad".into(),
+                    },
+                    size_hint: Some([1280, 720]),
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items.len(), 1);
+        assert_eq!(sources.items[0].name, "Window Capture");
+        assert_eq!(sources.items[0].source_size, [1280.0, 720.0]);
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::WindowCapture(settings)
+                if settings.target
+                    == crate::domain::WindowCaptureTarget::Window {
+                        process: "notepad.exe".into(),
+                        title: "Untitled - Notepad".into(),
+                    }
+                    && settings.size_hint == Some([1280, 720])
+        ));
+    }
+
+    #[test]
+    fn portal_window_capture_persists_no_target_until_the_portal_answers() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        // How a portal Window Capture is always added: nothing has been
+        // chosen yet, because the portal does the choosing when the Source
+        // first opens.
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddWindowCapture {
+                scene_id,
+                settings: crate::domain::WindowCaptureSettings {
+                    target: crate::domain::WindowCaptureTarget::Portal {
+                        restore_token: None,
+                    },
+                    size_hint: None,
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::WindowCapture(settings)
+                if settings.target
+                    == crate::domain::WindowCaptureTarget::Portal { restore_token: None }
+        ));
+
+        // And what the first open produces is stored under the same item, so
+        // the second run reopens the window instead of asking again.
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetRestoreToken(item_id, Some("window-token".into())),
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::WindowCapture(settings)
+                if settings.target
+                    == crate::domain::WindowCaptureTarget::Portal {
+                        restore_token: Some("window-token".into()),
+                    }
+        ));
+    }
+
+    #[test]
     fn source_visibility_lock_and_compositing_order_are_persisted() {
         let mut database = ProjectDatabase::open_in_memory().unwrap();
         let scene_id = scene_snapshot(&database)

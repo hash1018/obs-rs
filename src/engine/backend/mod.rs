@@ -68,6 +68,22 @@ pub(in crate::engine) use platform::{Backend, Layer, RunningSource};
 
 pub(in crate::engine) type BackendError = Box<dyn Error + Send + Sync>;
 
+/// Whether `pipeline` has finished, however it got there.
+///
+/// Asked of the pipeline rather than read off its bus, because the endings
+/// are not alike there and the caller does not care which one happened: a
+/// window capture whose window closes ends as a source *error* — WGC has
+/// nothing left to capture — while a file source ends with `Eos`. Both mean
+/// the same thing to whoever might reopen it. `media-pp` has already written
+/// the reason to the log by the time this reads false.
+///
+/// Shared by both backends because a pipeline is a pipeline; the two differ
+/// in what else a `RunningSource` can be, not in this.
+#[allow(dead_code)]
+pub(in crate::engine) fn pipeline_ended(pipeline: &media_pp::pipeline::Pipeline) -> bool {
+    !pipeline.is_running()
+}
+
 /// What is behind every layer: the Canvas itself, where no Source covers it.
 ///
 /// Part of what this module offers a backend rather than something every

@@ -243,7 +243,7 @@ impl Backend {
         item: &SceneItemSnapshot,
         layer: VideoLayer,
         fps: u32,
-    ) -> Result<OpenSource, BackendError> {
+    ) -> Result<Option<OpenSource>, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => {
                 let (source, frame_rate) = source::display_capture::open(
@@ -259,11 +259,25 @@ impl Backend {
                     .lock()
                     .expect("capture rates poisoned")
                     .insert(source.name.clone(), frame_rate);
-                Ok(source)
+                Ok(Some(source))
             }
-            SourceKind::Color => source::color::open(&self.device, &self.compositor, item, layer),
+            SourceKind::WindowCapture => {
+                let Some((source, frame_rate)) =
+                    source::window_capture::open(&self.device, &self.compositor, item, layer, fps)?
+                else {
+                    return Ok(None);
+                };
+                self.capture_rates
+                    .lock()
+                    .expect("capture rates poisoned")
+                    .insert(source.name.clone(), frame_rate);
+                Ok(Some(source))
+            }
+            SourceKind::Color => {
+                source::color::open(&self.device, &self.compositor, item, layer).map(Some)
+            }
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, &self.compositor, item, layer)
+                source::drawing::open(&self.device, &self.compositor, item, layer).map(Some)
             }
             _ => Err(unsupported_kind(item)),
         }
@@ -322,6 +336,14 @@ impl RunningSource {
 
     pub(in crate::engine) fn resume(&self) {
         self.0.resume();
+    }
+
+    /// Whether whatever this was capturing has ended by itself.
+    ///
+    /// See [`super::pipeline_ended`] for why the pipeline is asked rather
+    /// than its bus read.
+    pub(in crate::engine) fn ended(&self) -> bool {
+        super::pipeline_ended(&self.0)
     }
 
     pub(in crate::engine) fn stop(&self) {

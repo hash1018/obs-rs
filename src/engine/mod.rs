@@ -36,7 +36,7 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::elements::{VideoFit, VideoLayer, VideoRect};
 use time::OffsetDateTime;
 
-use crate::domain::{SceneCanvas, SceneItemId, SourceSettings, Transform};
+use crate::domain::{SceneCanvas, SceneItemId, SourceKind, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
@@ -506,6 +506,7 @@ fn run(
 
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
+    let mut looked_for_missing = Instant::now();
     // `recording` is owned by this loop rather than shared: only the commands
     // below reach it, and a settings change arrives on the same channel a
     // start does, so one can never land half-way through a recording being
@@ -539,7 +540,13 @@ fn run(
                     continue;
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                if looked_for_missing.elapsed() >= MISSING_RETRY {
+                    looked_for_missing = Instant::now();
+                    notice_closed_windows(&backend, &mut open, &scene);
+                    retry_missing(&backend, project.as_ref(), &mut open, &scene);
+                }
+            }
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -809,6 +816,108 @@ enum SourceState {
     /// A retry loop here would reopen the portal dialog on every snapshot,
     /// which is a stream of modal windows rather than an error message.
     Failed,
+    /// Opened cleanly, and the thing it captures is not here right now.
+    ///
+    /// Only a Window Capture reaches this: a window is closed and reopened
+    /// as a matter of course, so its absence is a state rather than a
+    /// failure. Unlike `Failed` it is looked at again — see `retry_missing`
+    /// — and nothing was opened, so there is nothing holding a dialog or a
+    /// device while it waits.
+    Missing,
+}
+
+/// How long a `Missing` Source waits before it is looked for again.
+///
+/// The look enumerates every top-level window, so it is not something to do
+/// on every idle tick; a second is well under what anyone notices between
+/// bringing a window back and seeing it in the Scene.
+const MISSING_RETRY: Duration = Duration::from_secs(1);
+
+/// Opens one Scene item, turning both kinds of "no Source" into a state.
+fn open_item(
+    backend: &Backend,
+    project: Option<&ProjectDispatcher>,
+    item: &SceneItemSnapshot,
+    layer: VideoLayer,
+) -> SourceState {
+    match backend.open_source(item, layer, backend.frame_rate()) {
+        // Nothing to open yet, and nothing wrong. Looked at again on the next
+        // pass rather than reported.
+        Ok(None) => SourceState::Missing,
+        Ok(Some(source)) => {
+            // The portal may hand back a different token than the one it was
+            // given. Keeping the old one would mean prompting on every launch,
+            // which is the thing persisting it was for.
+            if let (Some(project), Some(token)) = (project, source.refreshed_token.clone()) {
+                project.dispatch(ProjectCommand::Source(SourceCommand::SetRestoreToken(
+                    item.id, token,
+                )));
+            }
+            SourceState::Open(source)
+        }
+        Err(error) => {
+            eprintln!("could not open \"{}\": {error}", item.name);
+            SourceState::Failed
+        }
+    }
+}
+
+/// Puts a Window Capture whose window has since closed back to `Missing`.
+///
+/// A window closing ends the capture: the Source stops, the compositor drops
+/// the layer, and the pipeline is finished. Nothing tells the engine that, so
+/// it asks — and once it knows, the Source is stopped and forgotten so that
+/// `retry_missing` can open it again when the window comes back. Only a
+/// Window Capture is asked: it is the one kind whose target is expected to
+/// come and go.
+fn notice_closed_windows(
+    backend: &Backend,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    snapshot: &SourcesSnapshot,
+) {
+    for item in &snapshot.items {
+        if item.kind != SourceKind::WindowCapture {
+            continue;
+        }
+        let Some(SourceState::Open(source)) = open.get(&item.id) else {
+            continue;
+        };
+        if !source.source.ended() {
+            continue;
+        }
+        source.source.stop();
+        backend.remove_source(&source.name);
+        open.insert(item.id, SourceState::Missing);
+    }
+}
+
+/// Looks again for whatever a `Missing` Source captures.
+///
+/// This runs off the idle tick rather than off a Scene change: a window that
+/// is closed and reopened while the user does nothing else in the app
+/// produces no command at all, so waiting for one would leave the Source
+/// blank until something unrelated happened to move.
+fn retry_missing(
+    backend: &Backend,
+    project: Option<&ProjectDispatcher>,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    snapshot: &SourcesSnapshot,
+) {
+    if !open
+        .values()
+        .any(|state| matches!(state, SourceState::Missing))
+    {
+        return;
+    }
+    let count = snapshot.items.len();
+    for (index, item) in snapshot.items.iter().enumerate() {
+        if !matches!(open.get(&item.id), Some(SourceState::Missing)) {
+            continue;
+        }
+        let layer = layer_for(item, item.transform, (count - index) as i32);
+        let state = open_item(backend, project, item, layer);
+        open.insert(item.id, state);
+    }
 }
 
 /// Brings the running Sources in line with what the project now holds.
@@ -829,27 +938,8 @@ fn reconcile(
                 refresh_pushed(source, item);
             }
             Some(SourceState::Failed) => {}
-            None => {
-                let state = match backend.open_source(item, layer, backend.frame_rate()) {
-                    Ok(source) => {
-                        // The portal may hand back a different token than the
-                        // one it was given. Keeping the old one would mean
-                        // prompting on every launch, which is the thing
-                        // persisting it was for.
-                        if let (Some(project), Some(token)) =
-                            (project, source.refreshed_token.clone())
-                        {
-                            project.dispatch(ProjectCommand::Source(
-                                SourceCommand::SetRestoreToken(item.id, token),
-                            ));
-                        }
-                        SourceState::Open(source)
-                    }
-                    Err(error) => {
-                        eprintln!("could not open \"{}\": {error}", item.name);
-                        SourceState::Failed
-                    }
-                };
+            Some(SourceState::Missing) | None => {
+                let state = open_item(backend, project, item, layer);
                 open.insert(item.id, state);
             }
         }

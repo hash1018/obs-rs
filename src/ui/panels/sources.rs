@@ -1,7 +1,10 @@
 use eframe::egui;
 
-use crate::capture::{MonitorTarget, SourcePicker};
-use crate::domain::{DisplayCaptureSettings, DisplayCaptureTarget, SceneId, SourceKind};
+use crate::capture::{MonitorTarget, SourcePicker, WindowTarget};
+use crate::domain::{
+    DisplayCaptureSettings, DisplayCaptureTarget, SceneId, SourceKind, WindowCaptureSettings,
+    WindowCaptureTarget,
+};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
@@ -13,7 +16,7 @@ use super::toolbar::{self, ToolIcon};
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
 const ICON_WIDTH: f32 = 22.0;
 const LIST_ROW_HEIGHT: f32 = 26.0;
-const SOURCE_KIND_LIST_HEIGHT: f32 = 96.0;
+const SOURCE_KIND_LIST_HEIGHT: f32 = 122.0;
 const DISPLAY_LIST_HEIGHT: f32 = 200.0;
 
 #[derive(Default)]
@@ -25,12 +28,19 @@ pub(in crate::ui) struct SourcesPanelState {
     display_dialog_open: bool,
     display_targets: Vec<MonitorTarget>,
     selected_monitor_name: Option<String>,
+    window_dialog_open: bool,
+    window_targets: Vec<WindowTarget>,
+    /// The platform handle of the picked row, which is the only thing in the
+    /// list certain to be unique: two windows can share a title, a process,
+    /// or both.
+    selected_window: Option<isize>,
     select_new_item: bool,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum AddSourceKind {
     DisplayCapture,
+    WindowCapture,
     #[default]
     Color,
     Drawing,
@@ -81,6 +91,7 @@ pub(in crate::ui) fn show(
 
     show_add_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_display_dialog(ui.ctx(), state, snapshot, i18n, actions);
+    show_window_dialog(ui.ctx(), state, snapshot, i18n, actions);
 }
 
 fn show_source_row(
@@ -267,6 +278,19 @@ fn show_add_dialog(
                     add_requested = true;
                 }
 
+                let window_label = i18n.text(TextKey::SourceKindWindowCapture);
+                let response = list_row(
+                    ui,
+                    &window_label,
+                    state.add_kind == AddSourceKind::WindowCapture,
+                );
+                if response.clicked() {
+                    state.add_kind = AddSourceKind::WindowCapture;
+                }
+                if response.double_clicked() {
+                    add_requested = true;
+                }
+
                 let color_label = i18n.text(TextKey::SourceKindColor);
                 let response = list_row(ui, &color_label, state.add_kind == AddSourceKind::Color);
                 if response.clicked() {
@@ -319,6 +343,9 @@ fn show_add_dialog(
             }
             AddSourceKind::DisplayCapture => {
                 prepare_display_picker(state, snapshot.scene_id, actions)
+            }
+            AddSourceKind::WindowCapture => {
+                prepare_window_picker(state, snapshot.scene_id, actions)
             }
         }
         open = false;
@@ -452,6 +479,158 @@ fn show_display_dialog(
     if !open {
         state.display_targets.clear();
     }
+}
+
+/// Chooses how a Window Capture is picked, which is not the same everywhere.
+///
+/// Where this process may enumerate windows it draws the list itself, the way
+/// the display picker does. Where the system owns the picker there is nothing
+/// to show and nothing to store: the item is added pointing at the portal,
+/// and the portal asks which window the first time the Source opens. Its
+/// answer comes back as a restore token, which is what reopens it after that.
+fn prepare_window_picker(
+    state: &mut SourcesPanelState,
+    scene_id: Option<SceneId>,
+    actions: &mut Vec<UiAction>,
+) {
+    state.window_targets.clear();
+    state.selected_window = None;
+
+    match crate::capture::source_picker() {
+        SourcePicker::Enumerated { windows, .. } => {
+            state.selected_window = windows.first().map(|window| window.handle);
+            state.window_targets = windows;
+            state.window_dialog_open = true;
+        }
+        SourcePicker::SystemDialog => {
+            if let Some(scene_id) = scene_id {
+                actions.push(UiAction::Project(ProjectCommand::Source(
+                    SourceCommand::AddWindowCapture {
+                        scene_id,
+                        settings: WindowCaptureSettings {
+                            target: WindowCaptureTarget::Portal {
+                                restore_token: None,
+                            },
+                            size_hint: None,
+                        },
+                    },
+                )));
+                state.select_new_item = true;
+            }
+        }
+    }
+}
+
+fn show_window_dialog(
+    ctx: &egui::Context,
+    state: &mut SourcesPanelState,
+    snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    if !state.window_dialog_open {
+        return;
+    }
+
+    let mut open = true;
+    let mut add = false;
+    let mut back = false;
+    let mut cancel = false;
+    egui::Window::new(i18n.text(TextKey::SourceWindowTitle))
+        .id(egui::Id::new("window_capture_dialog"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            ui.label(i18n.text(TextKey::SourceWindowPrompt));
+            ui.add_space(4.0);
+
+            show_list_view(ui, DISPLAY_LIST_HEIGHT, |ui| {
+                if state.window_targets.is_empty() {
+                    ui.weak(i18n.text(TextKey::SourceWindowNone));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("window_capture_targets")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for target in &state.window_targets {
+                                let selected = state.selected_window == Some(target.handle);
+                                let label = window_label(i18n, target);
+                                if list_row(ui, &label, selected).clicked() {
+                                    state.selected_window = Some(target.handle);
+                                }
+                            }
+                        });
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        state.selected_window.is_some(),
+                        egui::Button::new(i18n.text(TextKey::ActionAdd)),
+                    )
+                    .clicked()
+                {
+                    add = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionBack)).clicked() {
+                    back = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionCancel)).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+
+    if back {
+        open = false;
+        state.add_dialog_open = true;
+    } else if cancel {
+        open = false;
+    } else if add {
+        let selected = state
+            .selected_window
+            .take()
+            .and_then(|handle| {
+                state
+                    .window_targets
+                    .iter()
+                    .find(|target| target.handle == handle)
+            })
+            .map(|target| WindowCaptureSettings {
+                // The handle itself is deliberately not stored: it is only
+                // meaningful while this window lives, and the point of the
+                // pair below is to find the window again in a later session.
+                target: WindowCaptureTarget::Window {
+                    process: target.process.clone(),
+                    title: target.title.clone(),
+                },
+                size_hint: Some([target.size.0, target.size.1]),
+            });
+        if let (Some(scene_id), Some(settings)) = (snapshot.scene_id, selected) {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::AddWindowCapture { scene_id, settings },
+            )));
+            state.select_new_item = true;
+        }
+        open = false;
+    }
+
+    state.window_dialog_open = open;
+    if !open {
+        state.window_targets.clear();
+    }
+}
+
+fn window_label(i18n: &LocalizationManager, target: &WindowTarget) -> String {
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("title", target.title.as_str());
+    args.set("process", target.process.as_str());
+    i18n.text_with(TextKey::SourceWindowRow, &args).into_owned()
 }
 
 fn monitor_label(i18n: &LocalizationManager, target: &MonitorTarget) -> String {

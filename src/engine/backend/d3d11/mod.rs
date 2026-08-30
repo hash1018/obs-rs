@@ -240,7 +240,7 @@ impl Backend {
         item: &SceneItemSnapshot,
         layer: VideoLayer,
         fps: u32,
-    ) -> Result<OpenSource, BackendError> {
+    ) -> Result<Option<OpenSource>, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => display_capture::open(
                 &self.device,
@@ -249,10 +249,16 @@ impl Backend {
                 item,
                 layer,
                 fps,
-            ),
-            SourceKind::Color => source::color::open(&self.device, &self.compositor, item, layer),
+            )
+            .map(Some),
+            SourceKind::WindowCapture => {
+                source::window_capture::open(&self.device, &self.compositor, item, layer, fps)
+            }
+            SourceKind::Color => {
+                source::color::open(&self.device, &self.compositor, item, layer).map(Some)
+            }
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, &self.compositor, item, layer)
+                source::drawing::open(&self.device, &self.compositor, item, layer).map(Some)
             }
             _ => Err(unsupported_kind(item)),
         }
@@ -346,6 +352,20 @@ impl RunningSource {
             Self::Shared {
                 captures, monitor, ..
             } => captures.set_showing(monitor, true),
+        }
+    }
+
+    /// Whether whatever this was capturing has ended by itself.
+    ///
+    /// See [`super::pipeline_ended`] for why the pipeline is asked rather
+    /// than its bus read.
+    pub(in crate::engine) fn ended(&self) -> bool {
+        match self {
+            Self::Owned(pipeline) => super::pipeline_ended(pipeline),
+            // A display is not something that closes, and the capture behind
+            // one is shared: whether it ended is the registry's business, not
+            // one item's.
+            Self::Shared { .. } => false,
         }
     }
 
