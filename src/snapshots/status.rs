@@ -25,4 +25,7 @@ pub struct StatusSnapshot {
     /// engine has probed, which the Settings dialog shows as such rather than
     /// as "none".
     pub encoders: Vec<crate::settings::RecordingEncoder>,
+    /// Which audio codecs this build can record with. Empty until the engine
+    /// has probed, on the same terms as `encoders` above.
+    pub audio_codecs: Vec<crate::settings::RecordingAudioCodec>,
 }

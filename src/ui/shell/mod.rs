@@ -84,6 +84,7 @@ pub fn show(
         &mut state.settings,
         resources.snapshots.status.recording_elapsed.is_some(),
         &resources.snapshots.status.encoders,
+        &resources.snapshots.status.audio_codecs,
         resources.i18n,
         actions,
     );

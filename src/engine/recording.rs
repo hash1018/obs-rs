@@ -57,11 +57,45 @@ use super::backend::{
     Backend, BackendError, PreparedRecording, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
     VideoTrack,
 };
+use crate::settings::{DEFAULT_AUDIO_BIT_RATE_KBPS, RecordingAudioCodec};
 
-/// What the audio track is encoded at. AAC because it is what an mp4 is
-/// expected to carry, and 160 kb/s because a screen recording's audio is
-/// usually speech over one desktop's output, where more is not heard.
-const AUDIO_BIT_RATE: usize = 160_000;
+/// Which audio codecs this FFmpeg build can actually open, at the mix format
+/// the encoder would be given.
+///
+/// Probed rather than assumed, the same as the video list and for the same
+/// reason: `libopus` is an external library a stripped build may not carry,
+/// and a dialog offering it there would be offering a recording that fails to
+/// start. AAC is built in and is expected to be here, but it is opened too — a
+/// list where one entry is checked and the other is trusted is a list that
+/// lies about half of itself.
+///
+/// Cheap enough to do at startup: no device, no GPU, one `avcodec_open2` each.
+pub(super) fn available_audio_codecs() -> Vec<RecordingAudioCodec> {
+    RecordingAudioCodec::ALL
+        .into_iter()
+        .filter(|codec| {
+            SwAudioEncoder::new(
+                "probe-audio-encode",
+                SwAudioEncoderOptions {
+                    codec: media_codec(*codec),
+                    sample_rate: MIX_SAMPLE_RATE,
+                    channels: MIX_CHANNELS,
+                    time_base: ffmpeg::Rational::new(1, MIX_SAMPLE_RATE as i32),
+                    bit_rate: DEFAULT_AUDIO_BIT_RATE_KBPS as usize * 1_000,
+                },
+            )
+            .is_ok()
+        })
+        .collect()
+}
+
+/// This crate's name for a codec, in `media-pp`'s.
+fn media_codec(codec: RecordingAudioCodec) -> AudioCodec {
+    match codec {
+        RecordingAudioCodec::Aac => AudioCodec::Aac,
+        RecordingAudioCodec::Opus => AudioCodec::Opus,
+    }
+}
 
 /// A recording that is running, and everything needed to end it.
 pub(super) struct Recording {
@@ -107,11 +141,11 @@ impl Recording {
                     SwAudioEncoder::new(
                         "record-audio-encode",
                         SwAudioEncoderOptions {
-                            codec: AudioCodec::Aac,
+                            codec: media_codec(settings.audio_codec),
                             sample_rate: MIX_SAMPLE_RATE,
                             channels: MIX_CHANNELS,
                             time_base: audio_time_base,
-                            bit_rate: AUDIO_BIT_RATE,
+                            bit_rate: settings.audio_bit_rate_kbps.max(1) as usize * 1_000,
                         },
                     )?,
                 ))

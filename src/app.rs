@@ -210,6 +210,11 @@ impl ObsApp {
         {
             self.snapshots.status.encoders = encoders.as_ref().clone();
         }
+        if self.snapshots.status.audio_codecs.is_empty()
+            && let Some(codecs) = engine.audio_codecs()
+        {
+            self.snapshots.status.audio_codecs = codecs.as_ref().clone();
+        }
 
         // A minimised window is nobody looking at the Preview, and the engine
         // can stop putting frames where nobody will sample them. Only the

@@ -151,6 +151,7 @@ pub(in crate::ui) fn show(
     state: &mut SettingsDialogState,
     recording: bool,
     encoders: &[crate::settings::RecordingEncoder],
+    audio_codecs: &[crate::settings::RecordingAudioCodec],
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -221,6 +222,7 @@ pub(in crate::ui) fn show(
                                         recording,
                                         picking,
                                         encoders,
+                                        audio_codecs,
                                         i18n,
                                     );
                                 }

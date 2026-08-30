@@ -9,7 +9,10 @@ use eframe::egui;
 use time::OffsetDateTime;
 
 use crate::i18n::{LocalizationManager, TextKey};
-use crate::settings::{AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE, RecordingEncoder};
+use crate::settings::{
+    AUDIO_BIT_RATE_KBPS_RANGE, AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE,
+    RecordingAudioCodec, RecordingEncoder,
+};
 
 /// Room for "Browse…" in either language, fixed so the field beside it does
 /// not change width when the language does.
@@ -24,6 +27,7 @@ pub(super) fn show(
     recording: bool,
     picking: bool,
     encoders: &[RecordingEncoder],
+    audio_codecs: &[RecordingAudioCodec],
     i18n: &LocalizationManager,
 ) -> bool {
     if recording {
@@ -154,6 +158,40 @@ pub(super) fn show(
                 egui::DragValue::new(&mut draft.recording.keyframe_seconds)
                     .range(KEYFRAME_SECONDS_RANGE)
                     .suffix(" s"),
+            );
+            ui.end_row();
+
+            ui.label(i18n.text(TextKey::SettingsRecordingAudioCodec));
+            egui::ComboBox::from_id_salt("settings_audio_codec")
+                .selected_text(draft.recording.audio_codec.label())
+                .show_ui(ui, |ui| {
+                    // Every codec, not only the ones that opened — the same
+                    // reasoning as the video list above: "libopus is not in
+                    // this build" is worth reading, and an entry that
+                    // silently vanished leaves someone looking for it.
+                    for codec in RecordingAudioCodec::ALL {
+                        let available = audio_codecs.contains(&codec);
+                        ui.add_enabled_ui(available, |ui| {
+                            let label = if available {
+                                codec.label().to_owned()
+                            } else {
+                                format!(
+                                    "{} — {}",
+                                    codec.label(),
+                                    i18n.text(TextKey::SettingsEncoderUnavailable)
+                                )
+                            };
+                            ui.selectable_value(&mut draft.recording.audio_codec, codec, label);
+                        });
+                    }
+                });
+            ui.end_row();
+
+            ui.label(i18n.text(TextKey::SettingsRecordingAudioBitRate));
+            ui.add(
+                egui::DragValue::new(&mut draft.recording.audio_bit_rate_kbps)
+                    .range(AUDIO_BIT_RATE_KBPS_RANGE)
+                    .suffix(" kbps"),
             );
             ui.end_row();
         });

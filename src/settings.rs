@@ -163,8 +163,14 @@ pub struct RecordingSettings {
     /// This one really is a recording setting: only the file is scaled. The
     /// Preview and anything else off the compositor's `Tee` keep the canvas.
     pub output_height: u32,
-    /// Target bit rate in megabits per second.
+    /// Target video bit rate in megabits per second.
     pub bit_rate_mbps: u32,
+    /// Which codec the audio track is written with.
+    pub audio_codec: RecordingAudioCodec,
+    /// Target audio bit rate in kilobits per second. Kilobits rather than
+    /// megabits because the useful range is two orders of magnitude below
+    /// the video one, and 0.16 Mb/s is a worse way to write 160 kb/s.
+    pub audio_bit_rate_kbps: u32,
     /// Seconds between keyframes.
     pub keyframe_seconds: u32,
 }
@@ -177,6 +183,8 @@ impl Default for RecordingSettings {
             name_prefix: crate::paths::APPLICATION.to_owned(),
             fps: DEFAULT_FPS,
             bit_rate_mbps: DEFAULT_BIT_RATE_MBPS,
+            audio_codec: RecordingAudioCodec::default(),
+            audio_bit_rate_kbps: DEFAULT_AUDIO_BIT_RATE_KBPS,
             keyframe_seconds: DEFAULT_KEYFRAME_SECONDS,
             output_height: 0,
         }
@@ -297,6 +305,55 @@ impl RecordingEncoder {
         }
     }
 }
+
+/// Which codec a recording's audio track is written with.
+///
+/// Both are carried by MP4. Neither needs `--enable-gpl`, unlike the software
+/// H.264 encoders beside them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingAudioCodec {
+    /// FFmpeg's own built-in `aac`. The default because it is in every build
+    /// and every player, which is the whole job for a screen recording.
+    #[default]
+    Aac,
+    /// `libopus`. Better at a given bit rate, especially for speech, but an
+    /// external library a stripped FFmpeg build may not carry — which is why
+    /// this list is probed rather than assumed, the same as the video one.
+    Opus,
+}
+
+impl RecordingAudioCodec {
+    /// In preference order, which is also the order the dialog lists them.
+    pub const ALL: [Self; 2] = [Self::Aac, Self::Opus];
+
+    /// The most preferred of `available`, or `None` when it is empty.
+    pub fn best_of(available: &[Self]) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|codec| available.contains(codec))
+    }
+
+    /// What to call it in a list — FFmpeg's own name, so it can be compared
+    /// against `ffmpeg -encoders`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Aac => "AAC (aac)",
+            Self::Opus => "Opus (libopus)",
+        }
+    }
+}
+
+/// What a recording's audio track is written at unless it is changed.
+///
+/// 160 kb/s is comfortable for 48 kHz stereo of one desktop's output, where
+/// more is not heard. It was this crate's constant before it was settable.
+pub const DEFAULT_AUDIO_BIT_RATE_KBPS: u32 = 160;
+
+/// What the dialog accepts. Wide rather than tight, the same reasoning as the
+/// video bit rate's own range: these bound what is representable, not what is
+/// sensible.
+pub const AUDIO_BIT_RATE_KBPS_RANGE: std::ops::RangeInclusive<u32> = 32..=512;
 
 /// Enough for 1080p screen content at the compositor's rate, where large
 /// still areas cost almost nothing and a scrolling window is the peak. The
@@ -757,5 +814,16 @@ mod tests {
             "largest first, strictly: {heights:?}"
         );
         assert!(heights.iter().all(|height| height % 2 == 0), "{heights:?}");
+    }
+
+    /// A build without libopus must still record with sound, on the codec it
+    /// does have. The video fallback exists for the same reason.
+    #[test]
+    fn the_audio_fallback_prefers_aac() {
+        use RecordingAudioCodec::*;
+
+        assert_eq!(RecordingAudioCodec::best_of(&[Aac, Opus]), Some(Aac));
+        assert_eq!(RecordingAudioCodec::best_of(&[Opus]), Some(Opus));
+        assert_eq!(RecordingAudioCodec::best_of(&[]), None);
     }
 }

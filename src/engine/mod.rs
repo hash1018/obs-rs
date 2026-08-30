@@ -121,6 +121,10 @@ struct RecordingState {
     /// mixer lives on a thread this one cannot ask. `None` when it never
     /// started, which records video only.
     mixer_tee: Option<media_pp::elements::TeeHandle>,
+    /// Which audio codecs the linked FFmpeg carries, probed once at startup
+    /// beside the video list. Kept so a stored codec that cannot open falls
+    /// back rather than failing the recording — see [`usable_settings`].
+    audio_codecs: Vec<crate::settings::RecordingAudioCodec>,
     /// The recording that is running, if one is. It rather than the backend
     /// holds the video branch too — see [`recording::Recording`].
     running: Option<recording::Recording>,
@@ -145,6 +149,9 @@ struct Published {
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
     /// Which encoders the backend can open — see `EngineManager::encoders`.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
+    /// Which audio codecs this FFmpeg build can open — see
+    /// `EngineManager::audio_codecs`.
+    audio_codecs: Arc<ArcSwapOption<Vec<crate::settings::RecordingAudioCodec>>>,
     /// Why the last attempt to start a recording failed, if it did.
     ///
     /// A failed start is otherwise silent: nothing appears, no clock runs,
@@ -169,6 +176,10 @@ pub struct EngineManager {
     /// backend has been built — probing needs its device, and the answer
     /// cannot change while the application runs.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
+    /// Which audio codecs the linked FFmpeg carries. Published beside the
+    /// video list, though this one needs no device — one answer arriving at
+    /// a time the dialog can already be open is enough.
+    audio_codecs: Arc<ArcSwapOption<Vec<crate::settings::RecordingAudioCodec>>>,
     commands: Sender<EngineCommand>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -193,6 +204,7 @@ impl EngineManager {
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
+        let audio_codecs = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
 
         let worker = thread::Builder::new().name("engine".to_owned()).spawn({
@@ -202,6 +214,7 @@ impl EngineManager {
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
             let encoders = Arc::clone(&encoders);
+            let audio_codecs = Arc::clone(&audio_codecs);
             let stop = Arc::clone(&stop);
             move || {
                 let published = Published {
@@ -211,6 +224,7 @@ impl EngineManager {
                     recording_paused_at,
                     recording_error,
                     encoders,
+                    audio_codecs,
                 };
                 let setup = EngineSetup {
                     size,
@@ -218,6 +232,8 @@ impl EngineManager {
                     recording: RecordingState {
                         settings: recording_settings,
                         mixer_tee,
+                        // Filled in once the probe has run — see `run`.
+                        audio_codecs: Vec::new(),
                         running: None,
                     },
                 };
@@ -237,6 +253,7 @@ impl EngineManager {
             recording_paused_at,
             recording_error,
             encoders,
+            audio_codecs,
             commands,
             stop,
             worker: Some(worker),
@@ -363,6 +380,12 @@ impl EngineManager {
         self.encoders.load_full()
     }
 
+    /// Which audio codecs this build can record with, or `None` before the
+    /// engine has finished probing.
+    pub fn audio_codecs(&self) -> Option<Arc<Vec<crate::settings::RecordingAudioCodec>>> {
+        self.audio_codecs.load_full()
+    }
+
     pub fn recording_error(&self) -> Option<Arc<String>> {
         self.recording_error.load_full()
     }
@@ -431,6 +454,14 @@ fn run(
     published
         .encoders
         .store(Some(Arc::new(backend.available_encoders().to_vec())));
+    // No device needed for these, but published from the same place so the
+    // dialog has one moment at which both lists exist. Kept as well as
+    // published: `usable_settings` needs it and cannot read a published slot
+    // the UI owns.
+    recording.audio_codecs = recording::available_audio_codecs();
+    published
+        .audio_codecs
+        .store(Some(Arc::new(recording.audio_codecs.clone())));
 
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
@@ -603,7 +634,7 @@ fn start_recording(
     if recording.running.is_some() {
         return Err("a recording is already running".into());
     }
-    let settings = usable_settings(backend, &recording.settings);
+    let settings = usable_settings(backend, &recording.audio_codecs, &recording.settings);
     let settings = &settings;
     let path = crate::paths::recording_file_in(
         &settings.directory_or_default(),
@@ -640,8 +671,25 @@ fn start_recording(
 /// by whatever that laptop could manage.
 fn usable_settings(
     backend: &Backend,
+    audio_codecs: &[crate::settings::RecordingAudioCodec],
     settings: &crate::settings::RecordingSettings,
 ) -> crate::settings::RecordingSettings {
+    let mut settings = settings.clone();
+
+    // The audio codec first, and on its own terms: a build without libopus
+    // should still record, with sound, on the codec it does have.
+    if !audio_codecs.contains(&settings.audio_codec)
+        && let Some(codec) = crate::settings::RecordingAudioCodec::best_of(audio_codecs)
+    {
+        eprintln!(
+            "{} cannot be opened here; recording audio with {} instead",
+            settings.audio_codec.label(),
+            codec.label()
+        );
+        settings.audio_codec = codec;
+    }
+
+    let settings = &settings;
     let available = backend.available_encoders();
     if available.contains(&settings.encoder) {
         return settings.clone();
