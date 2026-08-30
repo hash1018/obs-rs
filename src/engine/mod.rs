@@ -120,7 +120,10 @@ struct RecordingState {
     /// Where the audio track attaches, taken once at startup because the
     /// mixer lives on a thread this one cannot ask. `None` when it never
     /// started, which records video only.
-    mixer_tee: Option<media_pp::elements::TeeHandle>,
+    mixer: Option<(
+        media_pp::elements::TeeHandle,
+        media_pp::elements::MixerHandle,
+    )>,
     /// Which audio codecs the linked FFmpeg carries, probed once at startup
     /// beside the video list. Kept so a stored codec that cannot open falls
     /// back rather than failing the recording — see [`usable_settings`].
@@ -128,6 +131,21 @@ struct RecordingState {
     /// The recording that is running, if one is. It rather than the backend
     /// holds the video branch too — see [`recording::Recording`].
     running: Option<recording::Recording>,
+}
+
+impl RecordingState {
+    /// What the mixer is actually summing into, or the default when it never
+    /// started.
+    ///
+    /// Asked of the mixer rather than of the settings, because a format it
+    /// refused leaves the old one running and the audio encoder has to be
+    /// opened for what is really arriving.
+    fn mix_format(&self) -> media_pp::elements::MixFormat {
+        self.mixer
+            .as_ref()
+            .and_then(|(_, handle)| handle.mix_format())
+            .unwrap_or(audio::DEFAULT_MIX_FORMAT)
+    }
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -193,7 +211,10 @@ impl EngineManager {
         recording_settings: crate::settings::RecordingSettings,
         // Where a recording's audio track attaches — see
         // `AudioManager::mixer_tee`. `None` records without sound.
-        mixer_tee: Option<media_pp::elements::TeeHandle>,
+        mixer: Option<(
+            media_pp::elements::TeeHandle,
+            media_pp::elements::MixerHandle,
+        )>,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let size = [canvas.width as u32, canvas.height as u32];
@@ -231,7 +252,7 @@ impl EngineManager {
                     project,
                     recording: RecordingState {
                         settings: recording_settings,
-                        mixer_tee,
+                        mixer,
                         // Filled in once the probe has run — see `run`.
                         audio_codecs: Vec::new(),
                         running: None,
@@ -458,7 +479,7 @@ fn run(
     // dialog has one moment at which both lists exist. Kept as well as
     // published: `usable_settings` needs it and cannot read a published slot
     // the UI owns.
-    recording.audio_codecs = recording::available_audio_codecs();
+    recording.audio_codecs = recording::available_audio_codecs(recording.mix_format());
     published
         .audio_codecs
         .store(Some(Arc::new(recording.audio_codecs.clone())));
@@ -557,6 +578,13 @@ fn apply_command(
                 backend.set_frame_rate(settings.fps);
             }
             recording.settings = *settings;
+            // The rate the mix runs at decides which audio encoders can open —
+            // `libopus` takes 48 kHz and a short list of others, and nothing
+            // else. Re-probed here because Apply is when it can have moved.
+            recording.audio_codecs = recording::available_audio_codecs(recording.mix_format());
+            published
+                .audio_codecs
+                .store(Some(Arc::new(recording.audio_codecs.clone())));
             false
         }
         EngineCommand::StartRecording => {
@@ -634,7 +662,12 @@ fn start_recording(
     if recording.running.is_some() {
         return Err("a recording is already running".into());
     }
-    let settings = usable_settings(backend, &recording.audio_codecs, &recording.settings);
+    // Probed here rather than taken from the list published at startup: the
+    // mix format can have moved since, and which encoders open depends on it.
+    // Two `avcodec_open2` calls, beside a video encoder and a muxer that are
+    // about to be opened anyway.
+    let audio_codecs = recording::available_audio_codecs(recording.mix_format());
+    let settings = usable_settings(backend, &audio_codecs, &recording.settings);
     let settings = &settings;
     let path = crate::paths::recording_file_in(
         &settings.directory_or_default(),
@@ -647,7 +680,7 @@ fn start_recording(
     );
     let running = recording::Recording::start(
         backend,
-        recording.mixer_tee.as_ref(),
+        recording.mixer.as_ref(),
         &path,
         backend.frame_rate(),
         settings,
@@ -677,7 +710,8 @@ fn usable_settings(
     let mut settings = settings.clone();
 
     // The audio codec first, and on its own terms: a build without libopus
-    // should still record, with sound, on the codec it does have.
+    // should still record, with sound, on the codec it does have — and so
+    // should a mix at a rate libopus cannot take.
     if !audio_codecs.contains(&settings.audio_codec)
         && let Some(codec) = crate::settings::RecordingAudioCodec::best_of(audio_codecs)
     {

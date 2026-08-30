@@ -44,15 +44,15 @@ use std::path::Path;
 
 use media_pp::{
     elements::{
-        AudioCodec, Mp4Muxer, PauseGate, PauseGateHandle, SwAudioEncoder, SwAudioEncoderOptions,
-        TeeHandle, TimestampOrigin,
+        AudioCodec, MixFormat, MixerHandle, Mp4Muxer, PauseGate, PauseGateHandle, SwAudioEncoder,
+        SwAudioEncoderOptions, TeeHandle, TimestampOrigin,
     },
     ffmpeg,
     graph::BranchId,
     queue::OverflowPolicy,
 };
 
-use super::audio::{MIX_CHANNELS, MIX_SAMPLE_RATE};
+use super::audio::DEFAULT_MIX_FORMAT;
 use super::backend::{
     Backend, BackendError, PreparedRecording, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT,
     VideoTrack,
@@ -70,7 +70,7 @@ use crate::settings::{DEFAULT_AUDIO_BIT_RATE_KBPS, RecordingAudioCodec};
 /// lies about half of itself.
 ///
 /// Cheap enough to do at startup: no device, no GPU, one `avcodec_open2` each.
-pub(super) fn available_audio_codecs() -> Vec<RecordingAudioCodec> {
+pub(super) fn available_audio_codecs(format: MixFormat) -> Vec<RecordingAudioCodec> {
     RecordingAudioCodec::ALL
         .into_iter()
         .filter(|codec| {
@@ -78,9 +78,9 @@ pub(super) fn available_audio_codecs() -> Vec<RecordingAudioCodec> {
                 "probe-audio-encode",
                 SwAudioEncoderOptions {
                     codec: media_codec(*codec),
-                    sample_rate: MIX_SAMPLE_RATE,
-                    channels: MIX_CHANNELS,
-                    time_base: ffmpeg::Rational::new(1, MIX_SAMPLE_RATE as i32),
+                    sample_rate: format.sample_rate,
+                    channels: format.channels,
+                    time_base: ffmpeg::Rational::new(1, format.sample_rate as i32),
                     bit_rate: DEFAULT_AUDIO_BIT_RATE_KBPS as usize * 1_000,
                 },
             )
@@ -116,12 +116,12 @@ impl Recording {
     /// Opens `path` and starts both tracks writing into it.
     ///
     /// `fps` is the compositor's own rate; what the file is written at comes
-    /// from `settings` and can be less. `mixer_tee` is `None` on a machine
+    /// from `settings` and can be less. `mixer` is `None` on a machine
     /// whose mixer never started, which yields a video-only file rather than
     /// an error.
     pub(super) fn start(
         backend: &Backend,
-        mixer_tee: Option<&TeeHandle>,
+        mixer: Option<&(TeeHandle, MixerHandle)>,
         path: &Path,
         fps: u32,
         settings: &crate::settings::RecordingSettings,
@@ -133,8 +133,16 @@ impl Recording {
         // opened must not leave a zero-length mp4 behind, and the audio one
         // is the more likely of the two to refuse.
         let video: PreparedRecording = backend.prepare_recording(fps, settings)?;
-        let audio_time_base = ffmpeg::Rational::new(1, MIX_SAMPLE_RATE as i32);
-        let audio = mixer_tee
+        // The format the mixer is actually summing into, not what the settings
+        // asked for: one it refused leaves the old one running, and a track
+        // opened for a format nothing is producing is samples that do not fit
+        // their own header.
+        let mix = mixer
+            .and_then(|(_, handle)| handle.mix_format())
+            .unwrap_or(DEFAULT_MIX_FORMAT);
+        let audio_time_base = ffmpeg::Rational::new(1, mix.sample_rate as i32);
+        let audio = mixer
+            .map(|(tee, _)| tee)
             .map(|tee| -> Result<_, BackendError> {
                 Ok((
                     tee,
@@ -142,8 +150,8 @@ impl Recording {
                         "record-audio-encode",
                         SwAudioEncoderOptions {
                             codec: media_codec(settings.audio_codec),
-                            sample_rate: MIX_SAMPLE_RATE,
-                            channels: MIX_CHANNELS,
+                            sample_rate: mix.sample_rate,
+                            channels: mix.channels,
                             time_base: audio_time_base,
                             bit_rate: settings.audio_bit_rate_kbps.max(1) as usize * 1_000,
                         },

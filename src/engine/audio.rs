@@ -54,8 +54,8 @@ use arc_swap::ArcSwapOption;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, AudioMixer, AudioMixerOptions, AudioVolume, AudioVolumeHandle, MixerHandle,
-        TeeBuilder, TeeHandle,
+        AppSink, AudioMixer, AudioMixerOptions, AudioVolume, AudioVolumeHandle, MixFormat,
+        MixerHandle, TeeBuilder, TeeHandle,
     },
     pipeline::Pipeline,
 };
@@ -70,8 +70,13 @@ use super::backend::BackendError;
 /// track is made of. 48 kHz stereo is what both backends' devices are
 /// overwhelmingly already at, so the mixer's own resampler usually has
 /// nothing to do.
-pub(super) const MIX_SAMPLE_RATE: u32 = 48_000;
-pub(super) const MIX_CHANNELS: u16 = 2;
+/// What the mixer starts at when nothing has been stored yet. What it
+/// actually runs at is `AudioSettings`, which it is started with and follows
+/// afterwards — ask the `MixerHandle`, never this.
+pub(super) const DEFAULT_MIX_FORMAT: MixFormat = MixFormat {
+    sample_rate: crate::settings::DEFAULT_SAMPLE_RATE,
+    channels: crate::settings::DEFAULT_CHANNELS,
+};
 
 /// The quietest a meter shows, matching the mixer dock's own scale.
 const METER_FLOOR_DB: f32 = -60.0;
@@ -156,8 +161,8 @@ struct RunningMixer {
 impl AudioEngine {
     /// Starts the mixer. It runs from here until this is dropped, whether or
     /// not anything is feeding it.
-    pub(super) fn new() -> Self {
-        let mixer = match start_mixer() {
+    pub(super) fn new(format: MixFormat) -> Self {
+        let mixer = match start_mixer(format) {
             Ok(mixer) => Some(mixer),
             Err(error) => {
                 eprintln!("could not start the audio mixer: {error}");
@@ -175,11 +180,33 @@ impl AudioEngine {
         &self.levels
     }
 
+    /// Changes what the mix is summed into, from the mixer's next tick.
+    ///
+    /// A handle call, not a restart: the mixer keeps its own sample count and
+    /// so its timeline, which is the reason it is alone in a pipeline of its
+    /// own to begin with. Every input notices and rebuilds its own resampler.
+    pub(super) fn set_mix_format(&self, format: MixFormat) {
+        let Some(mixer) = &self.mixer else {
+            return;
+        };
+        if mixer.handle.mix_format() == Some(format) {
+            return;
+        }
+        if !mixer.handle.set_mix_format(format) {
+            eprintln!(
+                "the audio mixer refused {}Hz, {} channel(s)",
+                format.sample_rate, format.channels
+            );
+        }
+    }
+
     /// Where a recording's audio track attaches, or `None` when the mixer
     /// never started — in which case a recording is written without one
     /// rather than refused.
-    pub(super) fn mixer_tee(&self) -> Option<TeeHandle> {
-        self.mixer.as_ref().map(|mixer| mixer.tee.clone())
+    pub(super) fn mixer_access(&self) -> Option<(TeeHandle, MixerHandle)> {
+        self.mixer
+            .as_ref()
+            .map(|mixer| (mixer.tee.clone(), mixer.handle.clone()))
     }
 
     /// Brings the running sources in line with what the project holds and
@@ -310,12 +337,12 @@ fn device_available(devices: &[AudioDeviceTarget], source: &AudioSourceSnapshot)
 /// long after this, and the mixer must not be rebuilt to take it. It is the
 /// same arrangement the compositor's own output `Tee` has, for the same
 /// reason.
-fn start_mixer() -> Result<RunningMixer, BackendError> {
+fn start_mixer(format: MixFormat) -> Result<RunningMixer, BackendError> {
     let (mixer, handle) = AudioMixer::new(
         "audio-mixer",
         AudioMixerOptions {
-            sample_rate: MIX_SAMPLE_RATE,
-            channels: MIX_CHANNELS,
+            sample_rate: format.sample_rate,
+            channels: format.channels,
         },
     );
     let mut tee = None;
@@ -528,6 +555,8 @@ enum AudioCommand {
     /// An endpoint appeared, went, or became the default. Says to look
     /// again, not what changed — see [`crate::capture::watch_audio_devices`].
     DevicesChanged,
+    /// What the mix should be summed into from now on.
+    MixFormat(MixFormat),
     /// Ends the worker's loop.
     ///
     /// Every sender dropping cannot do it: the endpoint watch owns a sender
@@ -560,12 +589,15 @@ pub struct AudioManager {
     /// than asked for later: the recording is opened on the *video* thread,
     /// which cannot reach into this one to fetch it. `None` when the mixer
     /// failed to start.
-    mixer_tee: Option<TeeHandle>,
+    /// The mixer's fan-out and its control, taken once at startup because the
+    /// mixer lives on a thread the engine cannot ask. `None` when it never
+    /// started, which records video only.
+    mixer: Option<(TeeHandle, MixerHandle)>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl AudioManager {
-    pub fn spawn(wake_ui: impl Fn() + Send + 'static) -> std::io::Result<Self> {
+    pub fn spawn(format: MixFormat, wake_ui: impl Fn() + Send + 'static) -> std::io::Result<Self> {
         let (commands, command_rx) = mpsc::channel::<AudioCommand>();
         let levels = Arc::new(ArcSwapOption::empty());
         let devices = Arc::new(ArcSwapOption::empty());
@@ -574,14 +606,14 @@ impl AudioManager {
         // moved. Only the mixer's `Tee` comes back, over this channel: a
         // recording is opened on the *video* thread, which has no way to
         // reach into this one and ask for it later.
-        let (ready, mixer_tee_rx) = mpsc::channel::<Option<TeeHandle>>();
+        let (ready, mixer_rx) = mpsc::channel::<Option<(TeeHandle, MixerHandle)>>();
         let worker = thread::Builder::new().name("audio".to_owned()).spawn({
             let levels = Arc::clone(&levels);
             let published_devices = Arc::clone(&devices);
             let watch_commands = commands.clone();
             move || {
-                let mut engine = AudioEngine::new();
-                let _ = ready.send(engine.mixer_tee());
+                let mut engine = AudioEngine::new(format);
+                let _ = ready.send(engine.mixer_access());
                 let mut known_devices = crate::capture::audio_devices();
                 published_devices.store(Some(Arc::new(known_devices.clone())));
                 // Held for the life of the loop: dropping it stops the
@@ -622,6 +654,9 @@ impl AudioManager {
                                 gains.push((id, gain_db));
                             }
                             AudioCommand::DevicesChanged => devices_changed = true,
+                            AudioCommand::MixFormat(format) => {
+                                engine.set_mix_format(format);
+                            }
                             AudioCommand::Shutdown => ending = true,
                         }
                     }
@@ -664,7 +699,7 @@ impl AudioManager {
             // Waits only for the mixer to be built, which is the worker's
             // first act. An `Err` means it never got that far, which is the
             // same answer as a mixer that failed: record without audio.
-            mixer_tee: mixer_tee_rx.recv().ok().flatten(),
+            mixer: mixer_rx.recv().ok().flatten(),
             worker: Some(worker),
         })
     }
@@ -710,8 +745,17 @@ impl AudioManager {
     /// first enumeration.
     /// Where a recording's audio track attaches, or `None` when the mixer
     /// never started.
-    pub fn mixer_tee(&self) -> Option<TeeHandle> {
-        self.mixer_tee.clone()
+    /// Where a recording's audio track attaches, and the control that says
+    /// what format it will be in.
+    pub fn mixer(&self) -> Option<(TeeHandle, MixerHandle)> {
+        self.mixer.clone()
+    }
+
+    /// Tells the mixer what to sum into from now on.
+    pub fn set_mix_format(&self, format: MixFormat) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(AudioCommand::MixFormat(format));
+        }
     }
 
     pub fn devices(&self) -> Option<Arc<Vec<AudioDeviceTarget>>> {
@@ -855,7 +899,7 @@ mod tests {
                 // The mixer starts either way; captures do not, since no
                 // project snapshot is ever sent. That is enough — the
                 // channel and the watch are what this is about.
-                let manager = AudioManager::spawn(|| {});
+                let manager = AudioManager::spawn(DEFAULT_MIX_FORMAT, || {});
                 drop(manager);
                 let _ = finished.send(());
             })

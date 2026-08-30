@@ -17,6 +17,7 @@ pub struct AppSettings {
     pub locale: Locale,
     pub theme: Theme,
     pub recording: RecordingSettings,
+    pub audio: AudioSettings,
     pub workspace: WorkspaceLayout,
 }
 
@@ -74,6 +75,48 @@ pub struct WindowGeometry {
     /// where it was rather than filling the screen a second time.
     pub maximized: bool,
 }
+
+/// What the audio mixer sums into, and therefore what a recording's audio
+/// track is made of.
+///
+/// Its own group rather than part of [`RecordingSettings`], because it is not
+/// a recording setting: the mixer runs whether or not anything is recording,
+/// and the level meters are reading its output either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioSettings {
+    /// Hertz. 48 kHz is what both platforms' devices are overwhelmingly
+    /// already at, so the mixer's own resamplers usually have nothing to do.
+    pub sample_rate: u32,
+    /// 1 for mono, 2 for stereo.
+    pub channels: u16,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            channels: DEFAULT_CHANNELS,
+        }
+    }
+}
+
+/// What the mixer runs at unless it is changed. It was this crate's constant
+/// before it was settable.
+pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+pub const DEFAULT_CHANNELS: u16 = 2;
+
+/// The rates offered.
+///
+/// Not a free number: every one of these has to be something the audio
+/// encoders can be opened at, and 44.1 already costs `libopus` — which takes
+/// 48/24/16/12/8 kHz and nothing else, and drops out of the encoder list when
+/// the mixer is not at one of them.
+pub const SAMPLE_RATE_CHOICES: [u32; 2] = [48_000, 44_100];
+
+/// Mono or stereo. More would need a channel layout the mixer does not build
+/// and a UI that can place them, neither of which anything has asked for.
+pub const CHANNEL_CHOICES: [u16; 2] = [2, 1];
 
 /// Which palette the window draws in.
 ///

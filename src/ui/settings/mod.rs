@@ -15,6 +15,7 @@
 //! preview an exception would buy, and opening it re-seeds the draft, so the
 //! two paths cannot disagree about what is currently set.
 
+mod audio;
 mod general;
 mod recording;
 mod video;
@@ -35,17 +36,19 @@ pub(in crate::ui) enum SettingsPage {
     #[default]
     General,
     Video,
+    Audio,
     Recording,
 }
 
 impl SettingsPage {
     /// Every page, in the order the list shows them.
-    const ALL: [Self; 3] = [Self::General, Self::Video, Self::Recording];
+    const ALL: [Self; 4] = [Self::General, Self::Video, Self::Audio, Self::Recording];
 
     fn title(self) -> TextKey {
         match self {
             Self::General => TextKey::SettingsPageGeneral,
             Self::Video => TextKey::SettingsPageVideo,
+            Self::Audio => TextKey::SettingsPageAudio,
             Self::Recording => TextKey::SettingsPageRecording,
         }
     }
@@ -214,6 +217,9 @@ pub(in crate::ui) fn show(
                                 }
                                 SettingsPage::Video => {
                                     video::show(ui, &mut state.draft, recording, i18n);
+                                }
+                                SettingsPage::Audio => {
+                                    audio::show(ui, &mut state.draft, recording, i18n);
                                 }
                                 SettingsPage::Recording => {
                                     browse = recording::show(

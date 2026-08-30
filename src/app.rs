@@ -112,10 +112,12 @@ impl ObsApp {
         // audio track attaches and the mixer is what owns it. Without it the
         // mixer draws what the project holds and nothing is captured, which
         // is what this application did until now.
-        let audio = AudioManager::spawn(move || audio_repaint_ctx.request_repaint())
-            .inspect_err(|error| eprintln!("could not start audio: {error}"))
-            .ok();
-        let mixer_tee = audio.as_ref().and_then(AudioManager::mixer_tee);
+        let audio = AudioManager::spawn(mix_format(&settings), move || {
+            audio_repaint_ctx.request_repaint()
+        })
+        .inspect_err(|error| eprintln!("could not start audio: {error}"))
+        .ok();
+        let mixer = audio.as_ref().and_then(AudioManager::mixer);
 
         Self {
             ui_state,
@@ -139,7 +141,7 @@ impl ObsApp {
                     // started before that would ignore everything the user had
                     // saved.
                     recording_settings,
-                    mixer_tee,
+                    mixer,
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))
@@ -259,6 +261,15 @@ impl ObsApp {
         // than any that is running.
         if let Some(engine) = &self.engine {
             engine.set_recording_settings(settings.recording.clone());
+        }
+        // The mixer's own format, which takes immediately — so it is refused
+        // while a recording runs, the same as the frame rate and for the same
+        // reason: the running file's audio encoder was opened for the old one.
+        if settings.audio != self.settings.audio
+            && self.snapshots.status.recording_elapsed.is_none()
+            && let Some(audio) = &self.audio
+        {
+            audio.set_mix_format(mix_format(&settings));
         }
         self.settings = settings;
         if let Err(error) = self.settings_store.save(&self.settings) {
@@ -548,5 +559,16 @@ impl eframe::App for ObsApp {
             self.handle_ui_action(&ctx, action);
         }
         self.ui_actions.clear();
+    }
+}
+
+/// The mix format a settings file asks for.
+///
+/// Here rather than a `From` on `AudioSettings`, because the conversion is
+/// one way and only this crate's boundary with `media-pp` needs it.
+fn mix_format(settings: &AppSettings) -> media_pp::elements::MixFormat {
+    media_pp::elements::MixFormat {
+        sample_rate: settings.audio.sample_rate.max(1),
+        channels: settings.audio.channels.max(1),
     }
 }
