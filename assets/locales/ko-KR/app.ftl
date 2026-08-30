@@ -38,6 +38,7 @@ properties-portal-remembered = 포털 — 기억됨
 properties-portal-asks = 포털 — 실행마다 물음
 properties-stream = 스트림 크기
 properties-desktop-position = 데스크톱 위치
+properties-desktop-size = 데스크톱 크기
 audio-empty = 오디오 소스가 없습니다
 audio-mute = 음소거
 audio-unmute = 음소거 해제

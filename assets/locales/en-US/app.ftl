@@ -38,6 +38,7 @@ properties-portal-remembered = Portal — remembered
 properties-portal-asks = Portal — asks each run
 properties-stream = Stream size
 properties-desktop-position = Desktop position
+properties-desktop-size = Desktop size
 audio-empty = No audio sources
 audio-mute = Mute
 audio-unmute = Unmute

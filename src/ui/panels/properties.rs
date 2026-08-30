@@ -139,21 +139,22 @@ fn show_settings(ui: &mut egui::Ui, item: &SceneItemSnapshot, i18n: &Localizatio
                 &format!("{:.0} × {:.0}", settings.size[0], settings.size[1]),
             );
         }
-        SourceSettings::DisplayCapture(settings) => {
-            match &settings.target {
-                DisplayCaptureTarget::MonitorName(name) => {
-                    row(
-                        ui,
-                        i18n.text(TextKey::PropertiesMonitor).as_ref(),
-                        name.as_str(),
-                    );
-                    show_desktop_position(ui, name, i18n);
-                }
-                // The portal's token is opaque and long; whether there is one
-                // is the whole of what a reader can use it for — it is the
-                // difference between reopening silently and being asked
-                // again.
-                DisplayCaptureTarget::Portal { restore_token } => row(
+        SourceSettings::DisplayCapture(settings) => match &settings.target {
+            DisplayCaptureTarget::MonitorName(name) => {
+                row(
+                    ui,
+                    i18n.text(TextKey::PropertiesMonitor).as_ref(),
+                    name.as_str(),
+                );
+                show_desktop_rect(ui, name, item, i18n);
+            }
+            // The portal's token is opaque and long; whether there is one is
+            // the whole of what a reader can use it for — it is the
+            // difference between reopening silently and being asked again.
+            // It names no display, so there is no rectangle to give either,
+            // and the negotiated size is all there is to say about shape.
+            DisplayCaptureTarget::Portal { restore_token } => {
+                row(
                     ui,
                     i18n.text(TextKey::PropertiesMonitor).as_ref(),
                     i18n.text(match restore_token {
@@ -161,38 +162,47 @@ fn show_settings(ui: &mut egui::Ui, item: &SceneItemSnapshot, i18n: &Localizatio
                         None => TextKey::PropertiesPortalAsks,
                     })
                     .as_ref(),
-                ),
+                );
+                row(
+                    ui,
+                    i18n.text(TextKey::PropertiesStream).as_ref(),
+                    &format!("{:.0} × {:.0}", item.source_size[0], item.source_size[1]),
+                );
             }
-            // What the picker said, which the capture layer replaces with the
-            // stream's own size once the Source opens — so this is the live
-            // figure rather than the stored hint whenever there is one.
-            row(
-                ui,
-                i18n.text(TextKey::PropertiesStream).as_ref(),
-                &format!("{:.0} × {:.0}", item.source_size[0], item.source_size[1]),
-            );
-        }
+        },
         SourceSettings::None => {}
     }
 }
 
-/// Where this display sits in the virtual desktop, read now rather than
-/// remembered.
+/// Where this display is and how big it is, as one rectangle, read now rather
+/// than remembered.
 ///
 /// Deliberately not stored anywhere: a monitor's position changes whenever
 /// displays are rearranged and nothing in this application resolves against
 /// it, which is why a Display Capture keeps only the name. Reading it live is
 /// a different thing from persisting it — this dock is a view of how things
-/// stand, so it asks the system each frame it draws this row. That is one
+/// stand, so it asks the system on the frame it draws this row. That is one
 /// `EnumDisplayMonitors`, and only while a Display Capture is the selection.
 ///
-/// The size is not repeated here: `Stream size` below is what the capture
-/// actually negotiated, which is the more useful of the two when they differ.
+/// Two rows, and the stream.s own size is not a third: desktop duplication
+/// hands over the whole display at its native size, so it would be the same
+/// number as `Desktop size` beside it.
 ///
-/// Nothing is shown for a name the system does not currently report — an
-/// unplugged display leaves the stored name above it and no coordinates,
+/// The two can still come apart — a monitor reported in a scaled coordinate
+/// space while the capture negotiated native pixels — and the stream's own
+/// size is then added, because what is being captured has stopped being what
+/// the rectangle describes. It stays absent while they agree, so the row
+/// appearing is itself the report.
+///
+/// Nothing is shown at all for a name the system does not currently report.
+/// An unplugged display leaves the stored name above it and no rectangle,
 /// which is the truth about it.
-fn show_desktop_position(ui: &mut egui::Ui, monitor: &str, i18n: &LocalizationManager) {
+fn show_desktop_rect(
+    ui: &mut egui::Ui,
+    monitor: &str,
+    item: &SceneItemSnapshot,
+    i18n: &LocalizationManager,
+) {
     let crate::capture::SourcePicker::Enumerated { monitors, .. } = crate::capture::source_picker()
     else {
         return;
@@ -205,6 +215,20 @@ fn show_desktop_position(ui: &mut egui::Ui, monitor: &str, i18n: &LocalizationMa
         i18n.text(TextKey::PropertiesDesktopPosition).as_ref(),
         &format!("{}, {}", target.rect.x, target.rect.y),
     );
+    row(
+        ui,
+        i18n.text(TextKey::PropertiesDesktopSize).as_ref(),
+        &format!("{} × {}", target.rect.width, target.rect.height),
+    );
+
+    let stream = [item.source_size[0] as u32, item.source_size[1] as u32];
+    if stream != [target.rect.width, target.rect.height] {
+        row(
+            ui,
+            i18n.text(TextKey::PropertiesStream).as_ref(),
+            &format!("{} × {}", stream[0], stream[1]),
+        );
+    }
 }
 
 /// One label and its value, with the value able to be selected and copied —
