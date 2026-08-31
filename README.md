@@ -12,8 +12,10 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 ## What it does
 
 - **Scenes and sources.** A Scene is a list of sources placed on a 1920×1080
-  canvas. Move, resize, reorder, hide and lock them in the Preview. A source
-  can appear in more than one Scene, with its own position in each.
+  canvas. Move, resize, reorder, hide and lock them in the Preview.
+  Duplicating a Scene places the same sources again rather than capturing
+  them twice, so a source can appear in more than one Scene with its own
+  position in each.
 - **Display and window capture** on Windows and Linux. Frames go straight
   into GPU memory and stay there through compositing and encoding — the
   desktop never passes through system memory on its way to the recording.
