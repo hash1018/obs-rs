@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
@@ -242,10 +244,22 @@ impl SourceStore {
     /// Every SceneItem the project holds, across all Scenes.
     pub(crate) fn live_item_ids(
         connection: &Connection,
-    ) -> PersistenceResult<std::collections::HashSet<SceneItemId>> {
+    ) -> PersistenceResult<HashSet<SceneItemId>> {
         let mut statement = connection.prepare("SELECT id FROM scene_items")?;
         Ok(statement
             .query_map([], |row| row.get::<_, i64>(0).map(SceneItemId))?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// Every Source's name in the project.
+    ///
+    /// `sources.name` is UNIQUE, so this is what a caller checks a name
+    /// against before offering it: a collision is a refused transaction, not
+    /// an edit, and one Scene's items are not all the names there are.
+    pub(crate) fn names(connection: &Connection) -> PersistenceResult<HashSet<String>> {
+        let mut statement = connection.prepare("SELECT name FROM sources")?;
+        Ok(statement
+            .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<_, _>>()?)
     }
 
@@ -521,6 +535,29 @@ impl SourceStore {
         Ok(())
     }
 
+    /// Renames a Source.
+    ///
+    /// Keyed by the SceneItem in hand, the way [`SourceStore::set_color`] is:
+    /// the name is the Source's, so every item standing for that Source shows
+    /// the new one at once.
+    ///
+    /// The name is taken as given. `sources.name` is UNIQUE and this does not
+    /// make a colliding name unique for the caller — a person who typed a name
+    /// that is taken wants to hear so, not to be given a different one.
+    pub(crate) fn rename(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        name: &str,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE sources
+                SET name = ?2
+              WHERE id = (SELECT source_id FROM scene_items WHERE id = ?1)",
+            params![scene_item_id.0, name],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_visible(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
@@ -732,5 +769,112 @@ fn unique_source_name(connection: &Connection, base: &str) -> PersistenceResult<
             return Ok(candidate);
         }
         suffix += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::{ProjectDatabase, SceneStore};
+
+    fn scene(database: &ProjectDatabase) -> SceneId {
+        SceneStore::selected_scene_id(database.connection())
+            .unwrap()
+            .expect("a new project opens with a Scene selected")
+    }
+
+    fn names_in_scene(database: &ProjectDatabase, scene_id: SceneId) -> Vec<String> {
+        SourceStore::list_for_scene(database.connection(), scene_id)
+            .unwrap()
+            .into_iter()
+            .map(|(_, source)| source.name)
+            .collect()
+    }
+
+    #[test]
+    fn a_renamed_source_keeps_the_name_it_was_given() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| SourceStore::add_color(transaction, scene_id))
+            .unwrap();
+
+        database
+            .transaction(|transaction| SourceStore::rename(transaction, item_id, "Backdrop"))
+            .unwrap();
+
+        assert_eq!(names_in_scene(&database, scene_id), vec!["Backdrop"]);
+    }
+
+    /// The dock offers the name it reads, and what it reads is
+    /// [`SourceStore::names`]. A name missing from that set is one the dock
+    /// would offer and the database would then refuse.
+    #[test]
+    fn every_source_name_is_offered_for_checking_against() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        database
+            .transaction(|transaction| {
+                SourceStore::add_color(transaction, scene_id)?;
+                SourceStore::add_drawing(transaction, scene_id)
+            })
+            .unwrap();
+
+        let names = SourceStore::names(database.connection()).unwrap();
+
+        assert_eq!(
+            names,
+            HashSet::from(["Color Source".to_owned(), "Drawing".to_owned()])
+        );
+    }
+
+    /// Why the dock checks before it sends: a taken name is not an edit that
+    /// silently does nothing, it is a transaction that fails.
+    #[test]
+    fn a_name_another_source_holds_is_refused() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_drawing(transaction, scene_id)?;
+                SourceStore::add_color(transaction, scene_id)
+            })
+            .unwrap();
+
+        let result = database
+            .transaction(|transaction| SourceStore::rename(transaction, item_id, "Drawing"));
+
+        assert!(result.is_err(), "two Sources cannot share one name");
+        // And the refused transaction leaves the Source called what it was.
+        assert_eq!(
+            SourceStore::names(database.connection()).unwrap(),
+            HashSet::from(["Color Source".to_owned(), "Drawing".to_owned()])
+        );
+    }
+
+    /// A Source is the project's, not one Scene's: renaming it through any
+    /// item that stands for it renames it in every Scene it appears in.
+    #[test]
+    fn renaming_through_one_item_renames_the_source_in_every_scene() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let original = scene(&database);
+        database
+            .transaction(|transaction| SourceStore::add_color(transaction, original))
+            .unwrap();
+        database
+            .transaction(|transaction| SceneStore::duplicate(transaction, original))
+            .unwrap();
+        let copy = scene(&database);
+        assert_ne!(copy, original, "duplicating selects the copy");
+
+        let copied_item = SourceStore::list_for_scene(database.connection(), copy).unwrap()[0]
+            .0
+            .id;
+        database
+            .transaction(|transaction| SourceStore::rename(transaction, copied_item, "Backdrop"))
+            .unwrap();
+
+        assert_eq!(names_in_scene(&database, original), vec!["Backdrop"]);
+        assert_eq!(names_in_scene(&database, copy), vec!["Backdrop"]);
     }
 }

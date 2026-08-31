@@ -181,7 +181,7 @@ impl ObsApp {
                     audio,
                 } => {
                     self.snapshots.scenes = scenes;
-                    self.snapshots.sources = sources;
+                    self.snapshots.sources = *sources;
                     self.snapshots.audio = audio;
                     if let Some(manager) = &self.audio {
                         manager.apply(&self.snapshots.audio);

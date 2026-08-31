@@ -18,6 +18,13 @@ pub struct SourcesSnapshot {
     /// whose item is gone for good. The selected Scene alone cannot tell those
     /// two apart.
     pub live_items: HashSet<SceneItemId>,
+    /// Every Source's name in the project, not only the selected Scene's.
+    ///
+    /// A name is unique across the project, so renaming one to a name already
+    /// taken is a refused write rather than an edit. The Sources dock has to
+    /// be able to say that before sending the rename, and the items above are
+    /// only some of the names there are.
+    pub names: HashSet<String>,
 }
 
 impl Default for SourcesSnapshot {
@@ -28,6 +35,7 @@ impl Default for SourcesSnapshot {
             scene_name: None,
             items: Vec::new(),
             live_items: HashSet::new(),
+            names: HashSet::new(),
         }
     }
 }

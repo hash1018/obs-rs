@@ -38,6 +38,20 @@ pub(in crate::ui) struct SourcesPanelState {
     /// or both.
     selected_window: Option<isize>,
     select_new_item: bool,
+    rename: Option<RenameState>,
+}
+
+/// The row being renamed, and what has been typed into it so far.
+///
+/// Held here rather than in the project because it is not an edit yet: a
+/// name only becomes one when it is committed, and Escape has to be able to
+/// leave nothing behind.
+struct RenameState {
+    item_id: SceneItemId,
+    name: String,
+    request_focus: bool,
+    /// Why the last attempt to commit was refused, until the next keystroke.
+    error: Option<TextKey>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +75,16 @@ pub(in crate::ui) fn show(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
+    // A Source can be removed while its name is being typed — from the
+    // toolbar, or by the Scene changing under it — and an editor over a row
+    // that is gone would commit a name onto nothing.
+    if state
+        .rename
+        .as_ref()
+        .is_some_and(|rename| !snapshot.items.iter().any(|item| item.id == rename.item_id))
+    {
+        state.rename = None;
+    }
     if state.scene_id != snapshot.scene_id {
         state.scene_id = snapshot.scene_id;
         state.known_item_count = snapshot.items.len();
@@ -91,8 +115,16 @@ pub(in crate::ui) fn show(
     } else {
         toolbar::scroll_content(ui, "sources_list", |ui| {
             for item in &snapshot.items {
+                if state
+                    .rename
+                    .as_ref()
+                    .is_some_and(|rename| rename.item_id == item.id)
+                {
+                    show_rename_editor(ui, state, snapshot, item, i18n, actions);
+                    continue;
+                }
                 let disconnected = disconnected.is_some_and(|items| items.contains(&item.id));
-                show_source_row(ui, editor, item, disconnected, i18n, actions);
+                show_source_row(ui, state, editor, item, disconnected, i18n, actions);
             }
         });
     }
@@ -104,6 +136,7 @@ pub(in crate::ui) fn show(
 
 fn show_source_row(
     ui: &mut egui::Ui,
+    state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
     item: &SceneItemSnapshot,
     disconnected: bool,
@@ -179,9 +212,113 @@ fn show_source_row(
             item.id,
             !item.locked,
         )));
+    } else if response.double_clicked() {
+        // What the Scenes dock does, and for the same reason: a name is
+        // edited where it is read, and a dock this narrow has no room for a
+        // button that would only ever act on the selected row.
+        state.rename = Some(RenameState {
+            item_id: item.id,
+            name: item.name.clone(),
+            request_focus: true,
+            error: None,
+        });
     } else if response.clicked() {
         editor.select(item.id);
     }
+}
+
+/// One row while its name is being typed.
+///
+/// The whole row gives way to the field, icons included: what is being typed
+/// is that row's subject, and an eye left showing beside it would be aimed at
+/// a row that is not currently there to click.
+fn show_rename_editor(
+    ui: &mut egui::Ui,
+    state: &mut SourcesPanelState,
+    snapshot: &SourcesSnapshot,
+    item: &SceneItemSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let rename = state.rename.as_mut().expect("rename state must exist");
+    let mut response = ui.add_sized(
+        [ui.available_width(), SOURCE_ROW_HEIGHT],
+        egui::TextEdit::singleline(&mut rename.name)
+            .id_salt(("source_rename", item.id.0))
+            .vertical_align(egui::Align::Center)
+            .background_color(rename.error.map_or(ui.visuals().extreme_bg_color, |_| {
+                ui.visuals().error_fg_color.gamma_multiply(0.2)
+            })),
+    );
+    if response.changed() {
+        rename.error = None;
+    }
+    if let Some(error) = rename.error {
+        response = response.on_hover_text(i18n.text(error));
+    }
+    if rename.request_focus {
+        response.request_focus();
+        rename.request_focus = false;
+    }
+
+    let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    let commit = ui.input(|input| input.key_pressed(egui::Key::Enter));
+    if cancel {
+        state.rename = None;
+        return;
+    }
+    if !commit && !response.lost_focus() {
+        return;
+    }
+
+    match judge_rename(&rename.name, &item.name, &snapshot.names) {
+        RenameOutcome::Unchanged => state.rename = None,
+        RenameOutcome::Accepted(name) => {
+            actions.push(source_action(SourceCommand::Rename(item.id, name)));
+            state.rename = None;
+        }
+        RenameOutcome::Refused(error) => {
+            rename.error = Some(error);
+            // Kept open on the name that was refused, rather than reverted:
+            // a name typed and rejected is usually a name to correct, and
+            // Escape is still there for the one that was a mistake.
+            response.request_focus();
+        }
+    }
+}
+
+/// What committing a typed name should do.
+enum RenameOutcome {
+    /// The Source is already called this, so there is nothing to record.
+    Unchanged,
+    /// Not a name this Source may take, and why.
+    Refused(TextKey),
+    Accepted(String),
+}
+
+/// Whether a typed name can become this Source's, decided before anything is
+/// sent.
+///
+/// Before, because `sources.name` is UNIQUE: a name another Source holds ends
+/// the project's transaction with a database error in the status bar, a long
+/// way from the field it was typed into. The two refusals are the two that
+/// write cannot survive — nothing is checked here that the database does not
+/// also enforce.
+///
+/// Trimmed, because the space around a name is not part of it, and a name
+/// that is only space is no name at all.
+fn judge_rename(typed: &str, current: &str, names: &HashSet<String>) -> RenameOutcome {
+    let name = typed.trim();
+    if name == current {
+        return RenameOutcome::Unchanged;
+    }
+    if name.is_empty() {
+        return RenameOutcome::Refused(TextKey::SourceNameEmpty);
+    }
+    if names.contains(name) {
+        return RenameOutcome::Refused(TextKey::SourceNameDuplicate);
+    }
+    RenameOutcome::Accepted(name.to_owned())
 }
 
 /// Says at the end of a row that this Source is producing nothing, and offers
@@ -822,7 +959,313 @@ fn paint_lock(painter: &egui::Painter, center: egui::Pos2, locked: bool, color: 
 mod tests {
     use super::*;
     use crate::capture::MonitorRect;
+    use crate::domain::{Crop, SourceSettings, Transform};
     use crate::i18n::Locale;
+
+    fn item(id: i64, name: &str) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            id: SceneItemId(id),
+            name: name.to_owned(),
+            kind: SourceKind::Color,
+            settings: SourceSettings::None,
+            source_size: [1920.0, 1080.0],
+            visible: true,
+            locked: false,
+            transform: Transform::default(),
+            crop: Crop::default(),
+        }
+    }
+
+    fn snapshot(items: Vec<SceneItemSnapshot>) -> SourcesSnapshot {
+        let names = items.iter().map(|item| item.name.clone()).collect();
+        SourcesSnapshot {
+            scene_id: Some(SceneId(1)),
+            items,
+            names,
+            ..SourcesSnapshot::default()
+        }
+    }
+
+    fn input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(240.0, 400.0),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn click_at(position: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    /// Runs one frame of whatever the caller draws, and throws away what only
+    /// a real renderer could use: nothing uploads the texture delta here, and
+    /// epaint panics on one that is dropped unapplied.
+    fn run_frame(
+        context: &egui::Context,
+        raw: egui::RawInput,
+        contents: impl FnMut(&mut egui::Ui),
+    ) {
+        let mut contents = contents;
+        let mut output = context.run_ui(raw, |context| {
+            egui::CentralPanel::default().show(context, &mut contents);
+        });
+        output.textures_delta.clear();
+    }
+
+    /// A double-click on a row opens that row's name for editing, and nothing
+    /// else about the row has changed hands.
+    #[test]
+    fn a_double_clicked_row_opens_its_name_for_editing() {
+        let context = egui::Context::default();
+        let i18n = LocalizationManager::new(Locale::EnUs);
+        let item = item(2, "Color Source");
+        let mut state = SourcesPanelState::default();
+        let mut editor = SceneEditorState::default();
+        let mut actions = Vec::new();
+
+        // The first frame lays the row out and says where it went; the second
+        // aims at it. Measured rather than assumed — the row is drawn into
+        // whatever the panel's frame leaves, which is not the screen's corner.
+        let mut row = None;
+        run_frame(&context, input(Vec::new()), |ui| {
+            row = Some(egui::Rect::from_min_size(
+                ui.max_rect().min,
+                egui::vec2(ui.available_width(), SOURCE_ROW_HEIGHT),
+            ));
+            show_source_row(
+                ui,
+                &mut state,
+                &mut editor,
+                &item,
+                false,
+                &i18n,
+                &mut actions,
+            );
+        });
+        // Past the eye and the lock, which take their own clicks.
+        let name = egui::pos2(
+            row.unwrap().left() + ICON_WIDTH * 2.0 + 8.0,
+            row.unwrap().center().y,
+        );
+
+        let mut events = click_at(name);
+        events.extend(click_at(name));
+        run_frame(&context, input(events), |ui| {
+            show_source_row(
+                ui,
+                &mut state,
+                &mut editor,
+                &item,
+                false,
+                &i18n,
+                &mut actions,
+            );
+        });
+
+        let rename = state.rename.as_ref().expect("the name should be editable");
+        assert_eq!(rename.item_id, SceneItemId(2));
+        assert_eq!(
+            rename.name, "Color Source",
+            "the editor starts on the name the Source has"
+        );
+        assert!(
+            actions.is_empty(),
+            "opening an editor is not itself an edit"
+        );
+    }
+
+    /// Enter records the name, once, as a project command.
+    #[test]
+    fn enter_commits_the_typed_name() {
+        let context = egui::Context::default();
+        let i18n = LocalizationManager::new(Locale::EnUs);
+        let snapshot = snapshot(vec![item(1, "Drawing"), item(2, "Color Source")]);
+        let mut state = SourcesPanelState::default();
+        let mut actions = Vec::new();
+        state.rename = Some(RenameState {
+            item_id: SceneItemId(2),
+            name: "  Backdrop  ".to_owned(),
+            request_focus: true,
+            error: None,
+        });
+
+        run_frame(&context, input(vec![key(egui::Key::Enter)]), |ui| {
+            show_rename_editor(
+                ui,
+                &mut state,
+                &snapshot,
+                &snapshot.items[1],
+                &i18n,
+                &mut actions,
+            );
+        });
+
+        assert_eq!(
+            actions,
+            vec![UiAction::Project(ProjectCommand::Source(
+                SourceCommand::Rename(SceneItemId(2), "Backdrop".to_owned())
+            ))]
+        );
+        assert!(state.rename.is_none(), "a committed name closes the editor");
+    }
+
+    /// A name another Source holds is refused where it was typed, and nothing
+    /// is sent: the database would refuse it too, in the status bar, a long
+    /// way from the field.
+    #[test]
+    fn a_taken_name_keeps_the_editor_open_and_says_why() {
+        let context = egui::Context::default();
+        let i18n = LocalizationManager::new(Locale::EnUs);
+        let snapshot = snapshot(vec![item(1, "Drawing"), item(2, "Color Source")]);
+        let mut state = SourcesPanelState::default();
+        let mut actions = Vec::new();
+        state.rename = Some(RenameState {
+            item_id: SceneItemId(2),
+            name: "Drawing".to_owned(),
+            request_focus: true,
+            error: None,
+        });
+
+        run_frame(&context, input(vec![key(egui::Key::Enter)]), |ui| {
+            show_rename_editor(
+                ui,
+                &mut state,
+                &snapshot,
+                &snapshot.items[1],
+                &i18n,
+                &mut actions,
+            );
+        });
+
+        assert!(actions.is_empty());
+        assert_eq!(
+            state.rename.as_ref().and_then(|rename| rename.error),
+            Some(TextKey::SourceNameDuplicate)
+        );
+    }
+
+    /// Escape leaves the name as it was, and sends nothing.
+    #[test]
+    fn escape_abandons_a_rename() {
+        let context = egui::Context::default();
+        let i18n = LocalizationManager::new(Locale::EnUs);
+        let snapshot = snapshot(vec![item(1, "Drawing")]);
+        let mut state = SourcesPanelState::default();
+        let mut actions = Vec::new();
+        state.rename = Some(RenameState {
+            item_id: SceneItemId(1),
+            name: "Backdrop".to_owned(),
+            request_focus: true,
+            error: None,
+        });
+
+        run_frame(&context, input(vec![key(egui::Key::Escape)]), |ui| {
+            show_rename_editor(
+                ui,
+                &mut state,
+                &snapshot,
+                &snapshot.items[0],
+                &i18n,
+                &mut actions,
+            );
+        });
+
+        assert!(state.rename.is_none());
+        assert!(actions.is_empty());
+    }
+
+    /// A row that goes away while its name is being typed takes the editor
+    /// with it — a Source can be removed from the toolbar mid-edit, and the
+    /// next frame would otherwise commit a name onto nothing.
+    #[test]
+    fn a_removed_row_closes_the_editor_it_was_being_renamed_in() {
+        let context = egui::Context::default();
+        let i18n = LocalizationManager::new(Locale::EnUs);
+        let snapshot = snapshot(vec![item(1, "Drawing")]);
+        let mut state = SourcesPanelState::default();
+        let mut editor = SceneEditorState::default();
+        let mut actions = Vec::new();
+        state.rename = Some(RenameState {
+            item_id: SceneItemId(2),
+            name: "Backdrop".to_owned(),
+            request_focus: true,
+            error: None,
+        });
+
+        run_frame(&context, input(Vec::new()), |ui| {
+            show(
+                ui,
+                &mut state,
+                &mut editor,
+                &snapshot,
+                None,
+                &i18n,
+                &mut actions,
+            );
+        });
+
+        assert!(state.rename.is_none());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn a_name_is_judged_before_the_project_is_told() {
+        let names = HashSet::from(["Drawing".to_owned(), "Color Source".to_owned()]);
+
+        // The space around a name is not part of it, so this is the name it
+        // already has rather than a new one.
+        assert!(matches!(
+            judge_rename("  Drawing  ", "Drawing", &names),
+            RenameOutcome::Unchanged
+        ));
+        assert!(matches!(
+            judge_rename("", "Drawing", &names),
+            RenameOutcome::Refused(TextKey::SourceNameEmpty)
+        ));
+        assert!(matches!(
+            judge_rename("   ", "Drawing", &names),
+            RenameOutcome::Refused(TextKey::SourceNameEmpty)
+        ));
+        // Held by another Source, which the database would refuse — including
+        // one in a Scene this dock is not showing, which is why the whole
+        // project's names are in the snapshot.
+        assert!(matches!(
+            judge_rename("Color Source", "Drawing", &names),
+            RenameOutcome::Refused(TextKey::SourceNameDuplicate)
+        ));
+        assert!(matches!(
+            judge_rename("  Backdrop ", "Drawing", &names),
+            RenameOutcome::Accepted(name) if name == "Backdrop"
+        ));
+    }
 
     #[test]
     fn primary_monitor_label_is_localized() {

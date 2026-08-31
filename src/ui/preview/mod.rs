@@ -748,11 +748,8 @@ mod tests {
         // content, so a Source that cannot yet produce a frame must behave in
         // Preview exactly like one that can.
         let snapshot = SourcesSnapshot {
-            canvas: SceneCanvas::DEFAULT,
-            scene_id: None,
-            scene_name: None,
-            live_items: Default::default(),
             items: vec![display_capture_item()],
+            ..SourcesSnapshot::default()
         };
         let viewport = ViewportTransform::new(
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0)),
@@ -780,11 +777,8 @@ mod tests {
     fn dragging_inside_a_color_source_starts_move_interaction() {
         let item = color_item();
         let snapshot = SourcesSnapshot {
-            canvas: SceneCanvas::DEFAULT,
-            scene_id: None,
-            scene_name: None,
-            live_items: Default::default(),
             items: vec![item],
+            ..SourcesSnapshot::default()
         };
         let viewport = ViewportTransform::new(
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0)),

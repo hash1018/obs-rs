@@ -70,6 +70,8 @@ scene-duplicate = Duplicate selected scene
 scene-move-up = Move selected scene up
 scene-move-down = Move selected scene down
 
+source-name-empty = Source name cannot be empty
+source-name-duplicate = A source with this name already exists
 source-selected-scene = selected scene
 source-empty = No sources in { $scene }
 source-add = Add source

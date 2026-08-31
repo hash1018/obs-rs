@@ -70,6 +70,8 @@ scene-duplicate = 선택한 장면 복제
 scene-move-up = 선택한 장면 위로 이동
 scene-move-down = 선택한 장면 아래로 이동
 
+source-name-empty = 소스 이름을 입력해야 합니다
+source-name-duplicate = 같은 이름의 소스가 이미 있습니다
 source-selected-scene = 선택한 장면
 source-empty = { $scene }에 소스가 없습니다
 source-add = 소스 추가

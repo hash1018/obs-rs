@@ -18,7 +18,10 @@ enum ManagerMessage {
 pub enum ProjectUpdate {
     Snapshot {
         scenes: ScenesSnapshot,
-        sources: SourcesSnapshot,
+        /// Boxed because it is much the largest thing sent here — every
+        /// SceneItem in the selected Scene, and every Source name in the
+        /// project — and an `Error` would otherwise be padded to its size.
+        sources: Box<SourcesSnapshot>,
         audio: AudioSnapshot,
     },
     Error(String),
@@ -176,6 +179,9 @@ fn handle_source_command(
         SourceCommand::MoveDown(scene_item_id) => {
             SourceStore::move_down(transaction, scene_item_id)
         }
+        SourceCommand::Rename(scene_item_id, name) => {
+            SourceStore::rename(transaction, scene_item_id, &name)
+        }
         SourceCommand::SetRestoreToken(scene_item_id, token) => {
             SourceStore::set_restore_token(transaction, scene_item_id, token.as_deref())
         }
@@ -229,9 +235,11 @@ fn sources_snapshot(
     scenes: &ScenesSnapshot,
 ) -> PersistenceResult<SourcesSnapshot> {
     let live_items = SourceStore::live_item_ids(database.connection())?;
+    let names = SourceStore::names(database.connection())?;
     let Some(scene_id) = scenes.selected_scene_id else {
         return Ok(SourcesSnapshot {
             live_items,
+            names,
             ..SourcesSnapshot::default()
         });
     };
@@ -282,6 +290,7 @@ fn sources_snapshot(
         scene_name,
         items,
         live_items,
+        names,
     })
 }
 
@@ -324,7 +333,7 @@ fn publish_snapshot(
     let update = match project_snapshot(database) {
         Ok((scenes, sources, audio)) => ProjectUpdate::Snapshot {
             scenes,
-            sources,
+            sources: Box::new(sources),
             audio,
         },
         Err(error) => ProjectUpdate::Error(error.to_string()),
@@ -904,6 +913,48 @@ mod tests {
         let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(!sources.live_items.contains(&hidden));
         assert!(sources.live_items.contains(&shown));
+    }
+
+    /// The Sources dock refuses a name before sending it, and what it checks
+    /// against is this set. A name held by a Source in another Scene is one
+    /// the database would refuse and the dock would otherwise have offered.
+    #[test]
+    fn the_snapshot_carries_every_source_name_in_the_project() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let first_scene = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(first_scene)).unwrap();
+
+        handle_scene_command(&mut database, SceneCommand::Add).unwrap();
+        let second_scene = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddDrawing(second_scene)).unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert_eq!(
+            sources.items.len(),
+            1,
+            "only the selected Scene's items are shown"
+        );
+        assert!(sources.names.contains("Color Source"));
+        assert!(sources.names.contains("Drawing"));
+
+        // And a rename replaces the old name rather than adding to the set,
+        // so the name just given up can be taken by something else.
+        let item_id = sources.items[0].id;
+        handle_source_command(
+            &mut database,
+            SourceCommand::Rename(item_id, "Whiteboard".into()),
+        )
+        .unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items[0].name, "Whiteboard");
+        assert!(sources.names.contains("Whiteboard"));
+        assert!(!sources.names.contains("Drawing"));
     }
 
     #[test]

@@ -12,10 +12,9 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 ## What it does
 
 - **Scenes and sources.** A Scene is a list of sources placed on a 1920×1080
-  canvas. Move, resize, reorder, hide and lock them in the Preview.
-  Duplicating a Scene places the same sources again rather than capturing
-  them twice, so a source can appear in more than one Scene with its own
-  position in each.
+  canvas. Move, resize, reorder, hide, lock and rename them. Duplicating a
+  Scene places the same sources again rather than capturing them twice, so a
+  source can appear in more than one Scene with its own position in each.
 - **Display and window capture** on Windows and Linux. Frames go straight
   into GPU memory and stay there through compositing and encoding — the
   desktop never passes through system memory on its way to the recording.
@@ -53,6 +52,11 @@ for the day is still in the Scene tomorrow.
 
 Drag a source in the Preview to move it and its handles to resize it. Sources
 higher in the list are drawn in front of lower ones.
+
+Double-click a source's name in the dock to change it, the same way a Scene's
+name is changed. The name belongs to the source rather than to the Scene, so
+one placed in two Scenes is renamed in both at once; a name already taken is
+refused where you typed it, and Escape leaves the old one alone.
 
 Select a **Drawing** and the Preview's toolbar grows a pen. It stays in Select
 until you pick one, so a stray click cannot leave a mark. The eraser takes

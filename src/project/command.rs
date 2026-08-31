@@ -44,6 +44,13 @@ pub enum SourceCommand {
     Delete(SceneItemId),
     MoveUp(SceneItemId),
     MoveDown(SceneItemId),
+    /// Renames the Source this item stands for.
+    ///
+    /// The Source, not the item: a name belongs to what is being captured,
+    /// and an item is one placement of it. Renaming through an item is what
+    /// every other command here does, and it means the new name shows in
+    /// every Scene the Source appears in — which is what sharing one is for.
+    Rename(SceneItemId, String),
     SetLocked(SceneItemId, bool),
     /// Replaces the portal token a Display Capture reopens with.
     SetRestoreToken(SceneItemId, Option<String>),
