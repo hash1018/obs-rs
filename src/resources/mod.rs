@@ -49,6 +49,15 @@ pub struct GpuUsage {
 pub struct ResourceUsage {
     pub cpu_percent: Option<f32>,
     pub gpu: Option<GpuUsage>,
+    /// What this process has to itself in system memory.
+    ///
+    /// Private rather than total: shared pages are the DLLs and drivers
+    /// every process on the machine maps, and counting them would report an
+    /// application's cost as whatever Windows loaded into it. What this does
+    /// *not* include is the GPU — a compositor layer, a capture pool and a
+    /// preview texture live in video memory, which is a separate figure this
+    /// does not pretend to cover.
+    pub memory_bytes: Option<u64>,
 }
 
 pub struct ResourceManager {
@@ -120,12 +129,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn worker_publishes_process_cpu_usage() {
+    fn worker_publishes_process_cpu_and_memory_usage() {
         let manager = ResourceManager::spawn(|| {}).expect("resource manager thread should start");
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
             if let Some(sample) = manager.latest() {
                 assert!(sample.cpu_percent.is_some(), "{sample:?}");
+                // A running process has memory, so unlike the GPU there is
+                // no machine where this is legitimately absent.
+                let bytes = sample.memory_bytes.expect("a process has memory");
+                assert!(
+                    bytes > 1024 * 1024,
+                    "a process running a test suite uses more than a megabyte: {bytes}"
+                );
                 return;
             }
             thread::sleep(Duration::from_millis(20));

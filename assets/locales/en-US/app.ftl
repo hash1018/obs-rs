@@ -82,6 +82,7 @@ source-display-title = Select Display
 source-display-prompt = Display
 source-display-monitor = { $name } — { $width }×{ $height }
 source-display-monitor-primary = { $name } — { $width }×{ $height } (Primary)
+status-memory = System memory this process has to itself. Video memory is not included.
 source-display-none = No displays are available.
 source-window-title = Select Window
 source-window-prompt = Window

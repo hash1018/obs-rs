@@ -9,6 +9,7 @@ use windows::{
                 PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA, PdhAddEnglishCounterW,
                 PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW,
             },
+            ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX},
             Threading::{GetCurrentProcess, GetCurrentProcessId, GetProcessTimes},
         },
     },
@@ -43,7 +44,26 @@ impl ProcessResourceSampler {
                     percent,
                     scope: GpuScope::Process,
                 }),
+            memory_bytes: private_bytes(),
         }
+    }
+}
+
+/// This process's private commit, which is what Task Manager calls its
+/// memory and what a leak shows up in.
+///
+/// `PROCESS_MEMORY_COUNTERS_EX` is the wider struct `GetProcessMemoryInfo`
+/// fills when told its size; `PrivateUsage` is the field the narrow one does
+/// not have, so the size is what asks for it.
+fn private_bytes() -> Option<u64> {
+    let mut counters = MaybeUninit::<PROCESS_MEMORY_COUNTERS_EX>::zeroed();
+    let size = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS_EX>()).ok()?;
+    // SAFETY: the struct is zeroed and live, its size is what is being
+    // declared, and the pointer cast is the one this API documents for the
+    // extended form.
+    unsafe {
+        GetProcessMemoryInfo(GetCurrentProcess(), counters.as_mut_ptr().cast(), size).ok()?;
+        Some(counters.assume_init().PrivateUsage as u64)
     }
 }
 

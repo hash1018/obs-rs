@@ -27,8 +27,28 @@ impl ProcessResourceSampler {
         ResourceUsage {
             cpu_percent: self.cpu.sample(),
             gpu: self.gpu.sample(),
+            memory_bytes: resident_bytes(),
         }
     }
+}
+
+/// This process's resident set, the nearest thing Linux offers to Windows'
+/// private commit.
+///
+/// Not the same measure — resident pages include what is shared with other
+/// processes, and exclude what has been swapped out — but it is the figure
+/// every tool here reports as an application's memory, and the one that
+/// moves when this application holds on to something.
+fn resident_bytes() -> Option<u64> {
+    // statm rather than status: two fields to parse instead of forty lines
+    // to search, on a file read once a second forever.
+    let statm = fs::read_to_string("/proc/self/statm").ok()?;
+    let resident: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    // SAFETY: `sysconf` reads a static configuration value and touches
+    // nothing this program owns.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    let page_size = u64::try_from(page_size).ok()?;
+    Some(resident * page_size)
 }
 
 #[derive(Clone, Copy)]

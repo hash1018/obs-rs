@@ -398,6 +398,7 @@ impl ObsApp {
         if let Some(usage) = manager.latest() {
             self.snapshots.status.cpu_percent = usage.cpu_percent;
             self.snapshots.status.gpu = usage.gpu;
+            self.snapshots.status.memory_bytes = usage.memory_bytes;
         }
     }
 

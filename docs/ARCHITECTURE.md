@@ -209,6 +209,8 @@ One recording can also be cut into several files, by elapsed time or by bytes wr
 
 CPU is this process's share of total machine capacity. GPU prefers a per-process figure and falls back to whole-adapter usage, marked with a trailing `*`, when the platform offers no per-process counter — NVIDIA's Linux driver exposes neither `drm-engine-*` fdinfo nor working per-process NVML samples on GeForce parts, so a device figure is all that exists there. Hovering the reading names its scope.
 
+MEM is what this process has to itself in system memory — private commit on Windows, resident set on Linux, the nearest each platform offers to the other. Deliberately not the whole story: a compositor layer, a capture pool and a preview texture live in video memory, which is a separate figure and not one this reading pretends to include. It is here because an application that holds frame buffers for hours is one whose memory is worth being able to watch without a task manager.
+
 Per-process NVML is trusted only once obs-rs's own process has appeared in a sample. A driver that answers a poll with other processes' entries and never ours is indistinguishable from obs-rs using no GPU, and treating that as zero would alternate a false `0.0%` with the real device figure.
 
 ## Localization

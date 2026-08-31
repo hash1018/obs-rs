@@ -36,6 +36,9 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     ui.separator();
                     ui.monospace(format_optional_percent("CPU", status.cpu_percent));
                     ui.separator();
+                    ui.monospace(format_memory(status.memory_bytes))
+                        .on_hover_text(i18n.text(TextKey::StatusMemory));
+                    ui.separator();
                     // Marked rather than left to a clock that has merely
                     // stopped moving: a still figure and a stalled
                     // application look the same for the first few seconds.
@@ -128,6 +131,21 @@ fn gpu_tooltip(usage: Option<GpuUsage>) -> TextKey {
     }
 }
 
+/// The memory reading, in whole mebibytes.
+///
+/// Whole, because the digit after the point is the allocator's business and
+/// changes every second without meaning anything; and five columns wide,
+/// which holds more memory than any machine this runs on has, so the segment
+/// never changes width. `MB` rather than `MiB` because that is what every
+/// task manager this figure will be compared against calls it.
+fn format_memory(bytes: Option<u64>) -> String {
+    const MIB: u64 = 1024 * 1024;
+    bytes.map_or_else(
+        || format!("MEM {:>5} MB", "--"),
+        |bytes| format!("MEM {:>5} MB", bytes / MIB),
+    )
+}
+
 fn format_optional_percent(label: &str, value: Option<f32>) -> String {
     value.map_or_else(
         || format!("{label}     --"),
@@ -207,6 +225,10 @@ mod tests {
             .len(),
             11
         );
+
+        assert_eq!(format_memory(None).len(), 12);
+        assert_eq!(format_memory(Some(312 * 1024 * 1024)).len(), 12);
+        assert_eq!(format_memory(Some(8 * 1024 * 1024 * 1024)).len(), 12);
 
         assert_eq!(format_optional_percent("CPU", None).len(), 10);
         assert_eq!(format_optional_percent("CPU", Some(2.1)).len(), 10);
