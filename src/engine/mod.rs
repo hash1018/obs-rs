@@ -1273,7 +1273,12 @@ mod tests {
             "a portal window can only be reopened through its picker"
         );
 
-        let mut colour = window_item(3, WindowCaptureTarget::Portal { restore_token: None });
+        let mut colour = window_item(
+            3,
+            WindowCaptureTarget::Portal {
+                restore_token: None,
+            },
+        );
         colour.kind = SourceKind::Color;
         colour.settings = SourceSettings::None;
         assert!(

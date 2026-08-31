@@ -91,8 +91,7 @@ pub(in crate::ui) fn show(
     } else {
         toolbar::scroll_content(ui, "sources_list", |ui| {
             for item in &snapshot.items {
-                let disconnected =
-                    disconnected.is_some_and(|items| items.contains(&item.id));
+                let disconnected = disconnected.is_some_and(|items| items.contains(&item.id));
                 show_source_row(ui, editor, item, disconnected, i18n, actions);
             }
         });
@@ -140,9 +139,11 @@ fn show_source_row(
     // alongside: a source that is drawing nothing has to say so even where
     // its name is long enough to fill the row on its own.
     let badge = disconnected.then(|| show_disconnected_badge(ui, rect, i18n));
-    let name_right = badge.as_ref().map_or(rect.right(), |badge: &egui::Response| {
-        badge.rect.left() - BADGE_PADDING
-    });
+    let name_right = badge
+        .as_ref()
+        .map_or(rect.right(), |badge: &egui::Response| {
+            badge.rect.left() - BADGE_PADDING
+        });
     let elided = elide::paint_one_row(
         ui,
         egui::pos2(left, rect.center().y),
