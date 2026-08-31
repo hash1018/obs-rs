@@ -33,22 +33,32 @@ pub(super) struct UiResources<'a> {
     composite_frame: Option<&'a CompositeFrame>,
 }
 
-pub fn show(
+impl<'a> UiResources<'a> {
+    /// Gathered by the caller rather than by `show`, which would otherwise
+    /// take every one of these as a parameter of its own — the growth
+    /// AGENTS.md asks this type to absorb.
+    pub(super) fn new(
+        snapshots: &'a Snapshots,
+        settings: &'a crate::settings::AppSettings,
+        audio_devices: &'a [AudioDeviceTarget],
+        i18n: &'a LocalizationManager,
+        composite_frame: Option<&'a CompositeFrame>,
+    ) -> Self {
+        Self {
+            snapshots,
+            settings,
+            audio_devices,
+            i18n,
+            composite_frame,
+        }
+    }
+}
+
+pub(super) fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
-    snapshots: &Snapshots,
-    settings: &crate::settings::AppSettings,
-    audio_devices: &[AudioDeviceTarget],
-    i18n: &LocalizationManager,
-    composite_frame: Option<&CompositeFrame>,
+    resources: &UiResources<'_>,
     actions: &mut Vec<UiAction>,
 ) {
-    let resources = UiResources {
-        snapshots,
-        settings,
-        audio_devices,
-        i18n,
-        composite_frame,
-    };
-    shell::show(ui, state, &resources, actions);
+    shell::show(ui, state, resources, actions);
 }

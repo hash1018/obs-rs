@@ -568,16 +568,14 @@ impl eframe::App for ObsApp {
         // Held for the whole draw so the texture cannot be swapped out from
         // under the painter mid-frame.
         let composite_frame = self.engine.as_ref().and_then(EngineManager::frame);
-        ui::show(
-            ui,
-            &mut self.ui_state,
+        let resources = ui::UiResources::new(
             &self.snapshots,
             &self.settings,
             &self.audio_devices,
             &self.localization,
             composite_frame.as_deref(),
-            &mut self.ui_actions,
         );
+        ui::show(ui, &mut self.ui_state, &resources, &mut self.ui_actions);
 
         let ctx = ui.ctx().clone();
         for index in 0..self.ui_actions.len() {
