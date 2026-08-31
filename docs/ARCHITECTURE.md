@@ -181,6 +181,16 @@ is `_NET_ACTIVE_WINDOW` under X11 and something a Wayland compositor may
 refuse outright, focus-stealing being what that protocol is designed to
 prevent. There, a second launch says so on stderr and stops.
 
+## Hotkeys
+
+Keys are dispatched before anything is drawn, in `ui::shell::hotkeys`, and each one produces the `UiAction` its button or menu item would. Nothing is reachable only from a key — what a key adds is reach, since the Controls dock holding Start Recording can be closed.
+
+Two rules carry the layer. A chord is ignored while anything is taking typed input, because there is no chord this could reserve that a Scene's name might not contain. And a held key repeats, where a repeat is not a press: without that distinction leaning on `Ctrl+R` starts and stops a recording sixty times a second. The second rule is not the caller's to enforce — egui rewrites the repeat flag from its own record of which keys are down, so a key repeats only by being sent again without a release, which is what the test holds one across three passes to reproduce.
+
+Modifiers match exactly rather than through egui's `matches_logically`, which treats extra Shift and Alt as noise. `Ctrl+Shift+R` would otherwise start a recording, and could never be bound to anything else.
+
+The bindings are a table in that module and not yet settings. Making them settable is reading that table from `settings.toml` rather than reaching into the UI; global hotkeys — keys that work while another application has focus — are a different mechanism per platform and a separate piece of work.
+
 ## The Properties dock
 
 What the selected SceneItem is, as it currently stands: name and kind, its place and size on the Canvas, whether it is visible and locked, and then whatever its kind has to say — the monitor and its rectangle in the virtual desktop, a window's program and title, a Drawing's stroke count, a Color's colour.

@@ -1,3 +1,4 @@
+mod hotkeys;
 mod menu_bar;
 mod status_bar;
 
@@ -58,6 +59,9 @@ pub fn show(
     actions: &mut Vec<UiAction>,
 ) {
     state.editor.sync(&resources.snapshots.sources);
+    // Before anything is drawn, so a chord is spent on what it is bound to
+    // rather than on whatever widget happens to have focus.
+    hotkeys::dispatch(ui.ctx(), state, resources.snapshots, actions);
     menu_bar::show(ui, state, resources.i18n, actions);
     status_bar::show(ui, &resources.snapshots.status, resources.i18n);
     docking::show(
