@@ -84,7 +84,10 @@ source-display-monitor = { $name } — { $width }×{ $height }
 source-display-monitor-primary = { $name } — { $width }×{ $height } (Primary)
 menu-settings = Settings
 menu-show-recordings = Show Recordings
-status-memory = System memory this process has to itself. Video memory is not included.
+status-memory = Memory this process is using.
+status-memory-resident = In memory: { $resident } MB
+status-memory-both = In memory: { $resident } MB (what a task manager shows)
+    Claimed: { $committed } MB
 source-display-none = No displays are available.
 source-window-title = Select Window
 source-window-prompt = Window

@@ -16,11 +16,12 @@ use windows::{
     core::w,
 };
 
-use super::{GpuScope, GpuUsage, ResourceUsage};
+use super::{GpuScope, GpuUsage, MemoryUsage, ResourceUsage};
 
 pub struct ProcessResourceSampler {
     cpu: CpuSampler,
     gpu: Option<GpuSampler>,
+    working_set: Option<WorkingSetSampler>,
 }
 
 impl ProcessResourceSampler {
@@ -28,6 +29,7 @@ impl ProcessResourceSampler {
         Self {
             cpu: CpuSampler::new(),
             gpu: GpuSampler::new(),
+            working_set: WorkingSetSampler::new(),
         }
     }
 
@@ -44,18 +46,36 @@ impl ProcessResourceSampler {
                     percent,
                     scope: GpuScope::Process,
                 }),
-            memory_bytes: private_bytes(),
+            memory: self.memory(),
         }
+    }
+
+    /// Both figures, with the resident one from whichever source this
+    /// machine offers.
+    fn memory(&mut self) -> Option<MemoryUsage> {
+        let counters = process_memory()?;
+        // `WorkingSetSize` is the whole working set, shared pages included,
+        // which reads about a third high against what a task manager shows.
+        // The counter is what that column actually is, so it is preferred and
+        // the struct's own field is the fallback for a Windows without it.
+        let resident_bytes = self
+            .working_set
+            .as_mut()
+            .and_then(WorkingSetSampler::sample)
+            .unwrap_or(counters.WorkingSetSize as u64);
+        Some(MemoryUsage {
+            resident_bytes,
+            committed_bytes: Some(counters.PrivateUsage as u64),
+        })
     }
 }
 
-/// This process's private commit, which is what Task Manager calls its
-/// memory and what a leak shows up in.
+/// This process's memory counters.
 ///
 /// `PROCESS_MEMORY_COUNTERS_EX` is the wider struct `GetProcessMemoryInfo`
 /// fills when told its size; `PrivateUsage` is the field the narrow one does
 /// not have, so the size is what asks for it.
-fn private_bytes() -> Option<u64> {
+fn process_memory() -> Option<PROCESS_MEMORY_COUNTERS_EX> {
     let mut counters = MaybeUninit::<PROCESS_MEMORY_COUNTERS_EX>::zeroed();
     let size = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS_EX>()).ok()?;
     // SAFETY: the struct is zeroed and live, its size is what is being
@@ -63,7 +83,116 @@ fn private_bytes() -> Option<u64> {
     // extended form.
     unsafe {
         GetProcessMemoryInfo(GetCurrentProcess(), counters.as_mut_ptr().cast(), size).ok()?;
-        Some(counters.assume_init().PrivateUsage as u64)
+        Some(counters.assume_init())
+    }
+}
+
+/// The private working set, which is the column a task manager labels
+/// memory — and which no plain Win32 call reports.
+///
+/// `Process V2` is the counter set whose instance names carry the process
+/// id, the same shape the GPU counters have; the older `Process` set names
+/// instances after the executable and disambiguates duplicates with a
+/// suffix, which is a race rather than an identity. A Windows without the
+/// V2 set simply has no sampler and the whole working set stands in.
+struct WorkingSetSampler {
+    query: PDH_HQUERY,
+    counter: PDH_HCOUNTER,
+    instance_suffix: String,
+}
+
+impl WorkingSetSampler {
+    fn new() -> Option<Self> {
+        let mut query = PDH_HQUERY::default();
+        // SAFETY: the out-parameter points to a live handle local.
+        if unsafe { PdhOpenQueryW(None, 0, &mut query) } != 0 {
+            return None;
+        }
+        let mut counter = PDH_HCOUNTER::default();
+        let status = unsafe {
+            PdhAddEnglishCounterW(
+                query,
+                w!(r"\Process V2(*)\Working Set - Private"),
+                0,
+                &mut counter,
+            )
+        };
+        if status != 0 {
+            // SAFETY: query was successfully opened above and is not reused.
+            unsafe { PdhCloseQuery(query) };
+            return None;
+        }
+        unsafe { PdhCollectQueryData(query) };
+        Some(Self {
+            query,
+            counter,
+            instance_suffix: format!(":{}", unsafe { GetCurrentProcessId() }),
+        })
+    }
+
+    fn sample(&mut self) -> Option<u64> {
+        // SAFETY: both handles remain owned by this sampler for its lifetime.
+        if unsafe { PdhCollectQueryData(self.query) } != 0 {
+            return None;
+        }
+        let mut buffer_size = 0;
+        let mut item_count = 0;
+        let status = unsafe {
+            PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut buffer_size,
+                &mut item_count,
+                None,
+            )
+        };
+        if status != PDH_MORE_DATA || buffer_size == 0 || item_count == 0 {
+            return None;
+        }
+        // Same allocation shape as `GpuSampler::sample` — see its own note on
+        // why the buffer is words rather than bytes.
+        let word_count = (buffer_size as usize).div_ceil(size_of::<usize>());
+        let mut buffer = vec![MaybeUninit::<usize>::uninit(); word_count];
+        let items = buffer.as_mut_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>();
+        let status = unsafe {
+            PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut buffer_size,
+                &mut item_count,
+                Some(items),
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        // SAFETY: PDH wrote item_count initialized entries at the start of the
+        // aligned buffer, and all name pointers remain live until it is dropped.
+        for item in unsafe { std::slice::from_raw_parts(items, item_count as usize) } {
+            if item.FmtValue.CStatus != PDH_CSTATUS_VALID_DATA
+                && item.FmtValue.CStatus != PDH_CSTATUS_NEW_DATA
+            {
+                continue;
+            }
+            let Ok(name) = (unsafe { item.szName.to_string() }) else {
+                continue;
+            };
+            if !name.ends_with(&self.instance_suffix) {
+                continue;
+            }
+            let value = unsafe { item.FmtValue.Anonymous.doubleValue };
+            if value.is_finite() && value >= 0.0 {
+                return Some(value as u64);
+            }
+        }
+        None
+    }
+}
+
+impl Drop for WorkingSetSampler {
+    fn drop(&mut self) {
+        // SAFETY: this sampler uniquely owns the successfully opened query.
+        unsafe { PdhCloseQuery(self.query) };
     }
 }
 

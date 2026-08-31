@@ -84,7 +84,10 @@ source-display-monitor = { $name } — { $width }×{ $height }
 source-display-monitor-primary = { $name } — { $width }×{ $height } (주 모니터)
 menu-settings = 설정
 menu-show-recordings = 녹화 폴더 열기
-status-memory = 이 프로세스가 자기 몫으로 쓰는 시스템 메모리입니다. 비디오 메모리는 포함되지 않습니다.
+status-memory = 이 프로세스가 쓰고 있는 메모리입니다.
+status-memory-resident = 메모리에 올라온 양: { $resident } MB
+status-memory-both = 메모리에 올라온 양: { $resident } MB (작업 관리자가 보여주는 값)
+    잡아둔 양: { $committed } MB
 source-display-none = 사용할 수 있는 디스플레이가 없습니다.
 source-window-title = 창 선택
 source-window-prompt = 창

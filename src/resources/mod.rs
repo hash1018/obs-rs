@@ -45,19 +45,40 @@ pub struct GpuUsage {
     pub scope: GpuScope,
 }
 
+/// Two answers to "how much memory", because they differ by a factor of
+/// three here and people check the wrong one against the other.
+///
+/// Private in both cases: shared pages are the DLLs every process on the
+/// machine maps, and counting them would report an application's cost as
+/// whatever the system loaded into it.
+///
+/// The GPU is in neither, mostly. Measured on this machine: removing two
+/// 1080p Display Captures freed 18 MB of dedicated video memory and moved
+/// the private figures by one megabyte, so what a graphics driver holds in
+/// VRAM is not charged here — only whatever system memory it uses alongside
+/// it.
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryUsage {
+    /// What is in RAM for this process alone — Windows' private working set,
+    /// Linux's `RssAnon`. The number a task manager shows, and the reason
+    /// this is the one on the bar.
+    ///
+    /// It moves for reasons that are not this application's doing: an
+    /// operating system trims a working set when it wants the pages back,
+    /// so minimising the window can halve it without a byte being freed.
+    pub resident_bytes: u64,
+    /// What the process has claimed, whether or not it is in RAM — Windows'
+    /// private commit, Linux's `VmData`. Steady where the resident figure is
+    /// not, which is what makes it the one to watch a leak in, and it is a
+    /// hover away for exactly that.
+    pub committed_bytes: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResourceUsage {
     pub cpu_percent: Option<f32>,
     pub gpu: Option<GpuUsage>,
-    /// What this process has to itself in system memory.
-    ///
-    /// Private rather than total: shared pages are the DLLs and drivers
-    /// every process on the machine maps, and counting them would report an
-    /// application's cost as whatever Windows loaded into it. What this does
-    /// *not* include is the GPU — a compositor layer, a capture pool and a
-    /// preview texture live in video memory, which is a separate figure this
-    /// does not pretend to cover.
-    pub memory_bytes: Option<u64>,
+    pub memory: Option<MemoryUsage>,
 }
 
 pub struct ResourceManager {
@@ -137,11 +158,20 @@ mod tests {
                 assert!(sample.cpu_percent.is_some(), "{sample:?}");
                 // A running process has memory, so unlike the GPU there is
                 // no machine where this is legitimately absent.
-                let bytes = sample.memory_bytes.expect("a process has memory");
+                let memory = sample.memory.expect("a process has memory");
                 assert!(
-                    bytes > 1024 * 1024,
-                    "a process running a test suite uses more than a megabyte: {bytes}"
+                    memory.resident_bytes > 1024 * 1024,
+                    "a process running a test suite has more than a megabyte in memory: {memory:?}"
                 );
+                // The two are different measures of the same process, so one
+                // being wildly under the other is a sign of reading the wrong
+                // field rather than of a frugal process.
+                if let Some(committed) = memory.committed_bytes {
+                    assert!(
+                        committed >= memory.resident_bytes,
+                        "claimed memory cannot be less than what is resident: {memory:?}"
+                    );
+                }
                 return;
             }
             thread::sleep(Duration::from_millis(20));

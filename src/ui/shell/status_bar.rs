@@ -3,7 +3,7 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::i18n::{LocalizationManager, TextKey};
-use crate::resources::{GpuScope, GpuUsage};
+use crate::resources::{GpuScope, GpuUsage, MemoryUsage};
 use crate::snapshots::StatusSnapshot;
 
 pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
@@ -36,8 +36,8 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     ui.separator();
                     ui.monospace(format_optional_percent("CPU", status.cpu_percent));
                     ui.separator();
-                    ui.monospace(format_memory(status.memory_bytes))
-                        .on_hover_text(i18n.text(TextKey::StatusMemory));
+                    ui.monospace(format_memory(status.memory))
+                        .on_hover_text(memory_tooltip(status.memory, i18n));
                     ui.separator();
                     // Marked rather than left to a clock that has merely
                     // stopped moving: a still figure and a stalled
@@ -133,17 +133,42 @@ fn gpu_tooltip(usage: Option<GpuUsage>) -> TextKey {
 
 /// The memory reading, in whole mebibytes.
 ///
-/// Whole, because the digit after the point is the allocator's business and
-/// changes every second without meaning anything; and five columns wide,
-/// which holds more memory than any machine this runs on has, so the segment
-/// never changes width. `MB` rather than `MiB` because that is what every
-/// task manager this figure will be compared against calls it.
-fn format_memory(bytes: Option<u64>) -> String {
-    const MIB: u64 = 1024 * 1024;
-    bytes.map_or_else(
+/// The resident figure, because that is the one a task manager shows and so
+/// the one anybody will check this against — see [`MemoryUsage`], and the
+/// tooltip below for the other.
+///
+/// Whole megabytes, because the digit after the point is the allocator's
+/// business and changes every second without meaning anything; five columns
+/// wide, which holds more memory than any machine this runs on has, so the
+/// segment never changes width. `MB` rather than `MiB` because that is what
+/// every task manager this will be compared against calls it.
+fn format_memory(memory: Option<MemoryUsage>) -> String {
+    memory.map_or_else(
         || format!("MEM {:>5} MB", "--"),
-        |bytes| format!("MEM {:>5} MB", bytes / MIB),
+        |memory| format!("MEM {:>5} MB", megabytes(memory.resident_bytes)),
     )
+}
+
+fn megabytes(bytes: u64) -> u64 {
+    bytes / (1024 * 1024)
+}
+
+/// Both figures, named, because the difference between them is the question
+/// this tooltip exists to answer.
+fn memory_tooltip(memory: Option<MemoryUsage>, i18n: &LocalizationManager) -> String {
+    let Some(memory) = memory else {
+        return i18n.text(TextKey::StatusMemory).into_owned();
+    };
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("resident", megabytes(memory.resident_bytes) as i64);
+    let Some(committed) = memory.committed_bytes else {
+        return i18n
+            .text_with(TextKey::StatusMemoryResident, &args)
+            .into_owned();
+    };
+    args.set("committed", megabytes(committed) as i64);
+    i18n.text_with(TextKey::StatusMemoryBoth, &args)
+        .into_owned()
 }
 
 fn format_optional_percent(label: &str, value: Option<f32>) -> String {
@@ -226,9 +251,15 @@ mod tests {
             11
         );
 
+        let resident = |bytes| {
+            Some(MemoryUsage {
+                resident_bytes: bytes,
+                committed_bytes: None,
+            })
+        };
         assert_eq!(format_memory(None).len(), 12);
-        assert_eq!(format_memory(Some(312 * 1024 * 1024)).len(), 12);
-        assert_eq!(format_memory(Some(8 * 1024 * 1024 * 1024)).len(), 12);
+        assert_eq!(format_memory(resident(312 * 1024 * 1024)).len(), 12);
+        assert_eq!(format_memory(resident(8 * 1024 * 1024 * 1024)).len(), 12);
 
         assert_eq!(format_optional_percent("CPU", None).len(), 10);
         assert_eq!(format_optional_percent("CPU", Some(2.1)).len(), 10);

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{GpuScope, GpuUsage, ResourceUsage};
+use super::{GpuScope, GpuUsage, MemoryUsage, ResourceUsage};
 
 pub(super) struct ProcessResourceSampler {
     cpu: CpuSampler,
@@ -27,28 +27,33 @@ impl ProcessResourceSampler {
         ResourceUsage {
             cpu_percent: self.cpu.sample(),
             gpu: self.gpu.sample(),
-            memory_bytes: resident_bytes(),
+            memory: memory(),
         }
     }
 }
 
-/// This process's resident set, the nearest thing Linux offers to Windows'
-/// private commit.
+/// The two figures, from the two lines of `/proc/self/status` that mean
+/// what Windows' private working set and private commit mean.
 ///
-/// Not the same measure — resident pages include what is shared with other
-/// processes, and exclude what has been swapped out — but it is the figure
-/// every tool here reports as an application's memory, and the one that
-/// moves when this application holds on to something.
-fn resident_bytes() -> Option<u64> {
-    // statm rather than status: two fields to parse instead of forty lines
-    // to search, on a file read once a second forever.
-    let statm = fs::read_to_string("/proc/self/statm").ok()?;
-    let resident: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-    // SAFETY: `sysconf` reads a static configuration value and touches
-    // nothing this program owns.
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    let page_size = u64::try_from(page_size).ok()?;
-    Some(resident * page_size)
+/// `RssAnon` is this process's own resident pages, where `statm`'s resident
+/// field would also count the file-backed ones every process maps; `VmData`
+/// is its private writable address space, claimed whether or not it is in
+/// RAM. Neither is the same measure as its Windows counterpart, but each is
+/// the nearest this system keeps, and the pair says the same thing: what is
+/// in memory now, and what has been asked for.
+fn memory() -> Option<MemoryUsage> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let field = |name: &str| {
+        status.lines().find_map(|line| {
+            let rest = line.strip_prefix(name)?.strip_suffix(" kB")?;
+            // Every size here is in kibibytes, whatever the label's spacing.
+            rest.trim().parse::<u64>().ok().map(|value| value * 1024)
+        })
+    };
+    Some(MemoryUsage {
+        resident_bytes: field("RssAnon:")?,
+        committed_bytes: field("VmData:"),
+    })
 }
 
 #[derive(Clone, Copy)]

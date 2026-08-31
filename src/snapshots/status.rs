@@ -25,10 +25,10 @@ pub struct StatusSnapshot {
     pub disconnected_sources: Option<Arc<HashSet<crate::domain::SceneItemId>>>,
     pub cpu_percent: Option<f32>,
     pub gpu: Option<GpuUsage>,
-    /// System memory this process has to itself — see
-    /// [`crate::resources::ResourceUsage::memory_bytes`] for what that does
-    /// and does not count.
-    pub memory_bytes: Option<u64>,
+    /// What is in memory for this process, and what it has claimed — see
+    /// [`crate::resources::MemoryUsage`], which explains why those differ by
+    /// a factor of three.
+    pub memory: Option<crate::resources::MemoryUsage>,
     /// Actual compositor output rate, not the egui repaint rate.
     pub active_fps: Option<f32>,
     pub target_fps: Option<f32>,
