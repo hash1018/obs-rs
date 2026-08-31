@@ -21,6 +21,9 @@ pub use state::UiState;
 
 pub(super) struct UiResources<'a> {
     snapshots: &'a Snapshots,
+    /// What is currently set, as opposed to the draft the Settings dialog
+    /// edits. Only the key bindings are read from here so far.
+    settings: &'a crate::settings::AppSettings,
     /// Every audio endpoint the mixer can offer. Enumerated by the
     /// application, not here — see `ObsApp::audio_devices`.
     audio_devices: &'a [AudioDeviceTarget],
@@ -34,6 +37,7 @@ pub fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
     snapshots: &Snapshots,
+    settings: &crate::settings::AppSettings,
     audio_devices: &[AudioDeviceTarget],
     i18n: &LocalizationManager,
     composite_frame: Option<&CompositeFrame>,
@@ -41,6 +45,7 @@ pub fn show(
 ) {
     let resources = UiResources {
         snapshots,
+        settings,
         audio_devices,
         i18n,
         composite_frame,

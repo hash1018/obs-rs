@@ -572,6 +572,7 @@ impl eframe::App for ObsApp {
             ui,
             &mut self.ui_state,
             &self.snapshots,
+            &self.settings,
             &self.audio_devices,
             &self.localization,
             composite_frame.as_deref(),

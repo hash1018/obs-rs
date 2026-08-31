@@ -14,10 +14,14 @@
 //! A held key repeats, and a repeat is not a press. Without that distinction
 //! leaning on `Ctrl+R` starts and stops a recording sixty times a second.
 //!
-//! # Not configurable yet, and not global
+//! # Bound where they are stored, and not global
 //!
-//! The table below is where a binding lives, so making them settable is a
-//! matter of reading it from settings rather than reaching into the UI.
+//! Four of these come from settings, which is where the user can change
+//! them. The Scene keys do not: `Ctrl+1` through `Ctrl+9` select by position
+//! in the list, which is a convention rather than a binding — see
+//! [`crate::hotkey::HotkeyAction`] for why a per-Scene key is a different
+//! model rather than nine more rows.
+//!
 //! Global hotkeys — keys that work while another application has focus,
 //! which is what a recorder eventually wants — are a different mechanism per
 //! platform (`RegisterHotKey` behind a message pump of its own on Windows,
@@ -25,6 +29,7 @@
 
 use eframe::egui::{self, Key, Modifiers};
 
+use crate::hotkey::{Chord, HotkeyAction, HotkeySettings};
 use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::Snapshots;
 
@@ -48,15 +53,18 @@ pub fn dispatch(
     ctx: &egui::Context,
     state: &mut UiState,
     snapshots: &Snapshots,
+    bindings: &HotkeySettings,
     actions: &mut Vec<UiAction>,
 ) {
     // Text first: a field with focus owns the keyboard, whatever the chord.
-    if ctx.egui_wants_keyboard_input() {
+    // The same goes for the settings page while it is waiting for a key to
+    // bind — a chord spent here is one that never reaches what asked for it.
+    if ctx.egui_wants_keyboard_input() || state.settings.capturing_hotkey() {
         return;
     }
 
     let recording = snapshots.status.recording_elapsed.is_some();
-    if pressed(ctx, Modifiers::CTRL, Key::R) {
+    if bound(ctx, bindings, HotkeyAction::ToggleRecording) {
         // One key for both, because one button does both: what it does next
         // is whatever the Controls dock would say it does.
         actions.push(if recording {
@@ -67,7 +75,7 @@ pub fn dispatch(
     }
     // Only while there is a recording to pause. Outside one the key does
     // nothing rather than arming something for later.
-    if recording && pressed(ctx, Modifiers::CTRL, Key::P) {
+    if recording && bound(ctx, bindings, HotkeyAction::TogglePause) {
         actions.push(UiAction::SetRecordingPaused(
             !snapshots.status.recording_paused,
         ));
@@ -86,13 +94,21 @@ pub fn dispatch(
         }
     }
 
-    if pressed(ctx, Modifiers::NONE, Key::F11) {
+    if bound(ctx, bindings, HotkeyAction::Fullscreen) {
         state.fullscreen = !state.fullscreen;
         actions.push(UiAction::SetFullscreen(state.fullscreen));
     }
-    if pressed(ctx, Modifiers::CTRL, Key::Comma) {
+    if bound(ctx, bindings, HotkeyAction::OpenSettings) {
         actions.push(UiAction::OpenSettings);
     }
+}
+
+/// Whether whatever `action` is bound to was pressed. An action bound to
+/// nothing is never pressed, which is what clearing a binding means.
+fn bound(ctx: &egui::Context, bindings: &HotkeySettings, action: HotkeyAction) -> bool {
+    bindings
+        .binding(action)
+        .is_some_and(|chord: Chord| pressed(ctx, chord.modifiers(), chord.key))
 }
 
 /// Whether this chord was pressed — and consumed, so nothing drawn later
@@ -145,6 +161,23 @@ mod tests {
         frames: usize,
         snapshots: &Snapshots,
     ) -> Vec<Vec<UiAction>> {
+        hold_bound(
+            key,
+            modifiers,
+            frames,
+            snapshots,
+            &HotkeySettings::default(),
+        )
+    }
+
+    /// The same, against bindings a test chose.
+    fn hold_bound(
+        key: Key,
+        modifiers: Modifiers,
+        frames: usize,
+        snapshots: &Snapshots,
+        bindings: &HotkeySettings,
+    ) -> Vec<Vec<UiAction>> {
         let context = egui::Context::default();
         let mut state = UiState::default();
         (0..frames)
@@ -162,7 +195,7 @@ mod tests {
                 let mut actions = Vec::new();
                 let mut output = context.run_ui(input, |context| {
                     egui::CentralPanel::default().show(context, |ui| {
-                        dispatch(ui.ctx(), &mut state, snapshots, &mut actions);
+                        dispatch(ui.ctx(), &mut state, snapshots, bindings, &mut actions);
                     });
                 });
                 output.textures_delta.clear();
@@ -215,6 +248,41 @@ mod tests {
             .as_slice(),
             [UiAction::SetRecordingPaused(true)]
         ));
+    }
+
+    /// The whole point of the settings page: what the file says is what the
+    /// key does.
+    #[test]
+    fn a_rebound_key_is_the_one_that_acts() {
+        let mut bindings = HotkeySettings::default();
+        bindings.set(HotkeyAction::ToggleRecording, Some(Chord::plain(Key::F9)));
+        let idle = recording_for(None);
+
+        assert!(matches!(
+            hold_bound(Key::F9, Modifiers::NONE, 1, &idle, &bindings)
+                .remove(0)
+                .as_slice(),
+            [UiAction::StartRecording]
+        ));
+        assert!(
+            hold_bound(Key::R, Modifiers::CTRL, 1, &idle, &bindings)
+                .remove(0)
+                .is_empty(),
+            "the key it used to be bound to does nothing now"
+        );
+    }
+
+    /// Cleared means cleared — the action keeps working everywhere else, and
+    /// no key reaches it.
+    #[test]
+    fn an_action_bound_to_nothing_has_no_key() {
+        let mut bindings = HotkeySettings::default();
+        bindings.set(HotkeyAction::ToggleRecording, None);
+        assert!(
+            hold_bound(Key::R, Modifiers::CTRL, 1, &recording_for(None), &bindings)
+                .remove(0)
+                .is_empty()
+        );
     }
 
     /// A held key is one press, not sixty a second.

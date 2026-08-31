@@ -70,7 +70,9 @@ outlines and the pen toolbar are editor-only and never appear in the file.
 Keys, while the window has focus: `Ctrl+R` starts and stops recording,
 `Ctrl+P` pauses and resumes one, `Ctrl+1` … `Ctrl+9` switch to that Scene,
 `F11` goes fullscreen, and `Ctrl+,` opens Settings. None of them fire while
-you are typing a name.
+you are typing a name. All but the Scene keys can be changed in
+**Settings → Hotkeys**: click a binding, press the key you want, or Backspace
+to clear it.
 
 **File → Show Recordings** opens that folder in your file manager, and
 **File → Settings** is the same dialog the Controls dock's button opens —

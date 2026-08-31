@@ -18,6 +18,7 @@ pub struct AppSettings {
     pub theme: Theme,
     pub recording: RecordingSettings,
     pub audio: AudioSettings,
+    pub hotkeys: crate::hotkey::HotkeySettings,
     pub workspace: WorkspaceLayout,
 }
 

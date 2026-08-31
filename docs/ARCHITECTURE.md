@@ -189,7 +189,13 @@ Two rules carry the layer. A chord is ignored while anything is taking typed inp
 
 Modifiers match exactly rather than through egui's `matches_logically`, which treats extra Shift and Alt as noise. `Ctrl+Shift+R` would otherwise start a recording, and could never be bound to anything else.
 
-The bindings are a table in that module and not yet settings. Making them settable is reading that table from `settings.toml` rather than reaching into the UI; global hotkeys — keys that work while another application has focus — are a different mechanism per platform and a separate piece of work.
+Four of the bindings come from `settings.toml`, through `crate::hotkey`: a binding is stored as the string a person would write (`Ctrl+R`, `F11`, `Ctrl+,`), read loosely — case and either spelling of a key, since egui answers to both `Comma` and `,` — and written back in the short form, so a file edited by hand comes back tidy. Cleared is a value rather than an absence: an empty string, because a key left out of the file is one the defaults put straight back.
+
+The Scene keys are not among them. `Ctrl+1` through `Ctrl+9` select by *position*, which is a convention rather than a binding — a per-Scene key is the model that survives reordering, and it belongs with per-Source bindings rather than as nine more rows on a page.
+
+The settings page binds by listening: the button shows what is bound and, while it waits, takes the next key. Escape keeps what was there and Backspace clears it, which are the two things somebody in the middle of choosing might want that are not a key to bind. While one is waiting the hotkey layer stands down, or `Ctrl+R` would start a recording on its way to being bound to something. Two actions on one chord is warned about rather than refused: the first listed would take the key and the second would never see it, so the page names the clash beside the row instead of leaving the user holding a key that does nothing.
+
+Global hotkeys — keys that work while another application has focus — are a different mechanism per platform and a separate piece of work.
 
 ## The Properties dock
 

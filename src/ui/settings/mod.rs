@@ -17,6 +17,7 @@
 
 mod audio;
 mod general;
+mod hotkeys;
 mod recording;
 mod video;
 
@@ -38,11 +39,18 @@ pub(in crate::ui) enum SettingsPage {
     Video,
     Audio,
     Recording,
+    Hotkeys,
 }
 
 impl SettingsPage {
     /// Every page, in the order the list shows them.
-    const ALL: [Self; 4] = [Self::General, Self::Video, Self::Audio, Self::Recording];
+    const ALL: [Self; 5] = [
+        Self::General,
+        Self::Video,
+        Self::Audio,
+        Self::Recording,
+        Self::Hotkeys,
+    ];
 
     fn title(self) -> TextKey {
         match self {
@@ -50,6 +58,7 @@ impl SettingsPage {
             Self::Video => TextKey::SettingsPageVideo,
             Self::Audio => TextKey::SettingsPageAudio,
             Self::Recording => TextKey::SettingsPageRecording,
+            Self::Hotkeys => TextKey::SettingsPageHotkeys,
         }
     }
 }
@@ -61,6 +70,13 @@ pub(in crate::ui) struct SettingsDialogState {
     page: SettingsPage,
     /// Seeded by [`SettingsDialogState::open_with`]; meaningless while closed.
     draft: AppSettings,
+    /// The action the Hotkeys page is waiting for a key on.
+    ///
+    /// Held here rather than on the page because it outlives the pass that
+    /// started it, and because the hotkey layer has to know: while this is
+    /// set it stands down, so the key being bound is not also spent doing
+    /// what it is currently bound to.
+    capturing_hotkey: Option<crate::hotkey::HotkeyAction>,
     /// A folder picker that is open, waiting to say what was chosen.
     ///
     /// The dialog it shows is the desktop's own and stays up until the user
@@ -78,7 +94,13 @@ impl SettingsDialogState {
     /// quietly put them back on the next Apply.
     pub(in crate::ui) fn open_with(&mut self, settings: &AppSettings) {
         self.draft = settings.clone();
+        self.capturing_hotkey = None;
         self.open = true;
+    }
+
+    /// Whether the Hotkeys page is waiting for a key.
+    pub(in crate::ui) fn capturing_hotkey(&self) -> bool {
+        self.capturing_hotkey.is_some()
     }
 
     /// Whether a folder picker is up, which is what keeps a second one from
@@ -220,6 +242,20 @@ pub(in crate::ui) fn show(
                                 }
                                 SettingsPage::Audio => {
                                     audio::show(ui, &mut state.draft, recording, i18n);
+                                }
+                                SettingsPage::Hotkeys => {
+                                    let outcome = hotkeys::show(
+                                        ui,
+                                        &mut state.draft,
+                                        state.capturing_hotkey,
+                                        i18n,
+                                    );
+                                    if outcome.captured {
+                                        state.capturing_hotkey = None;
+                                    }
+                                    if let Some(action) = outcome.capture {
+                                        state.capturing_hotkey = Some(action);
+                                    }
                                 }
                                 SettingsPage::Recording => {
                                     browse = recording::show(

@@ -15,6 +15,7 @@ mod app;
 mod capture;
 mod domain;
 mod engine;
+mod hotkey;
 mod i18n;
 mod instance;
 mod paths;
