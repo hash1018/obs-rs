@@ -67,6 +67,10 @@ there.
 otherwise. What it records is the canvas, not the window — the selection
 outlines and the pen toolbar are editor-only and never appear in the file.
 
+**File → Show Recordings** opens that folder in your file manager, and
+**File → Settings** is the same dialog the Controls dock's button opens —
+there because that dock can be closed.
+
 Settings has four pages: General, Video (output resolution and frame rate),
 Audio (sample rate and channels), and Recording (where files go, format,
 encoder, bit rates, splitting).

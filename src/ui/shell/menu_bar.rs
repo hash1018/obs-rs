@@ -17,6 +17,21 @@ pub fn show(
         .show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button(i18n.text(TextKey::MenuFile), |ui| {
+                    // Also on the Controls dock, and here because that dock
+                    // can be closed: settings reachable only from something
+                    // the user can put away is settings they can lose.
+                    if ui.button(i18n.text(TextKey::MenuSettings)).clicked() {
+                        actions.push(UiAction::OpenSettings);
+                        ui.close();
+                    }
+                    // The one place the application says where it put the
+                    // files it made. Otherwise that is a path on a settings
+                    // page, to be read and typed somewhere else.
+                    if ui.button(i18n.text(TextKey::MenuShowRecordings)).clicked() {
+                        actions.push(UiAction::ShowRecordings);
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button(i18n.text(TextKey::MenuExit)).clicked() {
                         actions.push(UiAction::Exit);
                         ui.close();
@@ -125,6 +140,7 @@ fn theme_option(
     }
 }
 
+/// The About box: what this is, which build, and where it comes from.
 pub fn show_about(ui: &mut egui::Ui, state: &mut UiState, i18n: &LocalizationManager) {
     egui::Window::new(i18n.text(TextKey::MenuAbout))
         .open(&mut state.about_open)
@@ -132,6 +148,16 @@ pub fn show_about(ui: &mut egui::Ui, state: &mut UiState, i18n: &LocalizationMan
         .resizable(false)
         .show(ui.ctx(), |ui| {
             ui.heading("obs-rs");
+            ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
             ui.label(i18n.text(TextKey::AboutDescription));
+            ui.add_space(4.0);
+            // A link rather than a label to copy by hand. egui opens it in
+            // the system browser, which is the only thing anybody wants from
+            // an address in an About box.
+            ui.hyperlink(REPOSITORY);
         });
 }
+
+/// Where this application is developed. From the manifest rather than
+/// written out here, so it stays whatever `cargo` publishes.
+const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");

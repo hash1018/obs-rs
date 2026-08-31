@@ -26,6 +26,30 @@ pub fn data_dir() -> PathBuf {
     base(Kind::Data).join(APPLICATION)
 }
 
+/// Shows `directory` to the user in whatever file manager this platform has.
+///
+/// The one action in a module of locations, and here because a location is
+/// the whole of what it needs to know.
+///
+/// Created first: a recordings folder nothing has recorded into does not
+/// exist yet, and every file manager has its own unhelpful way of saying so.
+/// The command then runs on a thread of its own — `xdg-open` can take its
+/// time deciding who handles a directory, and the alternative to waiting
+/// somewhere is leaving a child nobody ever collects.
+pub fn show_in_file_manager(directory: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    let directory = directory.to_path_buf();
+    std::thread::spawn(move || {
+        let program = if cfg!(target_os = "windows") {
+            "explorer.exe"
+        } else {
+            "xdg-open"
+        };
+        let _ = std::process::Command::new(program).arg(&directory).status();
+    });
+    Ok(())
+}
+
 /// Where recordings are written.
 ///
 /// Not under [`data_dir`]: a recording is the user's own video, something

@@ -2,6 +2,9 @@
 name = "obs-rs"
 version = "0.1.0"
 edition = "2024"
+# Read at compile time for the About box, so the address shown is the one
+# this crate publishes rather than a second copy to keep in step.
+repository = "https://github.com/hash1018/obs-rs"
 
 [dependencies]
 # `wgpu` rather than the default `glow` backend: the preview will eventually

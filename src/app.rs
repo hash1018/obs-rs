@@ -513,6 +513,14 @@ impl ObsApp {
                     engine.stop_recording();
                 }
             }
+            UiAction::ShowRecordings => {
+                // The configured folder rather than the default one: what the
+                // user is looking for is where their recordings actually go.
+                let directory = self.settings.recording.directory_or_default();
+                if let Err(error) = crate::paths::show_in_file_manager(&directory) {
+                    eprintln!("could not show {}: {error}", directory.display());
+                }
+            }
             UiAction::OpenSettings => {
                 // Seeded here rather than in the dialog: this is what holds
                 // the live settings, and a draft taken from anywhere else
