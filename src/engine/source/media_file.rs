@@ -510,9 +510,9 @@ pub(in crate::engine) fn open(
         Arc::clone(&meters),
     );
 
-    let CudaVideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    // No `Option` here, unlike the Direct3D half: the CUDA compositor
+    // answers with the input itself or with an error.
+    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let video_time_base = chosen.video_time_base;
     let video_index = chosen.video;
@@ -535,7 +535,7 @@ pub(in crate::engine) fn open(
     start(&pipeline, settings.paused)?;
 
     Ok(Some(OpenSource {
-        source: RunningSource::Owned(Arc::clone(&pipeline)),
+        source: RunningSource(Arc::clone(&pipeline)),
         layer,
         name,
         refreshed_token: None,
