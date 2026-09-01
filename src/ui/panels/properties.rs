@@ -232,7 +232,8 @@ fn show_settings(
 ///
 /// A file that would not say how long it is gets the readout without the bar:
 /// there is no scale to draw one against, and a bar with no end is a control
-/// that cannot say where it would take you.
+/// that cannot say where it would take you — and then the second line is not
+/// drawn at all rather than left empty.
 fn show_playback(
     ui: &mut egui::Ui,
     item: &SceneItemSnapshot,
@@ -249,23 +250,29 @@ fn show_playback(
     };
     let stopped = ended || settings.paused;
     ui.label(i18n.text(TextKey::PropertiesPlayback));
-    ui.horizontal(|ui| {
-        let (glyph, hover) = if stopped {
-            ("▶", TextKey::PropertiesPlay)
-        } else {
-            ("⏸", TextKey::PropertiesPause)
-        };
-        if ui.button(glyph).on_hover_text(i18n.text(hover)).clicked() {
-            play_again(item, settings, ended, None, actions);
-        }
-        match settings.duration {
-            Some(duration) => {
-                ui.monospace(format!("{} / {}", clock(position), clock(duration)));
-                show_scrub(ui, item, settings, ended, position, duration, actions);
+    // Two lines rather than one. The button and the clock take a fixed width
+    // whatever the dock is doing, so on one line the bar got what was left —
+    // which at the dock's minimum width was nothing, and a bar squeezed to
+    // its floor is one drawn past the edge of the panel: present, and
+    // unreachable. Stacked, the two that fit anywhere keep their line and the
+    // one that needs room gets the whole of the next.
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            let (glyph, hover) = if stopped {
+                ("▶", TextKey::PropertiesPlay)
+            } else {
+                ("⏸", TextKey::PropertiesPause)
+            };
+            if ui.button(glyph).on_hover_text(i18n.text(hover)).clicked() {
+                play_again(item, settings, ended, None, actions);
             }
-            None => {
-                ui.monospace(clock(position));
-            }
+            ui.monospace(match settings.duration {
+                Some(duration) => format!("{} / {}", clock(position), clock(duration)),
+                None => clock(position),
+            });
+        });
+        if let Some(duration) = settings.duration {
+            show_scrub(ui, item, settings, ended, position, duration, actions);
         }
     });
     ui.end_row();
@@ -532,5 +539,92 @@ fn yes_no(value: bool) -> TextKey {
         TextKey::PropertiesYes
     } else {
         TextKey::PropertiesNo
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{Crop, MediaFileSettings, Transform};
+    use crate::i18n::Locale;
+    use crate::snapshots::SourcesSnapshot;
+
+    /// The narrowest the dock goes — `SIDE_MIN_SIZE` in `ui::docking`, less
+    /// what the panel's own margins take. What the bar has to survive.
+    const NARROW: f32 = 180.0;
+
+    fn media_item(duration: Option<std::time::Duration>) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            id: SceneItemId(1),
+            name: "Clip".to_owned(),
+            kind: SourceKind::MediaFile,
+            settings: SourceSettings::MediaFile(MediaFileSettings {
+                path: std::path::PathBuf::from("/videos/clip.mp4"),
+                looping: false,
+                size_hint: None,
+                has_audio: true,
+                gain_db: 0.0,
+                muted: false,
+                duration,
+                paused: false,
+            }),
+            source_size: [1920.0, 1080.0],
+            visible: true,
+            locked: false,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            peak_db: None,
+            position: Some(std::time::Duration::from_secs(3)),
+        }
+    }
+
+    /// Renders the whole panel for `item` at `width` and reports the size of
+    /// what it actually drew.
+    fn drawn(item: SceneItemSnapshot, width: f32) -> egui::Vec2 {
+        let context = egui::Context::default();
+        let i18n = LocalizationManager::new(Locale::EnUs);
+        let mut editor = SceneEditorState::default();
+        editor.select(item.id);
+        let snapshot = SourcesSnapshot {
+            items: vec![item],
+            ..SourcesSnapshot::default()
+        };
+
+        let mut drawn = egui::Vec2::ZERO;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 600.0),
+                )),
+                ..Default::default()
+            },
+            |context| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new())
+                    .show(context, |ui| {
+                        show(ui, &editor, &snapshot, None, &i18n, &mut Vec::new());
+                        drawn = ui.min_rect().size();
+                    });
+            },
+        );
+        // Nothing uploads these outside a real renderer, and epaint panics on
+        // a delta that is dropped unapplied.
+        output.textures_delta.clear();
+        drawn
+    }
+
+    /// The dock is narrow and the transport is three controls wide. Sharing
+    /// one line, the bar was drawn past the panel's right edge — visible in
+    /// the sense that it existed, and impossible to drag. This is the whole
+    /// reason it has a line of its own.
+    #[test]
+    fn the_scrub_bar_stays_inside_a_dock_at_its_narrowest() {
+        let width = drawn(media_item(Some(std::time::Duration::from_secs(8))), NARROW).x;
+
+        assert!(
+            width <= NARROW,
+            "the properties dock drew {width} wide in {NARROW}, so something is past its edge"
+        );
     }
 }
