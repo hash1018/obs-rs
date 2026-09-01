@@ -238,7 +238,30 @@ impl Backend {
         self.compositor.set_frame_rate(rate)
     }
 
+    /// Opens one Scene item's Source, leaving nothing behind if it fails.
+    ///
+    /// A Source registers its compositor layer before the rest of its
+    /// pipeline is built — the input it draws through is what the pipeline
+    /// is built around — so a failure past that point would otherwise leave
+    /// the layer there, drawing nothing, for the rest of the session: a
+    /// Source that failed to open is not asked for again. Removing a name
+    /// the compositor never took is a no-op, so this needs to know nothing
+    /// about how far the attempt got.
     pub(in crate::engine) fn open_source(
+        &self,
+        item: &SceneItemSnapshot,
+        layer: VideoLayer,
+        fps: u32,
+        mixer: Option<&media_pp::elements::MixerHandle>,
+    ) -> Result<Option<OpenSource>, BackendError> {
+        let opened = self.open_kind(item, layer, fps, mixer);
+        if opened.is_err() {
+            self.remove_source(&crate::engine::source::input_name(item));
+        }
+        opened
+    }
+
+    fn open_kind(
         &self,
         item: &SceneItemSnapshot,
         layer: VideoLayer,
