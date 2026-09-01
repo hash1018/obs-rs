@@ -48,6 +48,9 @@ mod level;
 mod manager;
 
 pub(super) use level::Levels;
+/// Measuring a buffer's peak is one function, and both halves of the engine
+/// now need it: the devices' own meters and a media file Source's.
+pub(in crate::engine) use level::peak_db;
 pub use manager::AudioManager;
 
 use std::collections::HashMap;

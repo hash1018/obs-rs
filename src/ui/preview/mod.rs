@@ -703,6 +703,7 @@ mod tests {
                 ..Transform::default()
             },
             crop: Crop::default(),
+            peak_db: None,
         }
     }
 
@@ -740,6 +741,7 @@ mod tests {
                 ..Transform::default()
             },
             crop: Crop::default(),
+            peak_db: None,
         }
     }
 

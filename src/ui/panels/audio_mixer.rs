@@ -112,9 +112,7 @@ fn channels<'a>(
             name: &item.name,
             gain_db: settings.gain_db,
             muted: settings.muted,
-            // No meter behind a media file yet: levels are measured on the
-            // audio thread and this Source's audio runs on the video one.
-            peak_db: None,
+            peak_db: item.peak_db,
             device: None,
         })
     }));

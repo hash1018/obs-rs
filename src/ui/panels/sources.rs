@@ -1104,6 +1104,7 @@ mod tests {
 
     fn item(id: i64, name: &str) -> SceneItemSnapshot {
         SceneItemSnapshot {
+            peak_db: None,
             id: SceneItemId(id),
             name: name.to_owned(),
             kind: SourceKind::Color,

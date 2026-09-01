@@ -34,7 +34,8 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 - **Audio.** Desktop and microphone channels with faders, mute, and level
   meters that read after the fader. A fader can boost past unity, and a lamp
   reports a channel that clipped. The Scene's own media files get a channel
-  each, so what a clip is playing can be set against everything else.
+  each — fader, mute and meter alike — so what a clip is playing can be set
+  against everything else.
 - **Properties.** Selecting a source describes it in a dock of its own —
   where it sits, how large it is, and what it is actually capturing. A Color
   source's colour is edited there.
@@ -114,9 +115,7 @@ you try it:
   YouTube yet. Recording is the whole of it.
 - **Five source kinds.** Display Capture, Window Capture, Media File, Drawing
   and Color. Cameras and images are not there.
-- **A media file's channel has no level meter.** It has a fader and a mute
-  button; the meter beside them stays empty, because a file's audio is
-  measured nowhere yet.
+
 - **No filters, transitions or hotkeys.** Switching Scenes is a cut.
 
 ## Contributing

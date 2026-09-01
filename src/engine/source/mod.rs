@@ -16,6 +16,9 @@ pub(in crate::engine) mod drawing;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod window_capture;
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+
 use crate::snapshots::SceneItemSnapshot;
 
 use super::backend::{BackendError, Layer, RunningSource};
@@ -79,6 +82,13 @@ pub(in crate::engine) struct MediaFile {
     /// opened on a machine whose mixer never started, which is the same
     /// thing from here: there is nothing to turn down.
     pub(in crate::engine) volume: Option<media_pp::elements::AudioVolumeHandle>,
+    /// What its meter reads, written by whichever thread this Source's own
+    /// `Tee` pushes on and read by the UI thread — the same arrangement, and
+    /// the same reason for it, as `audio::Levels`.
+    ///
+    /// Present exactly when `volume` is: both come from the audio branch, and
+    /// a file with no sound has neither.
+    pub(in crate::engine) peak: Option<Arc<AtomicU32>>,
 }
 
 /// The name a SceneItem's compositor input is registered under.

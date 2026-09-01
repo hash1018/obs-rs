@@ -68,7 +68,7 @@ impl Levels {
 /// full scale" and "is 6 dB over it" — the second of which is the clip this
 /// function exists to catch. The floor stays, because below it there is
 /// nothing to tell apart.
-pub(super) fn peak_db(frame: &media_pp::ffmpeg::frame::Audio) -> f32 {
+pub(in crate::engine) fn peak_db(frame: &media_pp::ffmpeg::frame::Audio) -> f32 {
     use media_pp::ffmpeg::format::Sample;
 
     let peak = match frame.format() {

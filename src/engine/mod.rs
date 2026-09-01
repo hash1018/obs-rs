@@ -190,6 +190,17 @@ struct Published {
     /// list says so beside them, which is the only thing that explains an
     /// item drawing nothing.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
+    /// What each playing media file's meter reads.
+    ///
+    /// The audio thread has its own `Levels` for the devices and replaces it
+    /// wholesale whenever it rebuilds its graph. This is the second half, and
+    /// it is published separately for exactly that reason: one side must not
+    /// wipe the other's counters by getting on with its own work. The Audio
+    /// Mixer dock reads both and draws them as one row of channels.
+    ///
+    /// The map changes only when a Source opens or closes; the numbers inside
+    /// it change every buffer, which is what the atomics are for.
+    media_peaks: Arc<ArcSwapOption<HashMap<SceneItemId, Arc<AtomicU32>>>>,
     /// Which encoders the backend can open — see `EngineManager::encoders`.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     /// Which audio codecs this FFmpeg build can open — see
@@ -217,6 +228,8 @@ pub struct EngineManager {
     recording_error: Arc<ArcSwapOption<String>>,
     /// The SceneItems drawing nothing — see `Published::source_status`.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
+    /// Each playing media file's meter — see `Published::media_peaks`.
+    media_peaks: Arc<ArcSwapOption<HashMap<SceneItemId, Arc<AtomicU32>>>>,
     /// Which H.264 encoders the backend can open. Published once, after the
     /// backend has been built — probing needs its device, and the answer
     /// cannot change while the application runs.
@@ -252,6 +265,7 @@ impl EngineManager {
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
         let source_status = Arc::new(ArcSwapOption::empty());
+        let media_peaks = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
         let audio_codecs = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
@@ -263,6 +277,7 @@ impl EngineManager {
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
             let source_status = Arc::clone(&source_status);
+            let media_peaks = Arc::clone(&media_peaks);
             let encoders = Arc::clone(&encoders);
             let audio_codecs = Arc::clone(&audio_codecs);
             let stop = Arc::clone(&stop);
@@ -274,6 +289,7 @@ impl EngineManager {
                     recording_paused_at,
                     recording_error,
                     source_status,
+                    media_peaks,
                     encoders,
                     audio_codecs,
                 };
@@ -304,6 +320,7 @@ impl EngineManager {
             recording_paused_at,
             recording_error,
             source_status,
+            media_peaks,
             encoders,
             audio_codecs,
             commands,
@@ -464,6 +481,22 @@ impl EngineManager {
         self.source_status.load_full()
     }
 
+    /// What this media file Source's meter reads, or `None` for one with no
+    /// sound and for anything that is not a media file.
+    ///
+    /// Read from the atomic its own audio branch writes, so it costs no lock
+    /// and no wait on the engine thread — the same arrangement the devices'
+    /// meters have, and the same reason: a meter one frame stale is a meter,
+    /// and one that blocks the graph to be current is not.
+    pub fn media_peak_db(&self, item: SceneItemId) -> Option<f32> {
+        let bits = self
+            .media_peaks
+            .load_full()?
+            .get(&item)?
+            .load(Ordering::Relaxed);
+        (bits != 0).then(|| f32::from_bits(bits))
+    }
+
     /// One media file Source's gain while the fader is still held, for the
     /// same reason `set_source_colour` exists: what is heard has to follow
     /// the pointer, and the project is told once when the gesture ends.
@@ -612,6 +645,7 @@ fn run(
         // UI already holds, not something to do sixty times a second for an
         // answer that has not moved.
         publish_source_status(&published, &open);
+        publish_media_peaks(&published, &open);
     }
 
     for (_, state) in open.drain() {
@@ -1017,6 +1051,42 @@ fn publish_source_status(published: &Published, open: &HashMap<SceneItemId, Sour
     published.source_status.store(Some(Arc::new(status)));
 }
 
+/// Hands the UI the counter each playing media file's meter is written to.
+///
+/// Published beside the status map and on the same occasions, because it
+/// moves for the same reasons: a Source opening or closing is the only thing
+/// that adds or removes a counter. What is inside one changes every buffer
+/// and is never republished — that is the whole point of an atomic here.
+///
+/// Compared by pointer rather than by key, because a Source that closed and
+/// opened again keeps its SceneItem's id but gets a new counter. Matching on
+/// ids alone would leave the dock reading the dead one, and its meter would
+/// sit at whatever the previous Source last measured.
+fn publish_media_peaks(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
+    let peaks: HashMap<SceneItemId, Arc<AtomicU32>> = open
+        .iter()
+        .filter_map(|(id, state)| {
+            let SourceState::Open(source) = state else {
+                return None;
+            };
+            Some((*id, Arc::clone(source.media_file.as_ref()?.peak.as_ref()?)))
+        })
+        .collect();
+    let unchanged = match published.media_peaks.load_full() {
+        Some(current) => {
+            current.len() == peaks.len()
+                && peaks
+                    .iter()
+                    .all(|(id, peak)| current.get(id).is_some_and(|held| Arc::ptr_eq(held, peak)))
+        }
+        None => peaks.is_empty(),
+    };
+    if unchanged {
+        return;
+    }
+    published.media_peaks.store(Some(Arc::new(peaks)));
+}
+
 /// Whether opening this item's Source would interrupt whoever is at the
 /// screen, so that it must be asked for rather than attempted.
 ///
@@ -1317,6 +1387,7 @@ mod tests {
 
     fn window_item(id: i64, target: WindowCaptureTarget) -> SceneItemSnapshot {
         SceneItemSnapshot {
+            peak_db: None,
             id: SceneItemId(id),
             name: "Window Capture".into(),
             kind: SourceKind::WindowCapture,
@@ -1339,6 +1410,7 @@ mod tests {
             recording_since: Arc::new(ArcSwapOption::empty()),
             recording_paused_at: Arc::new(ArcSwapOption::empty()),
             source_status: Arc::new(ArcSwapOption::empty()),
+            media_peaks: Arc::new(ArcSwapOption::empty()),
             encoders: Arc::new(ArcSwapOption::empty()),
             audio_codecs: Arc::new(ArcSwapOption::empty()),
             recording_error: Arc::new(ArcSwapOption::empty()),

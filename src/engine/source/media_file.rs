@@ -45,8 +45,17 @@
 //! switched where it is rather than by reopening — see
 //! [`super::refresh_media_file`].
 
-use media_pp::elements::{FileDemuxer, MixerHandle, StreamInfo};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use media_pp::element::Context;
+use media_pp::element::Sink;
+use media_pp::elements::{
+    AppSink, AudioVolume, AudioVolumeHandle, FileDemuxer, MixerHandle, Pacer, StreamInfo,
+    SwDecoder, TeeBuilder,
+};
 use media_pp::ffmpeg;
+use media_pp::pipeline::Pipeline;
 
 use crate::domain::MediaFileSettings;
 use crate::engine::backend::BackendError;
@@ -155,6 +164,110 @@ fn audio_name(name: &str) -> String {
     format!("{name}-audio")
 }
 
+/// The audio branch, built before the pipeline is.
+///
+/// Everything here can fail for an ordinary reason — a codec this FFmpeg was
+/// not built with, a mixer that has gone — so it is built where an error can
+/// be reported rather than unwrapped inside the builder closure, on the
+/// engine thread.
+struct Audio {
+    index: usize,
+    time_base: ffmpeg::Rational,
+    decoder: SwDecoder,
+    fader: AudioVolume,
+    /// What the Audio Mixer dock moves, and what it reads.
+    volume: AudioVolumeHandle,
+    peak: Arc<AtomicU32>,
+    /// The mixer input this file's sound is summed into.
+    mix: Box<dyn Sink>,
+    /// The `AppSink` that measures the level.
+    meter: Box<dyn Sink>,
+}
+
+/// Builds it, or answers `None` for a file with no sound and for a machine
+/// whose mixer never started — the picture is worth showing either way.
+fn audio(
+    name: &str,
+    track: Option<Track>,
+    mixer: Option<&MixerHandle>,
+    settings: &MediaFileSettings,
+    item: &SceneItemSnapshot,
+) -> Result<Option<Audio>, BackendError> {
+    let (Some(track), Some(mixer)) = (track, mixer) else {
+        return Ok(None);
+    };
+    let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
+
+    // The fader lives in this pipeline rather than the audio thread's,
+    // because this file's sound belongs to this Source rather than to a
+    // device everything shares.
+    let (fader, volume) = AudioVolume::new(format!("{name}-volume"));
+    let _ = volume.set_gain_db(settings.gain_db);
+    volume.set_muted(super::muted(settings.muted, item.visible));
+
+    let peak = Arc::new(AtomicU32::new(0));
+    let meter = AppSink::new(format!("{name}-meter"), {
+        let peak = Arc::clone(&peak);
+        move |buffer| {
+            if let media_pp::buffer::MediaBuffer::Audio(frame) = &buffer {
+                peak.store(
+                    crate::engine::audio::peak_db(frame).to_bits(),
+                    Ordering::Relaxed,
+                );
+            }
+            Ok(())
+        }
+    });
+
+    let mix = mixer
+        .add_source(audio_name(name))
+        .ok_or("the audio mixer is gone")?;
+    Ok(Some(Audio {
+        index: track.index,
+        time_base: track.time_base,
+        decoder,
+        fader,
+        volume,
+        peak,
+        mix,
+        meter: Box::new(meter),
+    }))
+}
+
+/// Attaches it to the demuxer's audio pad.
+///
+/// The `Tee` hangs off the *fader*, so a meter shows what the fader let
+/// through rather than what arrived at it — pulling one down empties its
+/// meter, and so does muting. `to_branch` rather than `to`, because a `Tee`
+/// is a finished branch rather than a `Sink`: attaching it to the fader's pad
+/// on its own would link the same buffers but record the fan-out as the
+/// demuxer's.
+fn attach_audio(
+    context: &Arc<Context>,
+    source: &mut FileDemuxer,
+    audio: Audio,
+) -> media_pp::error::Result<()> {
+    let meter = context.branch().to(audio.meter)?;
+    let mix = context.branch().to(audio.mix)?;
+    let tee = TeeBuilder::new("audio-tee", context.clone())
+        .branch(meter)
+        .branch(mix)
+        .build()?;
+    let faded = context
+        .branch()
+        .pipe(audio.decoder)
+        .queue("audio", QUEUE_DEPTH)
+        .pipe(Pacer::new(
+            "audio-pacer",
+            audio.time_base,
+            context.clock.clone(),
+        )?)
+        .pipe(audio.fader)
+        .to_branch(tee)?;
+    context.attach(source, audio.index, faded)?;
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -163,10 +276,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
-    use media_pp::elements::{
-        AudioVolume, D3d11Decoder, D3d11VideoCompositorInput, Pacer, SwDecoder,
-    };
-    use media_pp::pipeline::Pipeline;
+    use media_pp::elements::{D3d11Decoder, D3d11VideoCompositorInput};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -193,24 +303,9 @@ pub(in crate::engine) fn open(
         device,
         HW_FRAME_BUDGET,
     )?;
-    let audio = match (chosen.audio, mixer) {
-        (Some(track), Some(mixer)) => {
-            let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
-            // The fader lives in this pipeline rather than the audio thread's,
-            // because this file's sound belongs to this Source rather than to
-            // a device everything shares. Its handle is what the Audio Mixer
-            // dock moves.
-            let (fader, volume) = AudioVolume::new(format!("{name}-volume"));
-            let _ = volume.set_gain_db(settings.gain_db);
-            volume.set_muted(super::muted(settings.muted, item.visible));
-            let sink = mixer
-                .add_source(audio_name(&name))
-                .ok_or("the audio mixer is gone")?;
-            Some((track.index, track.time_base, decoder, fader, volume, sink))
-        }
-        _ => None,
-    };
-    let volume = audio.as_ref().map(|(_, _, _, _, volume, _)| volume.clone());
+    let audio = audio(&name, chosen.audio, mixer, settings, item)?;
+    let volume = audio.as_ref().map(|audio| audio.volume.clone());
+    let peak = audio.as_ref().map(|audio| Arc::clone(&audio.peak));
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -231,15 +326,8 @@ pub(in crate::engine) fn open(
             .to(sink)?;
         context.attach(source, video_index, branch)?;
 
-        if let Some((index, time_base, decoder, fader, _, sink)) = audio {
-            let branch = context
-                .branch()
-                .pipe(decoder)
-                .queue("audio", QUEUE_DEPTH)
-                .pipe(Pacer::new("audio-pacer", time_base, context.clock.clone())?)
-                .pipe(fader)
-                .to(sink)?;
-            context.attach(source, index, branch)?;
+        if let Some(audio) = audio {
+            attach_audio(context, source, audio)?;
         }
         Ok(())
     })?;
@@ -252,7 +340,11 @@ pub(in crate::engine) fn open(
         refreshed_token: None,
         showing: true,
         pushed: None,
-        media_file: Some(MediaFile { looping, volume }),
+        media_file: Some(MediaFile {
+            looping,
+            volume,
+            peak,
+        }),
     }))
 }
 
@@ -264,10 +356,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
-    use media_pp::elements::{
-        AudioVolume, CudaDecoder, CudaVideoCompositorInput, Pacer, SwDecoder,
-    };
-    use media_pp::pipeline::Pipeline;
+    use media_pp::elements::{CudaDecoder, CudaVideoCompositorInput};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -291,24 +380,9 @@ pub(in crate::engine) fn open(
         device,
         HW_FRAME_BUDGET,
     )?;
-    let audio = match (chosen.audio, mixer) {
-        (Some(track), Some(mixer)) => {
-            let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
-            // The fader lives in this pipeline rather than the audio thread's,
-            // because this file's sound belongs to this Source rather than to
-            // a device everything shares. Its handle is what the Audio Mixer
-            // dock moves.
-            let (fader, volume) = AudioVolume::new(format!("{name}-volume"));
-            let _ = volume.set_gain_db(settings.gain_db);
-            volume.set_muted(super::muted(settings.muted, item.visible));
-            let sink = mixer
-                .add_source(audio_name(&name))
-                .ok_or("the audio mixer is gone")?;
-            Some((track.index, track.time_base, decoder, fader, volume, sink))
-        }
-        _ => None,
-    };
-    let volume = audio.as_ref().map(|(_, _, _, _, volume, _)| volume.clone());
+    let audio = audio(&name, chosen.audio, mixer, settings, item)?;
+    let volume = audio.as_ref().map(|audio| audio.volume.clone());
+    let peak = audio.as_ref().map(|audio| Arc::clone(&audio.peak));
 
     let CudaVideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -329,15 +403,8 @@ pub(in crate::engine) fn open(
             .to(sink)?;
         context.attach(source, video_index, branch)?;
 
-        if let Some((index, time_base, decoder, fader, _, sink)) = audio {
-            let branch = context
-                .branch()
-                .pipe(decoder)
-                .queue("audio", QUEUE_DEPTH)
-                .pipe(Pacer::new("audio-pacer", time_base, context.clock.clone())?)
-                .pipe(fader)
-                .to(sink)?;
-            context.attach(source, index, branch)?;
+        if let Some(audio) = audio {
+            attach_audio(context, source, audio)?;
         }
         Ok(())
     })?;
@@ -350,6 +417,10 @@ pub(in crate::engine) fn open(
         refreshed_token: None,
         showing: true,
         pushed: None,
-        media_file: Some(MediaFile { looping, volume }),
+        media_file: Some(MediaFile {
+            looping,
+            volume,
+            peak,
+        }),
     }))
 }

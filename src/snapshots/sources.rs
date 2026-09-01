@@ -104,6 +104,14 @@ pub struct SceneItemSnapshot {
     pub locked: bool,
     pub transform: Transform,
     pub crop: Crop,
+    /// The loudest sample this Source's own audio has reached since the last
+    /// update, in decibels relative to full scale.
+    ///
+    /// `None` for everything but a media file that is playing one: no other
+    /// kind here has sound of its own. Filled from the engine rather than
+    /// from the project — it is a measurement, not something stored — which
+    /// is why it is on the snapshot rather than in `settings`.
+    pub peak_db: Option<f32>,
 }
 
 #[cfg(test)]
@@ -120,6 +128,8 @@ mod tests {
             source_size,
             transform: Transform::default(),
             crop,
+
+            peak_db: None,
             visible: true,
             locked: false,
         }

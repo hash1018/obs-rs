@@ -391,6 +391,19 @@ impl ObsApp {
         }
     }
 
+    /// The same for the meters the *video* half measures, which is where a
+    /// media file's own audio runs. Two halves rather than one because they
+    /// are two graphs on two threads; the Audio Mixer dock draws them as one
+    /// row of channels.
+    fn poll_media_levels(&mut self) {
+        let Some(engine) = &self.engine else {
+            return;
+        };
+        for item in &mut self.snapshots.sources.items {
+            item.peak_db = engine.media_peak_db(item.id);
+        }
+    }
+
     fn poll_resource_usage(&mut self) {
         let Some(manager) = &self.resources else {
             return;
@@ -574,6 +587,7 @@ impl eframe::App for ObsApp {
         self.poll_engine(ctx);
         self.poll_resource_usage();
         self.poll_audio_levels();
+        self.poll_media_levels();
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();
     }

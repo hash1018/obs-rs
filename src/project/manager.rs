@@ -293,6 +293,8 @@ fn sources_snapshot(
                 locked,
                 transform,
                 crop,
+                // Filled in later, from the engine — see `ObsApp::poll_media_levels`.
+                peak_db: None,
             }
         })
         .collect();
