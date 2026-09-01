@@ -41,7 +41,7 @@ use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
 use backend::{Backend, BackendError};
-use source::{OpenSource, PushedContent, push_content, refresh_pushed};
+use source::{OpenSource, PushedContent, push_content, refresh_media_file, refresh_pushed};
 
 /// The rate to assume when the compositor cannot be asked — it is gone, or
 /// there is no backend at all.
@@ -123,9 +123,14 @@ struct RecordingState {
     /// engine existed — see `ObsApp::new` — and replaced whenever the
     /// Settings dialog is applied.
     settings: crate::settings::RecordingSettings,
-    /// Where the audio track attaches, taken once at startup because the
-    /// mixer lives on a thread this one cannot ask. `None` when it never
-    /// started, which records video only.
+    /// The mixer, taken once at startup because it lives on a thread this one
+    /// cannot ask. `None` when it never started, which records video only and
+    /// plays media files without their sound.
+    ///
+    /// Two things attach to it from here: a recording's audio track, on the
+    /// `Tee`, and a media file Source's own audio, as one more mixer input.
+    /// It sits on this struct because a recording was the first of them; the
+    /// second arriving is not on its own a reason to move it.
     mixer: Option<(
         media_pp::elements::TeeHandle,
         media_pp::elements::MixerHandle,
@@ -140,6 +145,11 @@ struct RecordingState {
 }
 
 impl RecordingState {
+    /// The mixer's own control, for whatever attaches an input to it.
+    fn mixer_handle(&self) -> Option<&media_pp::elements::MixerHandle> {
+        self.mixer.as_ref().map(|(_, mixer)| mixer)
+    }
+
     /// What the mixer is actually summing into, or the default when it never
     /// started.
     ///
@@ -574,7 +584,13 @@ fn run(
                 }
                 looked_for_missing = Instant::now();
                 notice_closed_windows(&backend, &mut open, &scene);
-                retry_missing(&backend, project.as_ref(), &mut open, &scene);
+                retry_missing(
+                    &backend,
+                    project.as_ref(),
+                    recording.mixer_handle(),
+                    &mut open,
+                    &scene,
+                );
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -608,7 +624,7 @@ fn apply_command(
     match command {
         EngineCommand::Scene(snapshot) => {
             *scene = *snapshot;
-            reconcile(backend, project, open, scene);
+            reconcile(backend, project, recording.mixer_handle(), open, scene);
             true
         }
         EngineCommand::ReopenSource(item_id) => {
@@ -624,7 +640,7 @@ fn apply_command(
             }
             let item = &scene.items[index];
             let layer = layer_for(item, item.transform, (scene.items.len() - index) as i32);
-            let state = open_item(backend, project, item, layer);
+            let state = open_item(backend, project, recording.mixer_handle(), item, layer);
             open.insert(item_id, state);
             true
         }
@@ -901,10 +917,11 @@ const MISSING_RETRY: Duration = Duration::from_secs(1);
 fn open_item(
     backend: &Backend,
     project: Option<&ProjectDispatcher>,
+    mixer: Option<&media_pp::elements::MixerHandle>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
 ) -> SourceState {
-    match backend.open_source(item, layer, backend.frame_rate()) {
+    match backend.open_source(item, layer, backend.frame_rate(), mixer) {
         // Nothing to open yet, and nothing wrong. Looked at again on the next
         // pass rather than reported.
         Ok(None) => SourceState::Missing,
@@ -1015,6 +1032,7 @@ fn notice_closed_windows(
 fn retry_missing(
     backend: &Backend,
     project: Option<&ProjectDispatcher>,
+    mixer: Option<&media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
 ) {
@@ -1030,7 +1048,7 @@ fn retry_missing(
             continue;
         }
         let layer = layer_for(item, item.transform, (count - index) as i32);
-        let state = open_item(backend, project, item, layer);
+        let state = open_item(backend, project, mixer, item, layer);
         open.insert(item.id, state);
     }
 }
@@ -1039,6 +1057,7 @@ fn retry_missing(
 fn reconcile(
     backend: &Backend,
     project: Option<&ProjectDispatcher>,
+    mixer: Option<&media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
 ) {
@@ -1051,10 +1070,11 @@ fn reconcile(
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
                 refresh_pushed(source, item);
+                refresh_media_file(source, item);
             }
             Some(SourceState::Failed | SourceState::Disconnected) => {}
             Some(SourceState::Missing) | None => {
-                let state = open_item(backend, project, item, layer);
+                let state = open_item(backend, project, mixer, item, layer);
                 open.insert(item.id, state);
             }
         }

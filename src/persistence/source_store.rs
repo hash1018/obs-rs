@@ -1,11 +1,12 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings,
-    Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
+    MediaFileSettings, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
+    SourceSettings, Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -93,7 +94,11 @@ impl SourceStore {
                 window_capture_settings.title,
                 window_capture_settings.restore_token,
                 window_capture_settings.width,
-                window_capture_settings.height
+                window_capture_settings.height,
+                media_file_settings.path,
+                media_file_settings.looping,
+                media_file_settings.width,
+                media_file_settings.height
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -104,6 +109,8 @@ impl SourceStore {
                 ON drawing_source_settings.source_id = sources.id
              LEFT JOIN window_capture_settings
                 ON window_capture_settings.source_id = sources.id
+             LEFT JOIN media_file_settings
+                ON media_file_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -176,6 +183,14 @@ impl SourceStore {
                             },
                         })
                     }
+                    SourceKind::MediaFile => SourceSettings::MediaFile(MediaFileSettings {
+                        path: PathBuf::from(row.get::<_, String>(37)?),
+                        looping: row.get(38)?,
+                        size_hint: match (row.get(39)?, row.get(40)?) {
+                            (Some(width), Some(height)) => Some([width, height]),
+                            _ => None,
+                        },
+                    }),
                     _ => SourceSettings::None,
                 };
                 let source_id = SourceId(row.get(1)?);
@@ -447,6 +462,59 @@ impl SourceStore {
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
+    /// Adds a media file Source, named after the file itself.
+    ///
+    /// The name is the file's own stem because that is what someone reading
+    /// the Sources list is looking for, and because the alternative — "Media
+    /// Source 4" — names nothing. It is still only a starting name: it is
+    /// stored, not derived, so renaming it sticks and moving the file does
+    /// not rename anything.
+    pub(crate) fn add_media_file(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        settings: &MediaFileSettings,
+    ) -> PersistenceResult<SceneItemId> {
+        let base = settings
+            .path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| "Media Source".to_owned());
+        let name = unique_source_name(transaction, &base)?;
+        let source_id = create(transaction, &name, SourceKind::MediaFile)?;
+        let [width, height] = settings
+            .size_hint
+            .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
+        transaction.execute(
+            "INSERT INTO media_file_settings
+                (source_id, path, looping, width, height)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                source_id.0,
+                settings.path.to_string_lossy(),
+                settings.looping,
+                width,
+                height
+            ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
+    /// Whether this media file Source starts again at its end.
+    pub(crate) fn set_media_looping(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        looping: bool,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE media_file_settings
+             SET looping = ?1
+             WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)",
+            params![looping, scene_item_id.0],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn set_transform(

@@ -240,6 +240,7 @@ impl Backend {
         item: &SceneItemSnapshot,
         layer: VideoLayer,
         fps: u32,
+        mixer: Option<&media_pp::elements::MixerHandle>,
     ) -> Result<Option<OpenSource>, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => display_capture::open(
@@ -253,6 +254,9 @@ impl Backend {
             .map(Some),
             SourceKind::WindowCapture => {
                 source::window_capture::open(&self.device, &self.compositor, item, layer, fps)
+            }
+            SourceKind::MediaFile => {
+                source::media_file::open(&self.device, &self.compositor, mixer, item, layer)
             }
             SourceKind::Color => {
                 source::color::open(&self.device, &self.compositor, item, layer).map(Some)

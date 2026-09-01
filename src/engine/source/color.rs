@@ -75,6 +75,7 @@ fn opened(
     rgba: [u8; 4],
 ) -> OpenSource {
     OpenSource {
+        media_file: None,
         source,
         layer,
         name,

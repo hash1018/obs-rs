@@ -61,6 +61,7 @@ impl Backend {
         item: &SceneItemSnapshot,
         _layer: VideoLayer,
         _fps: u32,
+        _mixer: Option<&media_pp::elements::MixerHandle>,
     ) -> Result<Option<OpenSource>, BackendError> {
         Err(unsupported_kind(item))
     }

@@ -36,6 +36,8 @@
 // platform API is still intentionally unused.
 #![allow(dead_code)]
 
+use std::path::Path;
+
 use crate::domain::AudioSourceKind;
 
 #[cfg(target_os = "linux")]
@@ -134,6 +136,37 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         Vec::new()
+    }
+}
+
+/// The pixel size of a media file's video stream, or `None` when it has none
+/// or would not open.
+///
+/// Reads through `media-pp` for the same reason [`audio_devices`] does: a
+/// static call that opens no pipeline and shows nothing. There is no picker
+/// to write here either — the file dialog belongs to the system, and it hands
+/// back a path.
+///
+/// `None` is not a failure and is not reported as one. A file this machine
+/// cannot demux still becomes a Source, which reports that where it happens;
+/// here it only means a new SceneItem starts at Canvas size instead of the
+/// video's own shape.
+pub fn media_file_size(path: &Path) -> Option<[u32; 2]> {
+    use media_pp::ffmpeg;
+
+    let input = ffmpeg::format::input(path).ok()?;
+    let parameters = input
+        .streams()
+        .find(|stream| stream.parameters().medium() == ffmpeg::media::Type::Video)?
+        .parameters();
+    let video = ffmpeg::codec::context::Context::from_parameters(parameters)
+        .ok()?
+        .decoder()
+        .video()
+        .ok()?;
+    match (video.width(), video.height()) {
+        (0, _) | (_, 0) => None,
+        size => Some([size.0, size.1]),
     }
 }
 

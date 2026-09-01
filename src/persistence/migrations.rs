@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -255,6 +255,28 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 9;",
+        )?;
+    }
+
+    if current_version < 10 {
+        // The path is stored as it was picked and is never resolved to
+        // anything else: a file that has moved is an ordinary state the
+        // Source waits out, the same way a closed window is, so there is
+        // nothing here to keep current.
+        //
+        // The size is the video stream's own, read when the file was picked.
+        // Nullable because a file with no video stream, or one this machine
+        // cannot demux, still becomes a Source.
+        transaction.execute_batch(
+            "CREATE TABLE media_file_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                path      TEXT NOT NULL,
+                looping   INTEGER NOT NULL CHECK (looping IN (0, 1)),
+                width     INTEGER,
+                height    INTEGER
+            );
+
+            PRAGMA user_version = 10;",
         )?;
     }
     transaction.commit()?;

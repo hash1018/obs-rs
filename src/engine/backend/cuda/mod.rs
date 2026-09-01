@@ -243,6 +243,7 @@ impl Backend {
         item: &SceneItemSnapshot,
         layer: VideoLayer,
         fps: u32,
+        mixer: Option<&media_pp::elements::MixerHandle>,
     ) -> Result<Option<OpenSource>, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => {
@@ -272,6 +273,9 @@ impl Backend {
                     .expect("capture rates poisoned")
                     .insert(source.name.clone(), frame_rate);
                 Ok(Some(source))
+            }
+            SourceKind::MediaFile => {
+                source::media_file::open(&self.device, &self.compositor, mixer, item, layer)
             }
             SourceKind::Color => {
                 source::color::open(&self.device, &self.compositor, item, layer).map(Some)

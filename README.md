@@ -23,6 +23,10 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 - **Drawing.** A source you draw on rather than one that captures something:
   pen, highlighter and eraser, with undo and clear. It is a real layer, so
   what you draw is in the recording, not just on your screen.
+- **Media file.** A video file as a source, decoded on the GPU and composited
+  like anything else, with its own sound going into the mix. It can be set to
+  start again at its end; switching that off part way through lets the pass
+  it is on play out rather than stopping where it is.
 - **Recording** to MP4, Matroska or HLS, with hardware encoding where the
   machine has it. One recording can be split into several files by elapsed
   time or by size.
@@ -106,8 +110,11 @@ you try it:
 
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
-- **Four source kinds.** Display Capture, Window Capture, Drawing and Color.
-  Cameras, images and media files are not there.
+- **Five source kinds.** Display Capture, Window Capture, Media File, Drawing
+  and Color. Cameras and images are not there.
+- **A media file has no channel in the Audio Mixer.** Its sound is mixed and
+  recorded, but the fader, mute and meter every audio device gets are not
+  there for it yet.
 - **No filters, transitions or hotkeys.** Switching Scenes is a cut.
 
 ## Contributing

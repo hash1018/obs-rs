@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::SceneCanvas;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -8,6 +10,7 @@ pub enum SourceKind {
     DisplayCapture,
     WindowCapture,
     VideoCapture,
+    MediaFile,
     Image,
     Color,
     Drawing,
@@ -19,6 +22,7 @@ impl SourceKind {
             Self::DisplayCapture => "display_capture",
             Self::WindowCapture => "window_capture",
             Self::VideoCapture => "video_capture",
+            Self::MediaFile => "media_file",
             Self::Image => "image",
             Self::Color => "color",
             Self::Drawing => "drawing",
@@ -30,6 +34,7 @@ impl SourceKind {
             "display_capture" => Some(Self::DisplayCapture),
             "window_capture" => Some(Self::WindowCapture),
             "video_capture" => Some(Self::VideoCapture),
+            "media_file" => Some(Self::MediaFile),
             "image" => Some(Self::Image),
             "color" => Some(Self::Color),
             "drawing" => Some(Self::Drawing),
@@ -171,12 +176,40 @@ pub struct WindowCaptureSettings {
     pub size_hint: Option<[u32; 2]>,
 }
 
+/// A video file played into the Scene.
+///
+/// The path is what was picked and is not resolved to anything else: a file
+/// that has been moved or a drive that is not mounted is an ordinary state
+/// the same way a closed window is, and the Source waits for it rather than
+/// being an error. What is stored is therefore the path itself, not a handle
+/// or an id that would stop meaning anything outside this session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaFileSettings {
+    pub path: PathBuf,
+    /// Whether reaching the end of the file starts it again instead of
+    /// leaving the Scene showing its last frame.
+    ///
+    /// Switchable while it plays, and switching it off does not rewind: the
+    /// lap that is running plays out and then stops. See
+    /// `media_pp::elements::FileDemuxerHandle`.
+    pub looping: bool,
+    /// The video's pixel size as the file reported it when it was picked, or
+    /// `None` when it could not be read.
+    ///
+    /// A hint, and a stronger one than a display's: a file's frames do not
+    /// change size between runs. It is still not resolved against — a file
+    /// can be replaced on disk — so it only decides what shape a new
+    /// SceneItem starts at.
+    pub size_hint: Option<[u32; 2]>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
     Drawing(DrawingSourceSettings),
     DisplayCapture(DisplayCaptureSettings),
     WindowCapture(WindowCaptureSettings),
+    MediaFile(MediaFileSettings),
     None,
 }
 
@@ -199,6 +232,11 @@ impl SourceSettings {
                     [width as f32, height as f32]
                 }),
             Self::WindowCapture(settings) => settings
+                .size_hint
+                .map_or([canvas.width, canvas.height], |[width, height]| {
+                    [width as f32, height as f32]
+                }),
+            Self::MediaFile(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {
                     [width as f32, height as f32]

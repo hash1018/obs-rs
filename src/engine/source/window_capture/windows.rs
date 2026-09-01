@@ -61,6 +61,7 @@ pub(in crate::engine) fn open(
     pipeline.run()?;
 
     Ok(Some(OpenSource {
+        media_file: None,
         source: RunningSource::Owned(pipeline),
         layer,
         name,

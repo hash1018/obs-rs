@@ -1,6 +1,6 @@
 use crate::domain::{
-    AudioSourceId, DisplayCaptureSettings, SceneId, SceneItemId, Stroke, Transform,
-    WindowCaptureSettings,
+    AudioSourceId, DisplayCaptureSettings, MediaFileSettings, SceneId, SceneItemId, Stroke,
+    Transform, WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,6 +41,10 @@ pub enum SourceCommand {
         scene_id: SceneId,
         settings: WindowCaptureSettings,
     },
+    AddMediaFile {
+        scene_id: SceneId,
+        settings: MediaFileSettings,
+    },
     Delete(SceneItemId),
     MoveUp(SceneItemId),
     MoveDown(SceneItemId),
@@ -66,6 +70,12 @@ pub enum SourceCommand {
     /// Repaints a Color Source. Sent when the picker is let go, not while it
     /// is being dragged — see `UiAction::DragSourceColour`.
     SetColor(SceneItemId, [u8; 4]),
+    /// Whether a media file Source starts again when it reaches its end.
+    ///
+    /// Takes effect where it is: the running Source is told through its own
+    /// handle rather than reopened, so switching this does not restart what
+    /// is playing.
+    SetMediaLooping(SceneItemId, bool),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

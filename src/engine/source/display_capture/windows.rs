@@ -232,6 +232,7 @@ pub(in crate::engine) fn open(
     let branch = captures.attach(monitor, device, fps, sink)?;
 
     Ok(OpenSource {
+        media_file: None,
         source: RunningSource::Shared {
             captures: Arc::clone(captures),
             monitor: monitor.clone(),

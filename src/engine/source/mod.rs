@@ -13,6 +13,7 @@
 pub(in crate::engine) mod color;
 pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
+pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod window_capture;
 
 use crate::snapshots::SceneItemSnapshot;
@@ -61,6 +62,19 @@ pub(in crate::engine) struct OpenSource {
     pub(in crate::engine) showing: bool,
     /// Set for a Source this side pushes frames into — see [`PushedSurface`].
     pub(in crate::engine) pushed: Option<PushedSurface>,
+    /// Set for a media file Source — see [`MediaFile`].
+    pub(in crate::engine) media_file: Option<MediaFile>,
+}
+
+/// The part of a media file Source that can be changed while it plays.
+///
+/// One switch so far, and it is the reason this exists at all: turning
+/// looping on or off must not restart what is playing, so it is a handle call
+/// rather than a reopen. Everything else about a media file — which file,
+/// where it sits — is either fixed for the life of the Source or belongs to
+/// the SceneItem rather than to it.
+pub(in crate::engine) struct MediaFile {
+    pub(in crate::engine) looping: media_pp::elements::FileDemuxerHandle,
 }
 
 /// The name a SceneItem's compositor input is registered under.
@@ -81,6 +95,21 @@ pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendEr
 /// pass, which is every Scene change, so the comparison inside is what keeps a
 /// move or a rename from costing a redraw and a re-upload of something nobody
 /// touched.
+/// Tells a running media file Source what its settings now say.
+///
+/// No comparison against what was last set, unlike [`refresh_pushed`]: what
+/// that guards is a redraw and a re-upload, and this is a single atomic
+/// store. There is nothing here that would be cheaper to skip than to do.
+pub(in crate::engine) fn refresh_media_file(source: &OpenSource, item: &SceneItemSnapshot) {
+    use crate::domain::SourceSettings;
+
+    if let Some(media) = &source.media_file
+        && let SourceSettings::MediaFile(settings) = &item.settings
+    {
+        media.looping.set_looping(settings.looping);
+    }
+}
+
 pub(in crate::engine) fn refresh_pushed(source: &mut OpenSource, item: &SceneItemSnapshot) {
     use crate::domain::SourceSettings;
 

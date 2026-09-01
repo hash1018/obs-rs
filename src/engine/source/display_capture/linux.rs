@@ -102,6 +102,7 @@ pub(in crate::engine) fn open(
 
     Ok((
         OpenSource {
+            media_file: None,
             source: RunningSource(pipeline),
             layer,
             name,

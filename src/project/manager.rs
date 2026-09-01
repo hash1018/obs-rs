@@ -172,6 +172,13 @@ fn handle_source_command(
             SourceStore::add_window_capture(transaction, scene_id, &settings)?;
             Ok(())
         }
+        SourceCommand::AddMediaFile { scene_id, settings } => {
+            SourceStore::add_media_file(transaction, scene_id, &settings)?;
+            Ok(())
+        }
+        SourceCommand::SetMediaLooping(scene_item_id, looping) => {
+            SourceStore::set_media_looping(transaction, scene_item_id, looping)
+        }
         SourceCommand::Delete(scene_item_id) => {
             SourceStore::delete_scene_item(transaction, scene_item_id)
         }
@@ -669,6 +676,128 @@ mod tests {
                         title: "Untitled - Notepad".into(),
                     }
                     && settings.size_hint == Some([1280, 720])
+        ));
+    }
+
+    #[test]
+    fn media_file_source_is_named_after_its_file_and_keeps_the_path() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        let path = std::path::PathBuf::from("/media/holiday clip.mp4");
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddMediaFile {
+                scene_id,
+                settings: crate::domain::MediaFileSettings {
+                    path: path.clone(),
+                    looping: false,
+                    size_hint: Some([1280, 720]),
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items.len(), 1);
+        // The file's own name rather than "Media Source": what someone
+        // reading the Sources list is looking for is which file this is.
+        assert_eq!(sources.items[0].name, "holiday clip");
+        assert_eq!(sources.items[0].source_size, [1280.0, 720.0]);
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings)
+                if settings.path == path
+                    && !settings.looping
+                    && settings.size_hint == Some([1280, 720])
+        ));
+    }
+
+    /// Two files can share a name and live in different folders, which is
+    /// exactly when naming a Source after its file needs the same
+    /// disambiguation every other kind gets.
+    #[test]
+    fn two_media_files_with_one_name_are_still_two_sources() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        for folder in ["/a", "/b"] {
+            handle_source_command(
+                &mut database,
+                SourceCommand::AddMediaFile {
+                    scene_id,
+                    settings: crate::domain::MediaFileSettings {
+                        path: std::path::PathBuf::from(format!("{folder}/clip.mp4")),
+                        looping: false,
+                        size_hint: None,
+                    },
+                },
+            )
+            .unwrap();
+        }
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let mut names: Vec<&str> = sources
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["clip", "clip 2"]);
+        // No size to start at, so both stand in at Canvas size the way every
+        // other Source with no hint does.
+        assert_eq!(sources.items[0].source_size, [1920.0, 1080.0]);
+    }
+
+    #[test]
+    fn media_file_looping_is_off_until_it_is_switched_on() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddMediaFile {
+                scene_id,
+                settings: crate::domain::MediaFileSettings {
+                    path: std::path::PathBuf::from("/media/clip.mp4"),
+                    looping: false,
+                    size_hint: None,
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+
+        handle_source_command(&mut database, SourceCommand::SetMediaLooping(item_id, true))
+            .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings) if settings.looping
+        ));
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetMediaLooping(item_id, false),
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings) if !settings.looping
         ));
     }
 

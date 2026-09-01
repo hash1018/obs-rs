@@ -185,6 +185,7 @@ fn opened(
     strokes: Vec<Stroke>,
 ) -> OpenSource {
     OpenSource {
+        media_file: None,
         source,
         layer,
         name,

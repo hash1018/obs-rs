@@ -69,6 +69,27 @@ While a Source is moved or resized, the layer follows the pointer directly and t
 
 Window Capture is composited on Windows and written for Linux, where it narrows the same portal source to windows rather than monitors. It is the one source whose target is expected to come and go — see "A window that is not there" below.
 
+## Media File
+
+The one source that is not a capture, and the only one with sound of its own. It is one pipeline with two branches off one demuxer:
+
+```text
+FileDemuxer ┬ video ─ hardware decoder ─ Queue ─ Pacer ─ compositor input
+            └ audio ─ SwDecoder        ─ Queue ─ Pacer ─ mixer input
+```
+
+Both `Pacer`s wait against the *same* clock, the pipeline's own, which is what keeps the picture and the sound together: each branch is released at its own media timestamp measured from one shared origin. Two pipelines would each anchor a t=0 at whenever they happened to start, which is A/V drift built in.
+
+Video decodes on the GPU straight into the surfaces the compositor draws from. Both compositors take NV12 device frames directly, so nothing converts between the decoder and the layer and the picture never reaches system memory. Audio has no such path and does not want one — it is decoded in software and registered with the mixer as one more input, alongside the desktop and microphone channels. That is where its sound goes and therefore where a recording picks it up; the mixer is not monitored, so nothing plays it to a speaker, the same as every other channel.
+
+The audio is not in the Audio Mixer dock. That dock is drawn from the project's audio sources, which are global by design — a microphone belongs to the person broadcasting, not to a Scene — and a media file's audio belongs to a SceneItem. Giving it a fader means widening what the dock is drawn from, which is a modelling decision rather than a wiring one.
+
+A file that is not looping plays once, sends EOS, and its layer ends with it. Nothing reopens it: `notice_closed_windows` asks only about Window Captures, deliberately. Looping is what makes it not finish, and it is switched through `media-pp`'s `FileDemuxerHandle` rather than by reopening — so turning it on or off does not restart what is playing, and turning it off part way through lets the current pass reach the end of the file. Timestamps climb across a loop's join rather than restarting at zero, which is what keeps the `Pacer` pacing the second pass instead of dumping it as fast as it can be read.
+
+A path that is not there right now — a moved file, an unmounted drive — is the same kind of state a closed window is: the Source is left `Missing` and looked for again on the idle tick, rather than failed. A file that *is* there and will not demux is a real failure.
+
+A file with no video stream is refused. This is a Scene Source and occupies a rectangle on the Canvas, so there is nothing for a sound-only file to be.
+
 A Display Capture source stores one of two targets, and neither platform can produce the other:
 
 | Platform | Stored target | Reproduced by |
@@ -199,11 +220,11 @@ Global hotkeys — keys that work while another application has focus — are a 
 
 ## The Properties dock
 
-What the selected SceneItem is, as it currently stands: name and kind, its place and size on the Canvas, whether it is visible and locked, and then whatever its kind has to say — the monitor and its rectangle in the virtual desktop, a window's program and title, a Drawing's stroke count, a Color's colour.
+What the selected SceneItem is, as it currently stands: name and kind, its place and size on the Canvas, whether it is visible and locked, and then whatever its kind has to say — the monitor and its rectangle in the virtual desktop, a window's program and title, a Drawing's stroke count, a Color's colour, a media file's path and whether it loops.
 
 It is a dock and not a dialog because the values move while they are read: dragging in the Preview changes the numbers here, and a dialog would have to be reopened to see it while covering the picture the numbers are about.
 
-Almost all of it reports rather than asks. Everything shown is already settable somewhere — a Transform by dragging, visibility and lock by the Sources dock's icons — and this says what those came out as, in numbers a drag cannot be precise about. The one exception is a Color's colour, which follows the same two-part shape a drag does: `UiAction::DragSourceColour` goes straight to the engine so the layer changes under the pointer, and one `SourceCommand::SetColor` is recorded when the picker is let go. A live gesture is one edit in the project, not sixty.
+Almost all of it reports rather than asks. Everything shown is already settable somewhere — a Transform by dragging, visibility and lock by the Sources dock's icons — and this says what those came out as, in numbers a drag cannot be precise about. Two things ask. A Color's colour follows the same two-part shape a drag does: `UiAction::DragSourceColour` goes straight to the engine so the layer changes under the pointer, and one `SourceCommand::SetColor` is recorded when the picker is let go. A live gesture is one edit in the project, not sixty. A media file's loop switch needs no such split — a checkbox has no gesture to wait out — so it is written the moment it is clicked, and the engine applies it through the demuxer's own handle rather than by reopening the Source.
 
 Crop is deliberately absent. `SceneItemSnapshot` carries one and the editor's geometry honours it, but nothing in either backend does, so a crop reported here would describe something the recording does not do.
 

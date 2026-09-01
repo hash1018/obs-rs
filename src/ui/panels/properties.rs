@@ -194,8 +194,44 @@ fn show_settings(
                 .as_ref(),
             ),
         },
+        SourceSettings::MediaFile(settings) => {
+            // The whole path, not the file name: two files with the same name
+            // in different folders are exactly the case where a reader needs
+            // to know which one this is. `row` elides and puts the full text
+            // on hover, which is what makes a long path survivable in a dock.
+            row(
+                ui,
+                i18n.text(TextKey::PropertiesFile).as_ref(),
+                &settings.path.display().to_string(),
+            );
+            show_looping(ui, item.id, settings.looping, i18n, actions);
+        }
         SourceSettings::None => {}
     }
+}
+
+/// Whether the file starts again at its end.
+///
+/// Written to the project the moment it is clicked, unlike the colour picker
+/// above: a checkbox has no gesture to wait out, and the engine applies it
+/// through the demuxer's own handle rather than by reopening — so what is
+/// playing does not restart, and switching it off part way through lets the
+/// lap that is running play out.
+fn show_looping(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: bool,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.label(i18n.text(TextKey::PropertiesLoop));
+    let mut looping = stored;
+    if ui.checkbox(&mut looping, "").changed() {
+        actions.push(UiAction::Project(ProjectCommand::Source(
+            SourceCommand::SetMediaLooping(item, looping),
+        )));
+    }
+    ui.end_row();
 }
 
 /// The one thing here that is not read-only.
@@ -331,6 +367,7 @@ fn kind_key(kind: SourceKind) -> TextKey {
         SourceKind::WindowCapture => TextKey::SourceKindWindowCapture,
         SourceKind::VideoCapture => TextKey::SourceKindVideoCapture,
         SourceKind::Image => TextKey::SourceKindImage,
+        SourceKind::MediaFile => TextKey::SourceKindMediaFile,
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
     }
