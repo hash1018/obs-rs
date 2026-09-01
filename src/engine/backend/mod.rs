@@ -156,6 +156,13 @@ mod tests {
     /// the whole arrangement, on whichever platform it appears, and a
     /// compile error here is a far better way to learn that than a mystery
     /// where the engine still blocks.
+    ///
+    /// What it does not prove is that the objects behind it are safe to use
+    /// from two threads at once: `windows` marks every COM interface `Send`
+    /// and `Sync` whether or not the thing it points at is free-threaded.
+    /// What makes this arrangement sound is separate and older — the
+    /// compositor has always drawn on its own pipeline thread, so opening a
+    /// Source elsewhere adds no sharing that was not already there.
     #[test]
     fn the_backend_can_be_used_from_the_thread_that_opens_sources() {
         assert_send_sync::<Backend>();

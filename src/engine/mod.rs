@@ -734,8 +734,7 @@ fn run(
 /// otherwise put two pickers on the screen together.
 struct SourceOpener {
     requests: mpsc::Sender<OpenRequest>,
-    /// Joined on drop, so the engine does not return while a source is still
-    /// being opened against a backend that is about to stop.
+    /// Not joined on drop — see [`SourceOpener::drop`].
     worker: Option<JoinHandle<()>>,
 }
 
@@ -804,14 +803,21 @@ impl SourceOpener {
 }
 
 impl Drop for SourceOpener {
+    /// Closes the request channel and leaves the thread to finish on its
+    /// own.
+    ///
+    /// Deliberately not joined. What the thread may be inside is unbounded —
+    /// a portal picker waits for a user who may never answer — and waiting
+    /// for that is the application refusing to quit until they do. Nothing
+    /// needs the wait: the thread owns its `Arc<Backend>`, so what it is
+    /// opening against cannot be freed under it, and a reply it cannot
+    /// deliver is stopped where it lands rather than left running.
     fn drop(&mut self) {
         // Dropped first, or the worker would wait on a channel nothing is
         // going to send down again.
         let (dead, _) = mpsc::channel();
         let _ = std::mem::replace(&mut self.requests, dead);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        drop(self.worker.take());
     }
 }
 
