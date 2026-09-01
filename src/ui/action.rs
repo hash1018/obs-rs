@@ -30,6 +30,13 @@ pub enum UiAction {
     /// the engine rather than the audio graph: a file's fader lives in its
     /// own pipeline, which the video engine owns.
     DragMediaGain(SceneItemId, f32),
+    /// Move one media file Source to a position in its own file.
+    ///
+    /// Straight to the engine and not to the project: where a clip is playing
+    /// from is not something to record, the way a Transform is. Sent when the
+    /// scrub bar is let go rather than while it is dragged — a seek is a
+    /// flush and a preroll, not something to do sixty times a second.
+    SeekMediaFile(SceneItemId, std::time::Duration),
     SetFullscreen(bool),
     SetTheme(crate::settings::Theme),
     SetLocale(Locale),

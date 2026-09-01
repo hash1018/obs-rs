@@ -112,6 +112,12 @@ pub struct SceneItemSnapshot {
     /// from the project — it is a measurement, not something stored — which
     /// is why it is on the snapshot rather than in `settings`.
     pub peak_db: Option<f32>,
+    /// Where a media file Source has reached in its own file.
+    ///
+    /// `None` for every other kind, and for one that has not produced a frame
+    /// yet. Filled from the engine like `peak_db` and for the same reason: it
+    /// is a measurement, not something the project stores.
+    pub position: Option<std::time::Duration>,
 }
 
 #[cfg(test)]
@@ -130,6 +136,8 @@ mod tests {
             crop,
 
             peak_db: None,
+
+            position: None,
             visible: true,
             locked: false,
         }

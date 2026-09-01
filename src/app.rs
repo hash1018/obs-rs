@@ -401,6 +401,7 @@ impl ObsApp {
         };
         for item in &mut self.snapshots.sources.items {
             item.peak_db = engine.media_peak_db(item.id);
+            item.position = engine.media_position(item.id);
         }
     }
 
@@ -496,6 +497,11 @@ impl ObsApp {
             UiAction::DragSourceColour(item_id, rgba) => {
                 if let Some(engine) = &self.engine {
                     engine.set_source_colour(item_id, rgba);
+                }
+            }
+            UiAction::SeekMediaFile(item_id, target) => {
+                if let Some(engine) = &self.engine {
+                    engine.seek_media_file(item_id, target);
                 }
             }
             UiAction::DragMediaGain(item_id, gain_db) => {

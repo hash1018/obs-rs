@@ -92,6 +92,12 @@ enum EngineCommand {
     /// counterpart of `Colour`, and on this thread rather than the audio one
     /// because a file's fader belongs to its own pipeline.
     MediaGain(SceneItemId, f32),
+    /// Move one media file Source to a position in its own file.
+    ///
+    /// Not a project edit: where a clip is playing from is not something to
+    /// record, the way a Transform or a colour is. Scrubbing it is closer to
+    /// looking at it than to changing it.
+    MediaSeek(SceneItemId, Duration),
     /// Whether anyone is looking at the Preview — a minimised window is
     /// nobody, and the frame then has nowhere worth going.
     PreviewVisible(bool),
@@ -190,17 +196,18 @@ struct Published {
     /// list says so beside them, which is the only thing that explains an
     /// item drawing nothing.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
-    /// What each playing media file's meter reads.
+    /// What each playing media file measures about itself: its level, and
+    /// where it has reached.
     ///
     /// The audio thread has its own `Levels` for the devices and replaces it
     /// wholesale whenever it rebuilds its graph. This is the second half, and
     /// it is published separately for exactly that reason: one side must not
     /// wipe the other's counters by getting on with its own work. The Audio
-    /// Mixer dock reads both and draws them as one row of channels.
+    /// Mixer dock reads both levels and draws them as one row of channels.
     ///
     /// The map changes only when a Source opens or closes; the numbers inside
     /// it change every buffer, which is what the atomics are for.
-    media_peaks: Arc<ArcSwapOption<HashMap<SceneItemId, Arc<AtomicU32>>>>,
+    media_meters: Arc<ArcSwapOption<HashMap<SceneItemId, Arc<source::MediaMeters>>>>,
     /// Which encoders the backend can open — see `EngineManager::encoders`.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     /// Which audio codecs this FFmpeg build can open — see
@@ -228,8 +235,8 @@ pub struct EngineManager {
     recording_error: Arc<ArcSwapOption<String>>,
     /// The SceneItems drawing nothing — see `Published::source_status`.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
-    /// Each playing media file's meter — see `Published::media_peaks`.
-    media_peaks: Arc<ArcSwapOption<HashMap<SceneItemId, Arc<AtomicU32>>>>,
+    /// What each playing media file measures — see `Published::media_meters`.
+    media_meters: Arc<ArcSwapOption<HashMap<SceneItemId, Arc<source::MediaMeters>>>>,
     /// Which H.264 encoders the backend can open. Published once, after the
     /// backend has been built — probing needs its device, and the answer
     /// cannot change while the application runs.
@@ -265,7 +272,7 @@ impl EngineManager {
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
         let source_status = Arc::new(ArcSwapOption::empty());
-        let media_peaks = Arc::new(ArcSwapOption::empty());
+        let media_meters = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
         let audio_codecs = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
@@ -277,7 +284,7 @@ impl EngineManager {
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
             let source_status = Arc::clone(&source_status);
-            let media_peaks = Arc::clone(&media_peaks);
+            let media_meters = Arc::clone(&media_meters);
             let encoders = Arc::clone(&encoders);
             let audio_codecs = Arc::clone(&audio_codecs);
             let stop = Arc::clone(&stop);
@@ -289,7 +296,7 @@ impl EngineManager {
                     recording_paused_at,
                     recording_error,
                     source_status,
-                    media_peaks,
+                    media_meters,
                     encoders,
                     audio_codecs,
                 };
@@ -320,7 +327,7 @@ impl EngineManager {
             recording_paused_at,
             recording_error,
             source_status,
-            media_peaks,
+            media_meters,
             encoders,
             audio_codecs,
             commands,
@@ -490,11 +497,38 @@ impl EngineManager {
     /// and one that blocks the graph to be current is not.
     pub fn media_peak_db(&self, item: SceneItemId) -> Option<f32> {
         let bits = self
-            .media_peaks
+            .media_meters
             .load_full()?
             .get(&item)?
+            .peak
             .load(Ordering::Relaxed);
         (bits != 0).then(|| f32::from_bits(bits))
+    }
+
+    /// Where this media file Source has reached in its file, or `None` for
+    /// one that is not open or has not produced a frame yet.
+    ///
+    /// A position in the file rather than on the wire: a looping Source's
+    /// timestamps climb past the end, and what is taken off them is the
+    /// demuxer's own account of how far they have been carried.
+    pub fn media_position(&self, item: SceneItemId) -> Option<Duration> {
+        let micros = self
+            .media_meters
+            .load_full()?
+            .get(&item)?
+            .position
+            .load(Ordering::Relaxed);
+        u64::try_from(micros).ok().map(Duration::from_micros)
+    }
+
+    /// Moves one media file Source to `target`, measured in its own file.
+    ///
+    /// Keyframe rather than accurate: this is a scrub bar, where landing
+    /// promptly on roughly the right picture is the point and decoding
+    /// forward to an exact frame is not. A Source that is not a media file,
+    /// or is not open, is left alone.
+    pub fn seek_media_file(&self, item: SceneItemId, target: Duration) {
+        let _ = self.commands.send(EngineCommand::MediaSeek(item, target));
     }
 
     /// One media file Source's gain while the fader is still held, for the
@@ -645,7 +679,7 @@ fn run(
         // UI already holds, not something to do sixty times a second for an
         // answer that has not moved.
         publish_source_status(&published, &open);
-        publish_media_peaks(&published, &open);
+        publish_media_meters(&published, &open);
     }
 
     for (_, state) in open.drain() {
@@ -706,6 +740,20 @@ fn apply_command(
         EngineCommand::MediaGain(item_id, gain_db) => {
             if let Some(SourceState::Open(source)) = open.get(&item_id) {
                 source::set_media_gain_db(source, gain_db);
+            }
+            false
+        }
+        EngineCommand::MediaSeek(item_id, target) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id)
+                && let Some(media) = &source.media_file
+                && let Err(error) = media
+                    .pipeline
+                    .seek(target, media_pp::pipeline::SeekMode::Keyframe)
+            {
+                // Reported and dropped: a refused seek leaves playback where
+                // it was, which is a scrub that did nothing rather than a
+                // Source that has gone wrong.
+                eprintln!("could not seek \"{}\": {error}", source.name);
             }
             false
         }
@@ -1051,40 +1099,43 @@ fn publish_source_status(published: &Published, open: &HashMap<SceneItemId, Sour
     published.source_status.store(Some(Arc::new(status)));
 }
 
-/// Hands the UI the counter each playing media file's meter is written to.
+/// Hands the UI the counters each playing media file writes to.
 ///
 /// Published beside the status map and on the same occasions, because it
 /// moves for the same reasons: a Source opening or closing is the only thing
-/// that adds or removes a counter. What is inside one changes every buffer
-/// and is never republished — that is the whole point of an atomic here.
+/// that adds or removes a set of counters. What is inside one changes every
+/// buffer and is never republished — that is the whole point of an atomic
+/// here.
 ///
 /// Compared by pointer rather than by key, because a Source that closed and
-/// opened again keeps its SceneItem's id but gets a new counter. Matching on
-/// ids alone would leave the dock reading the dead one, and its meter would
+/// opened again keeps its SceneItem's id but gets new counters. Matching on
+/// ids alone would leave the dock reading the dead ones, and its meter would
 /// sit at whatever the previous Source last measured.
-fn publish_media_peaks(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
-    let peaks: HashMap<SceneItemId, Arc<AtomicU32>> = open
+fn publish_media_meters(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
+    let meters: HashMap<SceneItemId, Arc<source::MediaMeters>> = open
         .iter()
         .filter_map(|(id, state)| {
             let SourceState::Open(source) = state else {
                 return None;
             };
-            Some((*id, Arc::clone(source.media_file.as_ref()?.peak.as_ref()?)))
+            Some((*id, Arc::clone(&source.media_file.as_ref()?.meters)))
         })
         .collect();
-    let unchanged = match published.media_peaks.load_full() {
+    let unchanged = match published.media_meters.load_full() {
         Some(current) => {
-            current.len() == peaks.len()
-                && peaks
-                    .iter()
-                    .all(|(id, peak)| current.get(id).is_some_and(|held| Arc::ptr_eq(held, peak)))
+            current.len() == meters.len()
+                && meters.iter().all(|(id, held)| {
+                    current
+                        .get(id)
+                        .is_some_and(|current| Arc::ptr_eq(current, held))
+                })
         }
-        None => peaks.is_empty(),
+        None => meters.is_empty(),
     };
     if unchanged {
         return;
     }
-    published.media_peaks.store(Some(Arc::new(peaks)));
+    published.media_meters.store(Some(Arc::new(meters)));
 }
 
 /// Whether opening this item's Source would interrupt whoever is at the
@@ -1235,17 +1286,27 @@ fn reconcile(
         let SourceState::Open(source) = state else {
             continue;
         };
-        let showing = snapshot.items.iter().any(|item| item.id == *id);
-        if showing == source.showing {
-            continue;
+        let item = snapshot.items.iter().find(|item| item.id == *id);
+        let showing = item.is_some();
+        // Two questions now, where there used to be one. Leaving the Scene
+        // still stops a Source, but a media file can also be paused while its
+        // item is right there — so what should be running is both together,
+        // and what should be hidden is the Scene alone.
+        let running = item.is_some_and(|item| !source::paused(item, showing));
+        if running != source.running {
+            if running {
+                source.source.resume();
+            } else {
+                source.source.pause();
+            }
+            source.running = running;
         }
-        if showing {
-            source.source.resume();
-        } else {
-            source.source.pause();
-            let _ = source.layer.set_visible(false);
+        if showing != source.showing {
+            if !showing {
+                let _ = source.layer.set_visible(false);
+            }
+            source.showing = showing;
         }
-        source.showing = showing;
     }
 
     // Only an item the project no longer holds anywhere is closed for good.
@@ -1388,6 +1449,7 @@ mod tests {
     fn window_item(id: i64, target: WindowCaptureTarget) -> SceneItemSnapshot {
         SceneItemSnapshot {
             peak_db: None,
+            position: None,
             id: SceneItemId(id),
             name: "Window Capture".into(),
             kind: SourceKind::WindowCapture,
@@ -1410,7 +1472,7 @@ mod tests {
             recording_since: Arc::new(ArcSwapOption::empty()),
             recording_paused_at: Arc::new(ArcSwapOption::empty()),
             source_status: Arc::new(ArcSwapOption::empty()),
-            media_peaks: Arc::new(ArcSwapOption::empty()),
+            media_meters: Arc::new(ArcSwapOption::empty()),
             encoders: Arc::new(ArcSwapOption::empty()),
             audio_codecs: Arc::new(ArcSwapOption::empty()),
             recording_error: Arc::new(ArcSwapOption::empty()),

@@ -205,6 +205,7 @@ fn show_settings(
                 &settings.path.display().to_string(),
             );
             show_looping(ui, item.id, settings.looping, i18n, actions);
+            show_playback(ui, item, settings, i18n, actions);
         }
         SourceSettings::Image(settings) => row(
             ui,
@@ -213,6 +214,86 @@ fn show_settings(
         ),
         SourceSettings::None => {}
     }
+}
+
+/// Where the file has reached, and the two things that can be done about it.
+///
+/// The bar is not written to the project. Where a clip is playing from is not
+/// something to record the way a Transform is, so it goes straight to the
+/// engine — and only when the drag ends, because a seek is a flush and a
+/// preroll rather than something to do on every frame of a gesture. While the
+/// pointer is down the dragged value is kept in egui's own memory, or the bar
+/// would snap back to the playing position under the hand holding it.
+///
+/// A file that would not say how long it is gets the readout without the bar:
+/// there is no scale to draw one against, and a bar with no end is a control
+/// that cannot say where it would take you.
+fn show_playback(
+    ui: &mut egui::Ui,
+    item: &SceneItemSnapshot,
+    settings: &crate::domain::MediaFileSettings,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let position = item.position.unwrap_or_default();
+    ui.label(i18n.text(TextKey::PropertiesPlayback));
+    ui.horizontal(|ui| {
+        let (glyph, hover) = if settings.paused {
+            ("▶", TextKey::PropertiesPlay)
+        } else {
+            ("⏸", TextKey::PropertiesPause)
+        };
+        if ui.button(glyph).on_hover_text(i18n.text(hover)).clicked() {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::SetMediaPaused(item.id, !settings.paused),
+            )));
+        }
+        match settings.duration {
+            Some(duration) => {
+                ui.monospace(format!("{} / {}", clock(position), clock(duration)));
+                show_scrub(ui, item.id, position, duration, actions);
+            }
+            None => {
+                ui.monospace(clock(position));
+            }
+        }
+    });
+    ui.end_row();
+}
+
+/// The bar itself.
+fn show_scrub(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    position: std::time::Duration,
+    duration: std::time::Duration,
+    actions: &mut Vec<UiAction>,
+) {
+    let key = egui::Id::new(("media-scrub", item));
+    let held: Option<f32> = ui.data(|data| data.get_temp(key));
+    let mut seconds = held.unwrap_or(position.as_secs_f32());
+    // Whatever is left of the row, so the bar grows with the dock instead of
+    // staying at egui's default while the readout beside it does not move.
+    ui.spacing_mut().slider_width = (ui.available_width() - FIELD_MARGIN).max(40.0);
+    let bar = ui.add(
+        egui::Slider::new(&mut seconds, 0.0..=duration.as_secs_f32().max(0.001)).show_value(false),
+    );
+    if bar.dragged() {
+        ui.data_mut(|data| data.insert_temp(key, seconds));
+    }
+    if bar.drag_stopped() || (bar.changed() && !bar.dragged()) {
+        ui.data_mut(|data| data.remove_temp::<f32>(key));
+        actions.push(UiAction::SeekMediaFile(
+            item,
+            std::time::Duration::from_secs_f32(seconds.max(0.0)),
+        ));
+    }
+}
+
+/// A duration as a clock reads it, which is what a scrub bar is labelled in.
+fn clock(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
 /// Whether the file starts again at its end.

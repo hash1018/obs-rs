@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use super::SceneCanvas;
 
@@ -212,6 +213,22 @@ pub struct MediaFileSettings {
     /// Gain in decibels, where `0.0` is unchanged, matching every other
     /// fader in this application. See [`crate::domain::MIN_GAIN_DB`].
     pub gain_db: f32,
+    /// How long the file is, as it reported when it was picked.
+    ///
+    /// What a progress bar is drawn against, so it is stored rather than
+    /// asked of the running Source: the bar has to have a length before
+    /// anything is open, and a Scene the user is not looking at has nothing
+    /// running at all. `None` for a file that would not say — a bar then has
+    /// no scale and shows the position alone.
+    pub duration: Option<Duration>,
+    /// Whether playback is stopped where it is.
+    ///
+    /// Stored, so it survives the Scene changing under it and the
+    /// application being restarted — a paused clip that started itself again
+    /// on the next launch would be a surprise. Hiding the SceneItem also
+    /// stops it, and that is not recorded here for the same reason muting
+    /// is not: one state with two effects rather than two to keep in step.
+    pub paused: bool,
     /// Whether this file's sound is muted.
     ///
     /// Only what the mute button set. Hiding the SceneItem also silences it,

@@ -189,6 +189,9 @@ fn handle_source_command(
         SourceCommand::SetMediaMuted(scene_item_id, muted) => {
             SourceStore::set_media_muted(transaction, scene_item_id, muted)
         }
+        SourceCommand::SetMediaPaused(scene_item_id, paused) => {
+            SourceStore::set_media_paused(transaction, scene_item_id, paused)
+        }
         SourceCommand::Delete(scene_item_id) => {
             SourceStore::delete_scene_item(transaction, scene_item_id)
         }
@@ -299,6 +302,7 @@ fn sources_snapshot(
                 crop,
                 // Filled in later, from the engine — see `ObsApp::poll_media_levels`.
                 peak_db: None,
+                position: None,
             }
         })
         .collect();
@@ -744,6 +748,8 @@ mod tests {
                     has_audio: true,
                     gain_db: 0.0,
                     muted: false,
+                    duration: None,
+                    paused: false,
                 },
             },
         )
@@ -787,6 +793,8 @@ mod tests {
                         has_audio: false,
                         gain_db: 0.0,
                         muted: false,
+                        duration: None,
+                        paused: false,
                     },
                 },
             )
@@ -828,6 +836,8 @@ mod tests {
                     has_audio: true,
                     gain_db: 0.0,
                     muted: false,
+                    duration: None,
+                    paused: false,
                 },
             },
         )
@@ -874,6 +884,8 @@ mod tests {
                     has_audio: true,
                     gain_db: 0.0,
                     muted: false,
+                    duration: None,
+                    paused: false,
                 },
             },
         )
@@ -898,6 +910,56 @@ mod tests {
         ));
     }
 
+    /// The two things a paused clip has to survive: the Scene changing under
+    /// it, and the application being restarted. Both are the same test from
+    /// the project's side — it either wrote the flag down or it did not.
+    #[test]
+    fn media_file_pause_and_length_are_written_down() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddMediaFile {
+                scene_id,
+                settings: crate::domain::MediaFileSettings {
+                    path: std::path::PathBuf::from("/media/clip.mp4"),
+                    looping: false,
+                    size_hint: None,
+                    has_audio: false,
+                    gain_db: 0.0,
+                    muted: false,
+                    duration: Some(std::time::Duration::from_millis(40_037)),
+                    paused: false,
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings)
+                if settings.duration == Some(std::time::Duration::from_millis(40_037))
+                    && !settings.paused
+        ));
+        // A measurement, not something the project holds — it is filled from
+        // the engine on every pass and is absent until one runs.
+        assert_eq!(sources.items[0].position, None);
+
+        handle_source_command(&mut database, SourceCommand::SetMediaPaused(item_id, true)).unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings) if settings.paused
+        ));
+    }
+
     #[test]
     fn media_file_looping_is_off_until_it_is_switched_on() {
         let mut database = ProjectDatabase::open_in_memory().unwrap();
@@ -917,6 +979,8 @@ mod tests {
                     has_audio: true,
                     gain_db: 0.0,
                     muted: false,
+                    duration: None,
+                    paused: false,
                 },
             },
         )

@@ -112,7 +112,11 @@ fn channels<'a>(
             name: &item.name,
             gain_db: settings.gain_db,
             muted: settings.muted,
-            peak_db: item.peak_db,
+            // A paused file is making no sound. The peak is the last reading
+            // rather than a decaying one, so left alone the meter would sit
+            // at whatever was playing when the pause landed and say the clip
+            // was still going.
+            peak_db: item.peak_db.filter(|_| !settings.paused),
             device: None,
         })
     }));

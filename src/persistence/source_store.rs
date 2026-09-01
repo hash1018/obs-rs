@@ -103,6 +103,8 @@ impl SourceStore {
                 media_file_settings.has_audio,
                 media_file_settings.gain_db,
                 media_file_settings.muted,
+                media_file_settings.duration_us,
+                media_file_settings.paused,
                 image_source_settings.path,
                 image_source_settings.width,
                 image_source_settings.height
@@ -202,10 +204,15 @@ impl SourceStore {
                         has_audio: row.get(41)?,
                         gain_db: row.get(42)?,
                         muted: row.get(43)?,
+                        duration: row
+                            .get::<_, Option<i64>>(44)?
+                            .and_then(|micros| u64::try_from(micros).ok())
+                            .map(std::time::Duration::from_micros),
+                        paused: row.get(45)?,
                     }),
                     SourceKind::Image => SourceSettings::Image(ImageSourceSettings {
-                        path: PathBuf::from(row.get::<_, String>(44)?),
-                        size_hint: match (row.get(45)?, row.get(46)?) {
+                        path: PathBuf::from(row.get::<_, String>(46)?),
+                        size_hint: match (row.get(47)?, row.get(48)?) {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
@@ -502,8 +509,9 @@ impl SourceStore {
             .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
         transaction.execute(
             "INSERT INTO media_file_settings
-                (source_id, path, looping, width, height, has_audio, gain_db, muted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (source_id, path, looping, width, height, has_audio, gain_db, muted,
+                 duration_us, paused)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 source_id.0,
                 settings.path.to_string_lossy(),
@@ -512,7 +520,11 @@ impl SourceStore {
                 height,
                 settings.has_audio,
                 settings.gain_db,
-                settings.muted
+                settings.muted,
+                settings
+                    .duration
+                    .and_then(|duration| i64::try_from(duration.as_micros()).ok()),
+                settings.paused
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
@@ -559,6 +571,17 @@ impl SourceStore {
             "gain_db",
             gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB),
         )
+    }
+
+    /// Whether this media file Source is stopped where it is. Hiding the
+    /// SceneItem stops it too, and does not come through here — see
+    /// [`crate::domain::MediaFileSettings::paused`].
+    pub(crate) fn set_media_paused(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        paused: bool,
+    ) -> PersistenceResult<()> {
+        set_media_column(transaction, scene_item_id, "paused", paused)
     }
 
     /// This media file Source's own mute button. Hiding the SceneItem

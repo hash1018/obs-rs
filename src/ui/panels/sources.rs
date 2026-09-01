@@ -747,6 +747,8 @@ fn add_file(scene_id: SceneId, picked: PickedFile) -> SourceCommand {
                 has_audio: streams.has_audio,
                 gain_db: 0.0,
                 muted: false,
+                duration: streams.duration,
+                paused: false,
             },
         },
         PickedFile::Image { path, size } => SourceCommand::AddImage {
@@ -1161,6 +1163,7 @@ mod tests {
     fn item(id: i64, name: &str) -> SceneItemSnapshot {
         SceneItemSnapshot {
             peak_db: None,
+            position: None,
             id: SceneItemId(id),
             name: name.to_owned(),
             kind: SourceKind::Color,

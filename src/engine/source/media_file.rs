@@ -46,20 +46,20 @@
 //! [`super::refresh_media_file`].
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 
 use media_pp::element::Context;
 use media_pp::element::Sink;
 use media_pp::elements::{
-    AppSink, AudioVolume, AudioVolumeHandle, FileDemuxer, MixerHandle, Pacer, StreamInfo,
-    SwDecoder, TeeBuilder,
+    AppSink, AudioVolume, AudioVolumeHandle, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer,
+    StreamInfo, SwDecoder, TeeBuilder,
 };
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
 use crate::domain::MediaFileSettings;
 use crate::engine::backend::BackendError;
-use crate::engine::source::input_name;
+use crate::engine::source::{MediaMeters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// How much either branch may hold while the other is being read.
@@ -156,6 +156,35 @@ fn track(demuxer: &FileDemuxer, index: usize) -> Option<Track> {
     })
 }
 
+/// Starts the pipeline, and stops it again where the Source is stored paused.
+///
+/// A Source that is paused the moment it opens has produced nothing, and a
+/// compositor layer with no frame draws nothing at all — so a clip paused
+/// before the application closed would come back as an empty rectangle. The
+/// seek is what fixes that: it costs a flush and a preroll, and a preroll is
+/// exactly "put one frame through every terminal", after which the pipeline
+/// restores the state that was asked for. The picture appears and stays
+/// where it is.
+///
+/// To the start rather than to where it was: where a clip is playing from is
+/// not written down — see `SourceCommand::SetMediaPaused` for what is.
+fn start(pipeline: &Arc<Pipeline>, paused: bool) -> Result<(), BackendError> {
+    pipeline.run()?;
+    if paused {
+        pipeline.pause();
+        if let Err(error) = pipeline.seek(
+            std::time::Duration::ZERO,
+            media_pp::pipeline::SeekMode::Keyframe,
+        ) {
+            // Reported and carried on. What was lost is the first frame, so
+            // the layer stays empty until someone presses play — which is a
+            // Source that opened, not one that failed to.
+            eprintln!("could not show the first frame while paused: {error}");
+        }
+    }
+    Ok(())
+}
+
 /// What this Source registers its audio with the mixer as.
 ///
 /// Distinct from the compositor's input name even though the two registries
@@ -177,11 +206,40 @@ struct Audio {
     fader: AudioVolume,
     /// What the Audio Mixer dock moves, and what it reads.
     volume: AudioVolumeHandle,
-    peak: Arc<AtomicU32>,
     /// The mixer input this file's sound is summed into.
     mix: Box<dyn Sink>,
     /// The `AppSink` that measures the level.
     meter: Box<dyn Sink>,
+}
+
+/// The sink that records where playback has reached, and how it is wired.
+///
+/// On the *video* branch rather than the audio one, because every media file
+/// has a picture and only some have sound — and because what a progress bar
+/// means is where the picture is.
+///
+/// The loop's offset is taken off here rather than by the reader: the two are
+/// only comparable at the moment a frame is stamped, and doing it anywhere
+/// else would mean sampling them apart and subtracting numbers from different
+/// instants.
+fn position_sink(
+    name: &str,
+    time_base: ffmpeg::Rational,
+    looping: FileDemuxerHandle,
+    meters: Arc<MediaMeters>,
+) -> Box<dyn Sink> {
+    let micros = f64::from(time_base.numerator()) / f64::from(time_base.denominator()) * 1e6;
+    Box::new(AppSink::new(format!("{name}-position"), move |buffer| {
+        if let media_pp::buffer::MediaBuffer::Video(frame) = &buffer
+            && let Some(pts) = frame.pts()
+        {
+            let offset = looping.lap_offset().as_micros() as i64;
+            meters
+                .position
+                .store((pts as f64 * micros) as i64 - offset, Ordering::Relaxed);
+        }
+        Ok(())
+    }))
 }
 
 /// Builds it, or answers `None` for a file with no sound and for a machine
@@ -192,6 +250,7 @@ fn audio(
     mixer: Option<&MixerHandle>,
     settings: &MediaFileSettings,
     item: &SceneItemSnapshot,
+    meters: &Arc<MediaMeters>,
 ) -> Result<Option<Audio>, BackendError> {
     let (Some(track), Some(mixer)) = (track, mixer) else {
         return Ok(None);
@@ -205,12 +264,11 @@ fn audio(
     let _ = volume.set_gain_db(settings.gain_db);
     volume.set_muted(super::muted(settings.muted, item.visible));
 
-    let peak = Arc::new(AtomicU32::new(0));
     let meter = AppSink::new(format!("{name}-meter"), {
-        let peak = Arc::clone(&peak);
+        let meters = Arc::clone(meters);
         move |buffer| {
             if let media_pp::buffer::MediaBuffer::Audio(frame) = &buffer {
-                peak.store(
+                meters.peak.store(
                     crate::engine::audio::peak_db(frame).to_bits(),
                     Ordering::Relaxed,
                 );
@@ -228,7 +286,6 @@ fn audio(
         decoder,
         fader,
         volume,
-        peak,
         mix,
         meter: Box::new(meter),
     }))
@@ -242,6 +299,33 @@ fn audio(
 /// is a finished branch rather than a `Sink`: attaching it to the fader's pad
 /// on its own would link the same buffers but record the fan-out as the
 /// demuxer's.
+/// Attaches the video pad: decoded on the GPU, paced, then split between what
+/// draws it and what records where it has reached.
+fn attach_video(
+    context: &Arc<Context>,
+    source: &mut FileDemuxer,
+    index: usize,
+    time_base: ffmpeg::Rational,
+    decoder: impl media_pp::element::Filter + 'static,
+    sink: Box<dyn Sink>,
+    position: Box<dyn Sink>,
+) -> media_pp::error::Result<()> {
+    let draw = context.branch().to(sink)?;
+    let record = context.branch().to(position)?;
+    let tee = TeeBuilder::new("video-tee", context.clone())
+        .branch(draw)
+        .branch(record)
+        .build()?;
+    let paced = context
+        .branch()
+        .pipe(decoder)
+        .queue("video", QUEUE_DEPTH)
+        .pipe(Pacer::new("video-pacer", time_base, context.clock.clone())?)
+        .to_branch(tee)?;
+    context.attach(source, index, paced)?;
+    Ok(())
+}
+
 fn attach_audio(
     context: &Arc<Context>,
     source: &mut FileDemuxer,
@@ -303,9 +387,15 @@ pub(in crate::engine) fn open(
         device,
         HW_FRAME_BUDGET,
     )?;
-    let audio = audio(&name, chosen.audio, mixer, settings, item)?;
+    let meters = Arc::new(MediaMeters::default());
+    let audio = audio(&name, chosen.audio, mixer, settings, item, &meters)?;
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
-    let peak = audio.as_ref().map(|audio| Arc::clone(&audio.peak));
+    let position = position_sink(
+        &name,
+        chosen.video_time_base,
+        looping.clone(),
+        Arc::clone(&meters),
+    );
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -314,36 +404,36 @@ pub(in crate::engine) fn open(
     let video_time_base = chosen.video_time_base;
     let video_index = chosen.video;
     let pipeline = Pipeline::new(name.clone(), demuxer, move |source, context| {
-        let branch = context
-            .branch()
-            .pipe(video_decoder)
-            .queue("video", QUEUE_DEPTH)
-            .pipe(Pacer::new(
-                "video-pacer",
-                video_time_base,
-                context.clock.clone(),
-            )?)
-            .to(sink)?;
-        context.attach(source, video_index, branch)?;
+        attach_video(
+            context,
+            source,
+            video_index,
+            video_time_base,
+            video_decoder,
+            sink,
+            position,
+        )?;
 
         if let Some(audio) = audio {
             attach_audio(context, source, audio)?;
         }
         Ok(())
     })?;
-    pipeline.run()?;
+    start(&pipeline, settings.paused)?;
 
     Ok(Some(OpenSource {
-        source: RunningSource::Owned(pipeline),
+        source: RunningSource::Owned(Arc::clone(&pipeline)),
         layer,
         name,
         refreshed_token: None,
         showing: true,
+        running: !settings.paused,
         pushed: None,
         media_file: Some(MediaFile {
             looping,
             volume,
-            peak,
+            meters,
+            pipeline: Arc::clone(&pipeline),
         }),
     }))
 }
@@ -380,9 +470,15 @@ pub(in crate::engine) fn open(
         device,
         HW_FRAME_BUDGET,
     )?;
-    let audio = audio(&name, chosen.audio, mixer, settings, item)?;
+    let meters = Arc::new(MediaMeters::default());
+    let audio = audio(&name, chosen.audio, mixer, settings, item, &meters)?;
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
-    let peak = audio.as_ref().map(|audio| Arc::clone(&audio.peak));
+    let position = position_sink(
+        &name,
+        chosen.video_time_base,
+        looping.clone(),
+        Arc::clone(&meters),
+    );
 
     let CudaVideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -391,36 +487,36 @@ pub(in crate::engine) fn open(
     let video_time_base = chosen.video_time_base;
     let video_index = chosen.video;
     let pipeline = Pipeline::new(name.clone(), demuxer, move |source, context| {
-        let branch = context
-            .branch()
-            .pipe(video_decoder)
-            .queue("video", QUEUE_DEPTH)
-            .pipe(Pacer::new(
-                "video-pacer",
-                video_time_base,
-                context.clock.clone(),
-            )?)
-            .to(sink)?;
-        context.attach(source, video_index, branch)?;
+        attach_video(
+            context,
+            source,
+            video_index,
+            video_time_base,
+            video_decoder,
+            sink,
+            position,
+        )?;
 
         if let Some(audio) = audio {
             attach_audio(context, source, audio)?;
         }
         Ok(())
     })?;
-    pipeline.run()?;
+    start(&pipeline, settings.paused)?;
 
     Ok(Some(OpenSource {
-        source: RunningSource::Owned(pipeline),
+        source: RunningSource::Owned(Arc::clone(&pipeline)),
         layer,
         name,
         refreshed_token: None,
         showing: true,
+        running: !settings.paused,
         pushed: None,
         media_file: Some(MediaFile {
             looping,
             volume,
-            peak,
+            meters,
+            pipeline: Arc::clone(&pipeline),
         }),
     }))
 }

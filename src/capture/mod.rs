@@ -145,6 +145,8 @@ pub struct MediaFileStreams {
     /// The video stream's pixel size, or `None` when there is none to read.
     pub size: Option<[u32; 2]>,
     pub has_audio: bool,
+    /// How long the container says it is, or `None` when it does not say.
+    pub duration: Option<std::time::Duration>,
 }
 
 /// Reads what a picked file holds, so a new Source starts at its own shape
@@ -171,6 +173,13 @@ pub fn media_file_streams(path: &Path) -> MediaFileStreams {
     MediaFileStreams {
         size: video_size(&input),
         has_audio,
+        // `AV_NOPTS_VALUE` and anything else non-positive is a container that
+        // does not know, which is not an error — a stream saved to disk often
+        // does not.
+        duration: u64::try_from(input.duration())
+            .ok()
+            .filter(|micros| *micros > 0)
+            .map(std::time::Duration::from_micros),
     }
 }
 

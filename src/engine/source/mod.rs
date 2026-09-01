@@ -18,7 +18,7 @@ pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod window_capture;
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicI64, AtomicU32};
 
 use crate::snapshots::SceneItemSnapshot;
 
@@ -68,6 +68,10 @@ pub(in crate::engine) struct OpenSource {
     /// Scene stays open but stops running, so coming back is a resume rather
     /// than another portal round trip.
     pub(in crate::engine) showing: bool,
+    /// Whether the Source is running, which is no longer the same question.
+    /// A media file can be paused while its item is in the Scene, so what
+    /// decides this is [`paused`] rather than `showing` alone.
+    pub(in crate::engine) running: bool,
     /// Set for a Source this side pushes frames into — see [`PushedSurface`].
     pub(in crate::engine) pushed: Option<PushedSurface>,
     /// Set for a media file Source — see [`MediaFile`].
@@ -87,13 +91,35 @@ pub(in crate::engine) struct MediaFile {
     /// opened on a machine whose mixer never started, which is the same
     /// thing from here: there is nothing to turn down.
     pub(in crate::engine) volume: Option<media_pp::elements::AudioVolumeHandle>,
-    /// What its meter reads, written by whichever thread this Source's own
-    /// `Tee` pushes on and read by the UI thread — the same arrangement, and
-    /// the same reason for it, as `audio::Levels`.
-    ///
-    /// Present exactly when `volume` is: both come from the audio branch, and
-    /// a file with no sound has neither.
-    pub(in crate::engine) peak: Option<Arc<AtomicU32>>,
+    /// What the dock's meter and its progress bar read.
+    pub(in crate::engine) meters: Arc<MediaMeters>,
+    /// This Source's own pipeline, kept for the one thing `RunningSource`
+    /// cannot do: seek. Every other control it has goes through that, so
+    /// there is one path for pausing and one for repositioning rather than
+    /// two for either.
+    pub(in crate::engine) pipeline: Arc<media_pp::pipeline::Pipeline>,
+}
+
+/// What a running media file measures about itself, written by whichever
+/// thread its own branches push on and read by the UI thread.
+///
+/// Two numbers with one lifetime — both start when the Source opens and stop
+/// when it closes — so they are published as one thing rather than as two
+/// maps that would always have the same keys. Atomics rather than a lock for
+/// the same reason `audio::Levels` uses them: a reading one frame stale is a
+/// reading that is right a frame later, and nothing here is ordered against
+/// anything else.
+#[derive(Default)]
+pub(in crate::engine) struct MediaMeters {
+    /// The loudest sample since the last read, as `f32` bits. Zero until the
+    /// audio branch has measured one, which is also what a file with no
+    /// sound looks like.
+    pub(in crate::engine) peak: AtomicU32,
+    /// Where playback is *in the file*, in microseconds — the frame's own
+    /// timestamp with the loop's accumulated offset taken back off, so a
+    /// second lap reads from the start again rather than from the end of the
+    /// first. Negative until the first frame arrives.
+    pub(in crate::engine) position: AtomicI64,
 }
 
 /// The name a SceneItem's compositor input is registered under.
@@ -133,6 +159,18 @@ pub(in crate::engine) fn refresh_media_file(source: &OpenSource, item: &SceneIte
         let _ = volume.set_gain_db(settings.gain_db);
         volume.set_muted(muted(settings.muted, item.visible));
     }
+}
+
+/// Whether this media file is stopped, from the two things that can stop it.
+///
+/// Hiding the SceneItem stops it as well as taking it out of the picture, for
+/// the same reason hiding mutes it: a Source that is not in the Scene has no
+/// business playing on, and unhiding must not have to remember what the pause
+/// button was before.
+pub(in crate::engine) fn paused(item: &SceneItemSnapshot, showing: bool) -> bool {
+    use crate::domain::SourceSettings;
+
+    !showing || matches!(&item.settings, SourceSettings::MediaFile(settings) if settings.paused)
 }
 
 /// Whether this file's sound is off, from the two things that can turn it off.

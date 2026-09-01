@@ -122,6 +122,7 @@ fn opened(
         name,
         refreshed_token: None,
         showing: true,
+        running: true,
         // Held rather than dropped: an `AppSource` runs only while a handle to
         // it exists, and letting this one go would end the layer with the one
         // frame it had just pushed.

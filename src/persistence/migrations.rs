@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -302,6 +302,25 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 11;",
+        )?;
+    }
+
+    if current_version < 12 {
+        // What a media file's progress bar is drawn against, and whether it
+        // is stopped where it is. Added rather than folded into the table
+        // above because that version has shipped.
+        //
+        // `duration_us` is nullable: a container that does not say how long
+        // it is leaves the bar without a scale, which is a state to draw
+        // rather than a fault. Existing rows are files nobody was asked
+        // about, so they get it too, and it is read again the next time one
+        // is picked.
+        transaction.execute_batch(
+            "ALTER TABLE media_file_settings ADD COLUMN duration_us INTEGER;
+             ALTER TABLE media_file_settings
+                ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));
+
+            PRAGMA user_version = 12;",
         )?;
     }
     transaction.commit()?;

@@ -96,6 +96,7 @@ pub(in crate::engine) fn open(
             name,
             refreshed_token,
             showing: true,
+            running: true,
             pushed: None,
         },
         frame_rate,

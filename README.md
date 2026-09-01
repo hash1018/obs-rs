@@ -30,7 +30,9 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
   like anything else, with its own channel in the audio mixer. It can be set
   to start again at its end; switching that off part way through lets the
   pass it is on play out rather than stopping where it is, and the Sources
-  list says when one has finished.
+  list says when one has finished. It can be paused and scrubbed from the
+  Properties dock, and seeking a paused clip moves the picture without
+  starting it again.
 - **Recording** to MP4, Matroska or HLS, with hardware encoding where the
   machine has it. One recording can be split into several files by elapsed
   time or by size.

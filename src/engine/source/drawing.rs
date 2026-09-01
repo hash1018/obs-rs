@@ -191,6 +191,7 @@ fn opened(
         name,
         refreshed_token: None,
         showing: true,
+        running: true,
         pushed: Some(PushedSurface {
             pusher,
             size,
