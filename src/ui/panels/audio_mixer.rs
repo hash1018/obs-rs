@@ -158,8 +158,11 @@ use super::toolbar;
 /// dock shows as many as it has room for and scrolls past the rest.
 const SOURCE_WIDTH: f32 = 112.0;
 const METER_WIDTH: f32 = 9.0;
-/// Room for "-60", the longest label on the scale.
-const SCALE_WIDTH: f32 = 22.0;
+/// Room for "-60", the longest label on the scale, and no more than that.
+///
+/// The slack matters now that the row is centred: space allocated here but
+/// never drawn into is space the whole row is pushed left by, and it shows.
+const SCALE_WIDTH: f32 = 18.0;
 /// What a column spends above the channel: the name and the gain readout,
 /// with the gaps around them. The mute button is not in here — it lives in
 /// the strip below, outside the scrolling half.
@@ -294,17 +297,44 @@ fn show_channel(
         ui.vertical(|ui| {
             ui.set_width(SOURCE_WIDTH);
             show_name(ui, channel, devices, i18n, actions);
+            // One indent for both rows rather than centring each: the readout
+            // is a number whose width changes with its own value, and a
+            // centred one would slide left and right as a fader is moved.
+            // Sharing the gauges' indent keeps it still, and over the fader it
+            // is reporting — which is where a mixer puts it anyway.
+            let indent = gauge_indent(ui);
             ui.horizontal(|ui| {
+                ui.add_space(indent);
                 ui.monospace(format_gain(channel.gain_db));
                 show_clip_lamp(ui, channel, i18n);
             });
             ui.horizontal(|ui| {
+                ui.add_space(indent);
                 show_fader(ui, channel, channel_height, actions);
                 show_meter(ui, channel, channel_height);
                 show_scale(ui, channel_height);
             });
         });
     });
+}
+
+/// Where a channel's contents start, so the fader, its gauge and its readout
+/// sit in the middle of the column instead of against its left edge.
+///
+/// The column is as wide as the widest *name* — a device's is a menu with an
+/// endpoint behind it — and everything below the name is far narrower than
+/// that. Left alone they hug one edge and leave the rest of the column empty.
+///
+/// The fader's own width is asked of the same two things egui asks (see
+/// `Slider::add_contents`) rather than assumed: a theme with a larger
+/// interaction size or a bigger body font moves it, and a hardcoded number
+/// would quietly stop being the middle.
+fn gauge_indent(ui: &egui::Ui) -> f32 {
+    let fader = ui
+        .text_style_height(&egui::TextStyle::Body)
+        .max(ui.spacing().interact_size.y);
+    let gauges = fader + METER_WIDTH + SCALE_WIDTH + ui.spacing().item_spacing.x * 2.0;
+    ((SOURCE_WIDTH - gauges) / 2.0).max(0.0)
 }
 
 /// The name, which is also where the device is chosen.
