@@ -27,9 +27,18 @@
 //!
 //! A live source is paced rather than drawn on arrival. What that buys is
 //! A/V sync; what it costs is that the stream is played at the rate its own
-//! timestamps describe, so a camera whose clock runs slow against this
-//! machine's would drift late over hours. Dropping to catch up is a jitter
-//! buffer's job and this is not one — see `QUEUE_DEPTH`.
+//! timestamps describe, so a camera whose clock disagrees with this machine's
+//! drifts against it. Dropping to catch up is a jitter buffer's job and this
+//! is not one — see `QUEUE_DEPTH`.
+//!
+//! Drift does not accumulate quietly forever, and it is worth knowing which
+//! way it ends. A camera that runs *slow* falls further behind live, and
+//! nothing stops it. One that runs *fast* fills the queues instead — a
+//! couple of seconds of them — and then the source blocks where it reads,
+//! which over TCP is this end no longer draining the socket until the server
+//! gives up on it. That is a read error, and a read error is a disconnection
+//! like any other: the pipeline ends and `retry_missing` opens a new one.
+//! Visible, and recovered from, rather than silent.
 //!
 //! # Ending is a disconnection
 //!
@@ -75,6 +84,20 @@ const PACKET_LOOKAHEAD: usize = 64;
 /// reference frames — the queue above, the frame a `Pacer` is sitting on, and
 /// what the compositor keeps per layer. NVDEC caps the whole pool at 32.
 const HW_FRAME_BUDGET: i32 = 16;
+
+/// The longest a single frame may hold the `Pacer` before its timestamp is
+/// read as a new timeline rather than a distant one.
+///
+/// A camera that reboots, or an RTP timestamp base that wraps, hands over a
+/// timestamp with no relation to the one before it. Paced literally that is a
+/// still picture for as long as the jump says — no error, nothing to
+/// reconnect from, because as far as the pipeline is concerned it is working.
+/// Past this the `Pacer` re-anchors on the new timeline instead.
+///
+/// Five seconds because it has to sit above the longest gap a working stream
+/// can have — a camera that sends nothing for that long is already a problem
+/// rather than a pause — and below anything a viewer would sit through.
+const TIMELINE_JUMP: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How long to wait for a server that is not answering.
 ///
@@ -197,7 +220,11 @@ fn attach_video(
         .queue("video-packets", PACKET_LOOKAHEAD)
         .pipe(decoder)
         .queue("video", QUEUE_DEPTH)
-        .pipe(Pacer::new("video-pacer", time_base)?)
+        .pipe(Pacer::with_discontinuity_limit(
+            "video-pacer",
+            time_base,
+            TIMELINE_JUMP,
+        )?)
         .to(sink)?;
     context.attach(source, index, paced)?;
     Ok(())
@@ -237,7 +264,10 @@ pub(in crate::engine) fn open(
         settings.gain_db,
         super::muted(settings.muted, item.visible),
         &meters,
-    )?;
+    )?
+    // The same limit the picture is paced with, so a sender that restarts
+    // its timeline re-anchors both branches together — see `TIMELINE_JUMP`.
+    .map(|sound| sound.with_discontinuity_limit(TIMELINE_JUMP));
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
 
     let D3d11VideoCompositorInput { sink, layer } = handle
@@ -307,7 +337,10 @@ pub(in crate::engine) fn open(
         settings.gain_db,
         super::muted(settings.muted, item.visible),
         &meters,
-    )?;
+    )?
+    // The same limit the picture is paced with, so a sender that restarts
+    // its timeline re-anchors both branches together — see `TIMELINE_JUMP`.
+    .map(|sound| sound.with_discontinuity_limit(TIMELINE_JUMP));
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;

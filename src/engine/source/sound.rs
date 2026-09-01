@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use media_pp::element::{Context, Sink, Source as SourceElement};
 use media_pp::elements::{
@@ -59,6 +60,23 @@ pub(in crate::engine) struct Sound {
     mix: Box<dyn Sink>,
     /// The `AppSink` that measures the level.
     meter: Box<dyn Sink>,
+    /// Set for a live sender, whose timeline can restart under it — see
+    /// [`Sound::with_discontinuity_limit`].
+    discontinuity_limit: Option<Duration>,
+}
+
+impl Sound {
+    /// Paces this sound like the live stream it is: a timestamp further
+    /// ahead than `limit` is a timeline that restarted rather than a gap to
+    /// wait out.
+    ///
+    /// The picture's own `Pacer` has to be given the same limit. A jump that
+    /// re-anchored one branch and not the other would leave the sound
+    /// playing against an origin the picture no longer shares.
+    pub(in crate::engine) fn with_discontinuity_limit(mut self, limit: Duration) -> Self {
+        self.discontinuity_limit = Some(limit);
+        self
+    }
 }
 
 /// What a Source registers its audio with the mixer as.
@@ -115,6 +133,7 @@ pub(in crate::engine) fn build(
         volume,
         mix,
         meter: Box::new(meter),
+        discontinuity_limit: None,
     }))
 }
 
@@ -138,7 +157,10 @@ pub(in crate::engine) fn attach<S: SourceElement>(
         .branch()
         .pipe(sound.decoder)
         .queue("audio", QUEUE_DEPTH)
-        .pipe(Pacer::new("audio-pacer", sound.time_base)?)
+        .pipe(match sound.discontinuity_limit {
+            Some(limit) => Pacer::with_discontinuity_limit("audio-pacer", sound.time_base, limit)?,
+            None => Pacer::new("audio-pacer", sound.time_base)?,
+        })
         .pipe(sound.fader)
         .to_branch(tee)?;
     context.attach(source, sound.index, faded)?;
