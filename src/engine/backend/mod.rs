@@ -143,3 +143,21 @@ pub(super) struct VideoTrack {
     pub(super) branch: media_pp::graph::BranchId,
     pub(super) pause: media_pp::elements::PauseGateHandle,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Backend;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    /// Not a property of this file, but a requirement of the engine's:
+    /// Sources are opened on a thread of their own — see `SourceOpener` —
+    /// and that thread holds the backend. A field that is not `Send` breaks
+    /// the whole arrangement, on whichever platform it appears, and a
+    /// compile error here is a far better way to learn that than a mystery
+    /// where the engine still blocks.
+    #[test]
+    fn the_backend_can_be_used_from_the_thread_that_opens_sources() {
+        assert_send_sync::<Backend>();
+    }
+}

@@ -77,6 +77,9 @@ enum EngineCommand {
     /// Open this item's Source again, at the user's request — see
     /// `EngineManager::reopen_source`.
     ReopenSource(SceneItemId),
+    /// One Source has finished opening, however it came out. Sent by the
+    /// opener thread rather than by the UI — see [`SourceOpener`].
+    Opened(Box<Opened>),
     /// One item's Transform mid-gesture, which the project does not hold yet.
     Dragging(SceneItemId, Transform),
     /// A Drawing's strokes mid-gesture, for the same reason `Dragging` exists:
@@ -288,6 +291,9 @@ impl EngineManager {
             let encoders = Arc::clone(&encoders);
             let audio_codecs = Arc::clone(&audio_codecs);
             let stop = Arc::clone(&stop);
+            // The engine's own way back into its queue, for the thread that
+            // opens Sources — see [`SourceOpener`].
+            let replies = commands.clone();
             move || {
                 let published = Published {
                     frame,
@@ -311,8 +317,15 @@ impl EngineManager {
                         running: None,
                     },
                 };
-                if let Err(error) = run(render_state, setup, published, command_rx, &stop, wake_ui)
-                {
+                if let Err(error) = run(
+                    render_state,
+                    setup,
+                    published,
+                    command_rx,
+                    replies,
+                    &stop,
+                    wake_ui,
+                ) {
                     // The Preview keeps showing "no frame" rather than the
                     // application failing to start over a compositor.
                     eprintln!("engine stopped: {error}");
@@ -564,6 +577,10 @@ fn run(
     setup: EngineSetup,
     published: Published,
     commands: mpsc::Receiver<EngineCommand>,
+    // The other end of `commands`, for the opener thread to answer down — see
+    // `SourceOpener`. Held here as well as by the manager, which is why this
+    // loop leaves on the `stop` flag rather than on the channel closing.
+    replies: mpsc::Sender<EngineCommand>,
     stop: &AtomicBool,
     wake_ui: impl Fn() + Send + Sync + 'static,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -596,7 +613,7 @@ fn run(
     // recording written at 30 is half the GPU cost thrown away, and the
     // setting is what the compositor follows from here on — see
     // `EngineCommand::RecordingSettings`.
-    let backend = Backend::start(
+    let backend = Arc::new(Backend::start(
         &render_state,
         size,
         recording.settings.fps.max(1),
@@ -604,7 +621,7 @@ fn run(
         // Scene made at 24 is asking for frames that do not exist.
         PREVIEW_FPS.min(recording.settings.fps.max(1)),
         publish,
-    )?;
+    )?);
 
     // Probed here rather than on demand: it needs the backend's own device,
     // and the dialog that shows the list must not be the thing that waits for
@@ -621,6 +638,15 @@ fn run(
         .audio_codecs
         .store(Some(Arc::new(recording.audio_codecs.clone())));
 
+    // Replies come back through the loop's own channel, so the opener needs a
+    // way in — see [`SourceOpener`].
+    let opener = SourceOpener::spawn(Arc::clone(&backend), replies)?;
+    let engine = Engine {
+        backend: &backend,
+        project: project.as_ref(),
+        opener: &opener,
+    };
+
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
     let mut looked_for_missing = Instant::now();
@@ -632,8 +658,7 @@ fn run(
         match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(command) => {
                 let mut reconciled = apply_command(
-                    &backend,
-                    project.as_ref(),
+                    &engine,
                     &mut open,
                     &mut scene,
                     &published,
@@ -644,8 +669,7 @@ fn run(
                 // positions are not left a poll behind the pointer.
                 while let Ok(next) = commands.try_recv() {
                     reconciled |= apply_command(
-                        &backend,
-                        project.as_ref(),
+                        &engine,
                         &mut open,
                         &mut scene,
                         &published,
@@ -664,13 +688,7 @@ fn run(
                 looked_for_missing = Instant::now();
                 notice_closed_windows(&backend, &mut open, &scene);
                 notice_ended_media(&backend, &mut open, &scene);
-                retry_missing(
-                    &backend,
-                    project.as_ref(),
-                    recording.mixer_handle(),
-                    &mut open,
-                    &scene,
-                );
+                retry_missing(&engine, recording.mixer_handle(), &mut open, &scene);
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -682,6 +700,12 @@ fn run(
         publish_media_meters(&published, &open);
     }
 
+    // Joined before the Sources are stopped and well before the backend is:
+    // whatever is being opened at this moment is being opened against that
+    // backend. `engine` borrows the opener and is not used past here, which
+    // is what lets this drop run at all.
+    drop(opener);
+
     for (_, state) in open.drain() {
         if let SourceState::Open(source) = state {
             source.source.stop();
@@ -691,11 +715,120 @@ fn run(
     Ok(())
 }
 
+/// Opens Sources on a thread of its own.
+///
+/// Opening one is neither quick nor bounded. A portal capture waits on a
+/// dialog the user may leave standing, a file comes off a disk that may have
+/// spun down, and a network stream waits out a connect timeout — five seconds
+/// of nothing, for a camera that is switched off. On the engine loop each of
+/// those is the whole engine stopped for as long as it takes: no layer moves,
+/// no recording starts, no command is read.
+///
+/// So the loop asks, and hears back through the channel it already reads.
+/// A reply arrives as [`EngineCommand::Opened`] and is applied where every
+/// other change is, which is what keeps the state machine in one place.
+///
+/// One thread rather than one per request, deliberately: opening was
+/// sequential before and two portal captures asked for at once would
+/// otherwise put two pickers on the screen together.
+struct SourceOpener {
+    requests: mpsc::Sender<OpenRequest>,
+    /// Joined on drop, so the engine does not return while a source is still
+    /// being opened against a backend that is about to stop.
+    worker: Option<JoinHandle<()>>,
+}
+
+/// One Source to open, as it was asked for.
+struct OpenRequest {
+    item: Box<SceneItemSnapshot>,
+    layer: VideoLayer,
+    fps: u32,
+    /// A clone rather than a borrow: the mixer outlives one open, and the
+    /// thread cannot hold a reference into the engine loop's own state.
+    mixer: Option<media_pp::elements::MixerHandle>,
+}
+
+/// What an open came out as, on its way back to the loop that asked.
+///
+/// The item comes back with it because the loop needs what was asked for to
+/// make sense of the answer — the name to report, and the settings that
+/// decide whether a refusal is a state or a failure.
+pub(crate) struct Opened {
+    item: Box<SceneItemSnapshot>,
+    result: Result<Option<OpenSource>, BackendError>,
+}
+
+impl SourceOpener {
+    fn spawn(backend: Arc<Backend>, replies: mpsc::Sender<EngineCommand>) -> std::io::Result<Self> {
+        let (requests, incoming) = mpsc::channel::<OpenRequest>();
+        let worker = thread::Builder::new()
+            .name("source-opener".to_owned())
+            .spawn(move || {
+                while let Ok(request) = incoming.recv() {
+                    let result = backend.open_source(
+                        &request.item,
+                        request.layer,
+                        request.fps,
+                        request.mixer.as_ref(),
+                    );
+                    let opened = Opened {
+                        item: request.item,
+                        result,
+                    };
+                    let Err(undelivered) = replies.send(EngineCommand::Opened(Box::new(opened)))
+                    else {
+                        continue;
+                    };
+                    // The engine has gone while this was opening. What came
+                    // back is running and nothing else holds it, so it is
+                    // stopped here rather than dropped on the floor.
+                    if let EngineCommand::Opened(opened) = undelivered.0
+                        && let Ok(Some(source)) = opened.result
+                    {
+                        source.source.stop();
+                        backend.remove_source(&source.name);
+                    }
+                    break;
+                }
+            })?;
+        Ok(Self {
+            requests,
+            worker: Some(worker),
+        })
+    }
+
+    fn request(&self, request: OpenRequest) -> Result<(), mpsc::SendError<OpenRequest>> {
+        self.requests.send(request)
+    }
+}
+
+impl Drop for SourceOpener {
+    fn drop(&mut self) {
+        // Dropped first, or the worker would wait on a channel nothing is
+        // going to send down again.
+        let (dead, _) = mpsc::channel();
+        let _ = std::mem::replace(&mut self.requests, dead);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// What the engine reaches for whatever it is doing: what composites, what
+/// the project is told through, and what opens Sources.
+///
+/// One parameter rather than three, and the reason `apply_command` has room
+/// for the arguments that really are its own.
+struct Engine<'a> {
+    backend: &'a Backend,
+    project: Option<&'a ProjectDispatcher>,
+    opener: &'a SourceOpener,
+}
+
 /// Applies one change, reporting whether the running Sources may have moved
 /// on — a Scene change can start or stop them, a drag never does.
 fn apply_command(
-    backend: &Backend,
-    project: Option<&ProjectDispatcher>,
+    engine: &Engine<'_>,
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
     published: &Published,
@@ -705,7 +838,11 @@ fn apply_command(
     match command {
         EngineCommand::Scene(snapshot) => {
             *scene = *snapshot;
-            reconcile(backend, project, recording.mixer_handle(), open, scene);
+            reconcile(engine, recording.mixer_handle(), open, scene);
+            true
+        }
+        EngineCommand::Opened(opened) => {
+            finish_open(engine, open, scene, *opened);
             true
         }
         EngineCommand::ReopenSource(item_id) => {
@@ -717,12 +854,11 @@ fn apply_command(
             // its layer and its capture.
             if let Some(SourceState::Open(source)) = open.get(&item_id) {
                 source.source.stop();
-                backend.remove_source(&source.name);
+                engine.backend.remove_source(&source.name);
             }
             let item = &scene.items[index];
             let layer = layer_for(item, item.transform, (scene.items.len() - index) as i32);
-            let state = open_item(backend, project, recording.mixer_handle(), item, layer);
-            open.insert(item_id, state);
+            request_open(engine, recording.mixer_handle(), open, item, layer);
             true
         }
         EngineCommand::Drawing(item_id, strokes) => {
@@ -770,7 +906,7 @@ fn apply_command(
             false
         }
         EngineCommand::PreviewVisible(visible) => {
-            backend.set_preview_visible(visible);
+            engine.backend.set_preview_visible(visible);
             false
         }
         EngineCommand::RecordingSettings(settings) => {
@@ -781,8 +917,8 @@ fn apply_command(
             // timestamps it is being handed would change meaning underneath
             // it. The setting is kept either way, and takes at the next
             // change once the recording has stopped.
-            if recording.running.is_none() && settings.fps != backend.frame_rate() {
-                backend.set_frame_rate(settings.fps);
+            if recording.running.is_none() && settings.fps != engine.backend.frame_rate() {
+                engine.backend.set_frame_rate(settings.fps);
             }
             recording.settings = *settings;
             // The rate the mix runs at decides which audio encoders can open —
@@ -803,7 +939,7 @@ fn apply_command(
             published.recording_paused_at.store(None);
             // The instant is published only on success, so a UI that shows a
             // recording running is showing one that is.
-            match start_recording(backend, recording) {
+            match start_recording(engine.backend, recording) {
                 Ok(started) => published.recording_since.store(Some(Arc::new(started))),
                 Err(error) => {
                     let reason = describe(error.as_ref());
@@ -848,7 +984,7 @@ fn apply_command(
             published.recording_paused_at.store(None);
             match recording.running.take() {
                 Some(running) => {
-                    if let Err(error) = running.stop(backend) {
+                    if let Err(error) = running.stop(engine.backend) {
                         eprintln!("could not stop recording cleanly: {error}");
                     }
                 }
@@ -984,6 +1120,14 @@ fn describe(error: &(dyn std::error::Error + 'static)) -> String {
 #[allow(clippy::large_enum_variant)]
 enum SourceState {
     Open(OpenSource),
+    /// Asked for, and not answered yet.
+    ///
+    /// Nothing is running behind it and nothing here can hurry it — see
+    /// [`SourceOpener`] for why opening happens elsewhere. It is a state
+    /// rather than an absence so that the same Source is not asked for twice
+    /// while the first attempt is still going, and so what comes back has
+    /// somewhere to land.
+    Opening,
     /// Opening failed once and will not be retried.
     ///
     /// A retry loop here would reopen the portal dialog on every snapshot,
@@ -1028,14 +1172,82 @@ enum SourceState {
 const MISSING_RETRY: Duration = Duration::from_secs(1);
 
 /// Opens one Scene item, turning both kinds of "no Source" into a state.
-fn open_item(
-    backend: &Backend,
-    project: Option<&ProjectDispatcher>,
+fn request_open(
+    engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
+    open: &mut HashMap<SceneItemId, SourceState>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
+) {
+    let request = OpenRequest {
+        item: Box::new(item.clone()),
+        layer,
+        fps: engine.backend.frame_rate(),
+        mixer: mixer.cloned(),
+    };
+    match engine.opener.request(request) {
+        // Marked only once the thread has it, so a request that was never
+        // taken cannot leave an item waiting for a reply that is not coming.
+        Ok(()) => {
+            open.insert(item.id, SourceState::Opening);
+        }
+        Err(error) => {
+            eprintln!("could not ask for \"{}\" to be opened: {error}", item.name);
+            open.insert(item.id, SourceState::Failed);
+        }
+    }
+}
+
+/// Takes what the opener answered with, if anything is still waiting for it.
+///
+/// The wait is not held open: a Scene can change, an item can be deleted, and
+/// the same Source can be asked for again while the first attempt is still
+/// connecting. So what arrives is only installed where the slot still says
+/// `Opening` — and a Source with nowhere to go is stopped here, because
+/// nothing else is holding it.
+fn finish_open(
+    engine: &Engine<'_>,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    scene: &SourcesSnapshot,
+    opened: Opened,
+) {
+    let id = opened.item.id;
+    if !matches!(open.get(&id), Some(SourceState::Opening)) {
+        if let Ok(Some(source)) = opened.result {
+            source.source.stop();
+            engine.backend.remove_source(&source.name);
+        }
+        return;
+    }
+    let mut state = state_of(engine.project, &opened.item, opened.result);
+    // Placed where the item stands now rather than where it stood when this
+    // was asked for: reordering a Scene, or recolouring a Source, while one
+    // opens would otherwise take until the next change to show.
+    if let SourceState::Open(source) = &mut state
+        && let Some((index, item)) = scene
+            .items
+            .iter()
+            .enumerate()
+            .find(|(_, item)| item.id == id)
+    {
+        let _ = source.layer.set_layer(layer_for(
+            item,
+            item.transform,
+            (scene.items.len() - index) as i32,
+        ));
+        refresh_pushed(source, item);
+        refresh_media_file(source, item);
+    }
+    open.insert(id, state);
+}
+
+/// Which state one answer from the opener leaves the SceneItem in.
+fn state_of(
+    project: Option<&ProjectDispatcher>,
+    item: &SceneItemSnapshot,
+    result: Result<Option<OpenSource>, BackendError>,
 ) -> SourceState {
-    match backend.open_source(item, layer, backend.frame_rate(), mixer) {
+    match result {
         // Nothing to open yet, and nothing wrong. Looked at again on the next
         // pass rather than reported.
         Ok(None) => SourceState::Missing,
@@ -1077,6 +1289,11 @@ fn publish_source_status(published: &Published, open: &HashMap<SceneItemId, Sour
         .filter_map(|(id, state)| {
             let status = match state {
                 SourceState::Open(_) => return None,
+                // Nothing has gone wrong yet. Reporting a Source as not
+                // showing while it is still being opened would put a badge
+                // beside every item for as long as its capture takes to
+                // start, which on most of them is one frame.
+                SourceState::Opening => return None,
                 SourceState::Ended => SourceStatus::Ended,
                 // Failed, Missing and Disconnected are one thing to a reader:
                 // it is not showing, and the engine is not going to fix it by
@@ -1231,8 +1448,7 @@ fn notice_ended_media(
 /// produces no command at all, so waiting for one would leave the Source
 /// blank until something unrelated happened to move.
 fn retry_missing(
-    backend: &Backend,
-    project: Option<&ProjectDispatcher>,
+    engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
@@ -1249,15 +1465,13 @@ fn retry_missing(
             continue;
         }
         let layer = layer_for(item, item.transform, (count - index) as i32);
-        let state = open_item(backend, project, mixer, item, layer);
-        open.insert(item.id, state);
+        request_open(engine, mixer, open, item, layer);
     }
 }
 
 /// Brings the running Sources in line with what the project now holds.
 fn reconcile(
-    backend: &Backend,
-    project: Option<&ProjectDispatcher>,
+    engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
@@ -1274,9 +1488,11 @@ fn reconcile(
                 refresh_media_file(source, item);
             }
             Some(SourceState::Failed | SourceState::Disconnected | SourceState::Ended) => {}
+            // Already on its way, and asking again would only open a second
+            // one of whatever this is.
+            Some(SourceState::Opening) => {}
             Some(SourceState::Missing) | None => {
-                let state = open_item(backend, project, mixer, item, layer);
-                open.insert(item.id, state);
+                request_open(engine, mixer, open, item, layer);
             }
         }
     }
@@ -1318,8 +1534,11 @@ fn reconcile(
         }
         if let SourceState::Open(source) = state {
             source.source.stop();
-            backend.remove_source(&source.name);
+            engine.backend.remove_source(&source.name);
         }
+        // An `Opening` entry is dropped with the rest. What arrives for it
+        // finds no slot waiting and is stopped where it lands — see
+        // `finish_open`.
         false
     });
 }
@@ -1539,6 +1758,10 @@ mod tests {
         open.insert(SceneItemId(2), SourceState::Missing);
         // A file that played out is dark for a different reason, and says so.
         open.insert(SceneItemId(3), SourceState::Ended);
+        // Still being opened, which is not a state to report: a badge beside
+        // every item for as long as its capture takes to start would say
+        // something is wrong on the way to everything working.
+        open.insert(SceneItemId(4), SourceState::Opening);
         publish_source_status(&published, &open);
         let first = published
             .source_status
@@ -1550,7 +1773,8 @@ mod tests {
                 (SceneItemId(1), SourceStatus::Disconnected),
                 (SceneItemId(2), SourceStatus::Disconnected),
                 (SceneItemId(3), SourceStatus::Ended),
-            ])
+            ]),
+            "an opening Source must not be listed among the dark ones"
         );
 
         publish_source_status(&published, &open);

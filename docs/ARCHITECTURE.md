@@ -201,6 +201,18 @@ Nothing else is polled this way. A display does not close, and a capture shared 
 
 Switching Scenes stops a Source rather than closing it, so returning is a resume and not another portal round trip. Only a SceneItem the project no longer holds anywhere is closed, which is why the snapshot carries every item and not just the shown Scene's.
 
+### Opening a Source happens off the engine loop
+
+Opening one is neither quick nor bounded. A portal capture waits on a dialog the user may leave standing for a minute; a file comes off a disk that may have spun down; a network stream waits out a connect timeout, which is five seconds of nothing for a camera that is switched off. On the engine loop each of those is the whole engine stopped for as long as it takes — no layer moves, no recording starts, no command is read — and the user sees an application that has hung, with no way to tell which Source did it.
+
+So `SourceOpener` holds a thread, and the loop asks it. The reply comes back as `EngineCommand::Opened` through the channel the loop already reads, so the answer is applied where every other change is and the state machine stays in one place. One thread rather than one per request: opening was sequential before, and two portal captures asked for at once would otherwise put two pickers on the screen together.
+
+`SourceState::Opening` is what the wait looks like from the engine's side. It stops the same Source being asked for twice while the first attempt is still connecting, and it gives what comes back somewhere to land. It is *not* published to the UI — a badge beside every item for as long as its capture takes to start would report trouble on the way to everything working.
+
+The wait is not held open. A Scene can change, an item can be deleted, and the same Source can be asked for again, all while one is still opening; so a reply is installed only where the slot still says `Opening`, and a Source that arrives with nowhere to go is stopped where it lands rather than left running with nothing holding it. One that does land is placed where its item stands *now* rather than where it stood when it was asked for.
+
+The backend is shared with that thread, which is why `Backend` has to be `Send + Sync` on every platform — asserted by a test in `engine::backend` so a field that is not says so at compile time rather than by the engine mysteriously blocking again.
+
 ## One instance
 
 Two copies would open the same project database and write the same log, and
