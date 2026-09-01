@@ -105,6 +105,8 @@ Pausing *is* written down, because it has to survive the Scene changing and the 
 
 That end is noticed. `notice_ended_media` asks the running media file Sources whether their pipeline has finished, the same way `notice_closed_windows` asks about windows, and puts the ones that have into `SourceState::Ended` — which the Sources dock reports beside the item. Two things make this worth a state of its own rather than leaving it `Open`. The Source has to be *stopped*: `Stop` is what takes its input off the audio mixer, which an `Eos` alone leaves registered and silent, so its channel would otherwise sit in the dock for as long as the SceneItem existed. And the badge is not the disconnected one — nothing went wrong, so it neither warns nor offers to reopen. Playing once is what a file that is not looping was asked to do.
 
+The engine not reopening it is not the same as it being unplayable. Pressing play in the Properties dock, or dragging its bar, asks for `ReopenSource` — the same request the Sources dock makes for a disconnected capture, and the difference between the engine deciding to start something again and someone asking it to. The pause flag is cleared with it, because a reopened Source reads that and would otherwise come back stopped.
+
 A path that is not there right now — a moved file, an unmounted drive — is the same kind of state a closed window is: the Source is left `Missing` and looked for again on the idle tick, rather than failed. A file that *is* there and will not demux is a real failure.
 
 A file with no video stream is refused. This is a Scene Source and occupies a rectangle on the Canvas, so there is nothing for a sound-only file to be.

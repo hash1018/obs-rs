@@ -1198,9 +1198,11 @@ fn notice_closed_windows(
 /// registered and silent, so a finished file would otherwise keep a channel
 /// in the Audio Mixer dock for as long as its SceneItem existed.
 ///
-/// It is not reopened. Playing once is what a file that is not looping was
-/// asked to do, and starting it again by itself would make the setting
-/// meaningless.
+/// It is not reopened *here*. Playing once is what a file that is not
+/// looping was asked to do, and starting it again by itself would make the
+/// setting meaningless. Someone pressing play is a different thing: the
+/// Properties dock's transport asks for `ReopenSource`, which is the same
+/// request the Sources dock makes for a disconnected capture.
 fn notice_ended_media(
     backend: &Backend,
     open: &mut HashMap<SceneItemId, SourceState>,

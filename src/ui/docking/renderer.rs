@@ -298,6 +298,7 @@ fn show_panel(
                 &mut child,
                 content.editor,
                 &content.snapshots.sources,
+                content.snapshots.status.source_status.as_deref(),
                 content.i18n,
                 content.actions,
             );

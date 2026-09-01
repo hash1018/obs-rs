@@ -25,7 +25,7 @@ use crate::domain::SceneItemId;
 use crate::domain::{DisplayCaptureTarget, SourceKind, SourceSettings, WindowCaptureTarget};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
-use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
+use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 
 use super::super::UiAction;
 use super::super::editor::SceneEditorState;
@@ -35,6 +35,7 @@ pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     editor: &SceneEditorState,
     snapshot: &SourcesSnapshot,
+    status: Option<&std::collections::HashMap<SceneItemId, SourceStatus>>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -58,7 +59,10 @@ pub(in crate::ui) fn show(
                     i18n.text(kind_key(item.kind)).as_ref(),
                 );
                 show_placement(ui, item, editor, i18n);
-                show_settings(ui, item, i18n, actions);
+                let ended = status
+                    .and_then(|status| status.get(&item.id))
+                    .is_some_and(|status| *status == SourceStatus::Ended);
+                show_settings(ui, item, ended, i18n, actions);
             });
     });
 }
@@ -110,6 +114,7 @@ fn show_placement(
 fn show_settings(
     ui: &mut egui::Ui,
     item: &SceneItemSnapshot,
+    ended: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -205,7 +210,7 @@ fn show_settings(
                 &settings.path.display().to_string(),
             );
             show_looping(ui, item.id, settings.looping, i18n, actions);
-            show_playback(ui, item, settings, i18n, actions);
+            show_playback(ui, item, settings, ended, i18n, actions);
         }
         SourceSettings::Image(settings) => row(
             ui,
@@ -232,26 +237,31 @@ fn show_playback(
     ui: &mut egui::Ui,
     item: &SceneItemSnapshot,
     settings: &crate::domain::MediaFileSettings,
+    ended: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let position = item.position.unwrap_or_default();
+    // A clip that played out is not measured any more — its Source was
+    // stopped — so the readout takes the only position it could be at.
+    let position = match (ended, settings.duration) {
+        (true, Some(duration)) => duration,
+        _ => item.position.unwrap_or_default(),
+    };
+    let stopped = ended || settings.paused;
     ui.label(i18n.text(TextKey::PropertiesPlayback));
     ui.horizontal(|ui| {
-        let (glyph, hover) = if settings.paused {
+        let (glyph, hover) = if stopped {
             ("▶", TextKey::PropertiesPlay)
         } else {
             ("⏸", TextKey::PropertiesPause)
         };
         if ui.button(glyph).on_hover_text(i18n.text(hover)).clicked() {
-            actions.push(UiAction::Project(ProjectCommand::Source(
-                SourceCommand::SetMediaPaused(item.id, !settings.paused),
-            )));
+            play_again(item, settings, ended, None, actions);
         }
         match settings.duration {
             Some(duration) => {
                 ui.monospace(format!("{} / {}", clock(position), clock(duration)));
-                show_scrub(ui, item.id, position, duration, actions);
+                show_scrub(ui, item, settings, ended, position, duration, actions);
             }
             None => {
                 ui.monospace(clock(position));
@@ -261,15 +271,67 @@ fn show_playback(
     ui.end_row();
 }
 
+/// What the transport controls ask for, which is not always the same thing.
+///
+/// A clip that is merely paused only has to stop being paused. One that
+/// played out has no Source left to unpause — the engine stopped it, which is
+/// what took its input back off the audio mixer — so it has to be opened
+/// again. That is the difference between the engine reopening a finished clip
+/// by itself, which it deliberately does not, and someone pressing play,
+/// which is a request.
+///
+/// A reopened Source starts at the beginning, so a `target` is sent after it
+/// as a second action rather than being folded in: the engine handles its
+/// commands in order, and by the time the seek is read the Source is open.
+fn play_again(
+    item: &SceneItemSnapshot,
+    settings: &crate::domain::MediaFileSettings,
+    ended: bool,
+    target: Option<std::time::Duration>,
+    actions: &mut Vec<UiAction>,
+) {
+    let paused = |paused| {
+        UiAction::Project(ProjectCommand::Source(SourceCommand::SetMediaPaused(
+            item.id, paused,
+        )))
+    };
+    match target {
+        // The bar. A paused clip stays paused — the seek's own preroll shows
+        // where it landed without starting it — but one that played out has
+        // to be opened again before there is anywhere to land.
+        Some(target) => {
+            if ended {
+                actions.push(paused(false));
+                actions.push(UiAction::ReopenSource(item.id));
+            }
+            actions.push(UiAction::SeekMediaFile(item.id, target));
+        }
+        // The button, which swaps the two states it can be in. A clip that
+        // played out counts as stopped, so pressing it asks to play — and
+        // the pause flag is cleared whether or not it was set, because the
+        // reopened Source reads it and would come back stopped.
+        None => {
+            let play = ended || settings.paused;
+            actions.push(paused(!play));
+            if ended {
+                actions.push(UiAction::ReopenSource(item.id));
+            }
+        }
+    }
+}
+
 /// The bar itself.
+#[allow(clippy::too_many_arguments)]
 fn show_scrub(
     ui: &mut egui::Ui,
-    item: SceneItemId,
+    item: &SceneItemSnapshot,
+    settings: &crate::domain::MediaFileSettings,
+    ended: bool,
     position: std::time::Duration,
     duration: std::time::Duration,
     actions: &mut Vec<UiAction>,
 ) {
-    let key = egui::Id::new(("media-scrub", item));
+    let key = egui::Id::new(("media-scrub", item.id));
     let held: Option<f32> = ui.data(|data| data.get_temp(key));
     let mut seconds = held.unwrap_or(position.as_secs_f32());
     // Whatever is left of the row, so the bar grows with the dock instead of
@@ -283,10 +345,16 @@ fn show_scrub(
     }
     if bar.drag_stopped() || (bar.changed() && !bar.dragged()) {
         ui.data_mut(|data| data.remove_temp::<f32>(key));
-        actions.push(UiAction::SeekMediaFile(
+        // Dragging the bar of a clip that played out is a request to play it
+        // from there, which means opening it again first — the same thing
+        // pressing play does, with somewhere to go afterwards.
+        play_again(
             item,
-            std::time::Duration::from_secs_f32(seconds.max(0.0)),
-        ));
+            settings,
+            ended,
+            Some(std::time::Duration::from_secs_f32(seconds.max(0.0))),
+            actions,
+        );
     }
 }
 
