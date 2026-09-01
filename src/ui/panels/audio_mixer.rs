@@ -150,6 +150,7 @@ fn mute_command(id: ChannelId, muted: bool) -> UiAction {
 }
 
 use super::super::UiAction;
+use super::elide;
 use super::toolbar;
 
 /// One source's column: a fader, a meter, the scale between them, and a name
@@ -354,8 +355,31 @@ fn show_name(
         // A media file has no endpoint to choose, so its name is a label
         // rather than a menu. It is renamed where it lives, in the Sources
         // dock, and this follows.
-        ui.label(egui::RichText::new(channel.name).strong())
-            .on_hover_text(i18n.text(TextKey::AudioKindMediaFile));
+        //
+        // Painted from a galley rather than added as a `Label`, for the two
+        // things a Source name needs that a label in a column this narrow
+        // does not give: it is centred over the fader like everything else
+        // below it, and a name too long for the column is cut to one row
+        // instead of wrapping — which would push this channel's gauges down
+        // past its neighbours' and leave the row ragged.
+        let galley = elide::one_row(ui, channel.name, SOURCE_WIDTH, &egui::TextStyle::Body);
+        let elided = galley.elided;
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(SOURCE_WIDTH, galley.size().y),
+            egui::Sense::hover(),
+        );
+        let left = rect.center().x - galley.size().x / 2.0;
+        ui.painter().galley(
+            egui::pos2(left, rect.top()),
+            galley,
+            ui.visuals().strong_text_color(),
+        );
+        let kind = i18n.text(TextKey::AudioKindMediaFile);
+        response.on_hover_text(if elided {
+            format!("{kind} · {}", channel.name)
+        } else {
+            kind.into_owned()
+        });
         return;
     };
     let kind = i18n.text(match source.kind {
@@ -376,43 +400,49 @@ fn show_name(
         },
     );
 
-    let menu = ui.menu_button(
-        egui::RichText::new(format!("{} ⏷", channel.name)).strong(),
-        |ui| {
-            if ui
-                .selectable_label(source.id.is_none(), default_label.as_ref())
-                .clicked()
-            {
-                actions.push(audio_action(AudioCommand::SetDevice(source.source, None)));
-                ui.close();
-            }
-            ui.separator();
-            // Only the endpoints of this source's own kind: a microphone
-            // cannot be captured as desktop audio, and offering it would be
-            // offering a choice that cannot work.
-            let mut listed = false;
-            for device in devices.iter().filter(|device| device.kind == source.kind) {
-                listed = true;
-                let label = if device.is_default {
-                    format!("{} ({default_label})", device.name)
-                } else {
-                    device.name.clone()
-                };
-                let chosen = source.id == Some(device.id.as_str());
-                if ui.selectable_label(chosen, label).clicked() {
-                    actions.push(audio_action(AudioCommand::SetDevice(
-                        source.source,
-                        Some(device.id.clone()),
-                    )));
+    // Centred for the same reason the gauges below it are: the column is as
+    // wide as the widest name, and this one is usually narrower than that.
+    let menu = ui.vertical_centered(|ui| {
+        ui.menu_button(
+            egui::RichText::new(format!("{} ⏷", channel.name)).strong(),
+            |ui| {
+                if ui
+                    .selectable_label(source.id.is_none(), default_label.as_ref())
+                    .clicked()
+                {
+                    actions.push(audio_action(AudioCommand::SetDevice(source.source, None)));
                     ui.close();
                 }
-            }
-            if !listed {
-                ui.weak(i18n.text(TextKey::AudioNoDevices));
-            }
-        },
-    );
-    menu.response.on_hover_text(format!("{kind} · {listening}"));
+                ui.separator();
+                // Only the endpoints of this source's own kind: a microphone
+                // cannot be captured as desktop audio, and offering it would be
+                // offering a choice that cannot work.
+                let mut listed = false;
+                for device in devices.iter().filter(|device| device.kind == source.kind) {
+                    listed = true;
+                    let label = if device.is_default {
+                        format!("{} ({default_label})", device.name)
+                    } else {
+                        device.name.clone()
+                    };
+                    let chosen = source.id == Some(device.id.as_str());
+                    if ui.selectable_label(chosen, label).clicked() {
+                        actions.push(audio_action(AudioCommand::SetDevice(
+                            source.source,
+                            Some(device.id.clone()),
+                        )));
+                        ui.close();
+                    }
+                }
+                if !listed {
+                    ui.weak(i18n.text(TextKey::AudioNoDevices));
+                }
+            },
+        )
+    });
+    menu.inner
+        .response
+        .on_hover_text(format!("{kind} · {listening}"));
 }
 
 /// The fader stays live while muted rather than greying out: muting is not
