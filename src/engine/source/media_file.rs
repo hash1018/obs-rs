@@ -320,7 +320,7 @@ fn attach_video(
         .branch()
         .pipe(decoder)
         .queue("video", QUEUE_DEPTH)
-        .pipe(Pacer::new("video-pacer", time_base, context.clock.clone())?)
+        .pipe(Pacer::new("video-pacer", time_base)?)
         .to_branch(tee)?;
     context.attach(source, index, paced)?;
     Ok(())
@@ -341,11 +341,7 @@ fn attach_audio(
         .branch()
         .pipe(audio.decoder)
         .queue("audio", QUEUE_DEPTH)
-        .pipe(Pacer::new(
-            "audio-pacer",
-            audio.time_base,
-            context.clock.clone(),
-        )?)
+        .pipe(Pacer::new("audio-pacer", audio.time_base)?)
         .pipe(audio.fader)
         .to_branch(tee)?;
     context.attach(source, audio.index, faded)?;
