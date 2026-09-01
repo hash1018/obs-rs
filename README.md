@@ -23,6 +23,9 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
 - **Drawing.** A source you draw on rather than one that captures something:
   pen, highlighter and eraser, with undo and clear. It is a real layer, so
   what you draw is in the recording, not just on your screen.
+- **Image.** A still picture as a source, at its own size. Decoded once
+  through the same library that opens a video, so whatever FFmpeg reads is a
+  source — PNG, JPEG, WebP and the rest.
 - **Media file.** A video file as a source, decoded on the GPU and composited
   like anything else, with its own channel in the audio mixer. It can be set
   to start again at its end; switching that off part way through lets the
@@ -113,8 +116,8 @@ you try it:
 
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
-- **Five source kinds.** Display Capture, Window Capture, Media File, Drawing
-  and Color. Cameras and images are not there.
+- **Six source kinds.** Display Capture, Window Capture, Media File, Image,
+  Drawing and Color. Cameras are not there.
 
 - **No filters, transitions or hotkeys.** Switching Scenes is a cut.
 

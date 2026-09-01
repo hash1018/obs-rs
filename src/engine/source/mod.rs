@@ -13,6 +13,7 @@
 pub(in crate::engine) mod color;
 pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
+pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod window_capture;
 
@@ -49,6 +50,10 @@ pub(in crate::engine) struct PushedSurface {
 pub(in crate::engine) enum PushedContent {
     Color([u8; 4]),
     Drawing(Vec<crate::domain::Stroke>),
+    /// A picture, by the path it was decoded from. Nothing changes it today —
+    /// an Image Source is opened with one file and keeps it — so this is what
+    /// keeps a Scene change from decoding and uploading it again.
+    Image(std::path::PathBuf),
 }
 
 /// A Source that is running, and the controls for its layer.
@@ -178,6 +183,11 @@ pub(in crate::engine) fn push_content(source: &mut OpenSource, wanted: PushedCon
     let frame = match &wanted {
         PushedContent::Color(rgba) => color::flat_bgra(width, height, *rgba),
         PushedContent::Drawing(strokes) => drawing::drawing_bgra(width, height, strokes),
+        // Nothing asks for this. An Image Source is opened with one file and
+        // keeps it, so `refresh_pushed` never names one here — the arm exists
+        // because the content is compared like every other kind's, not
+        // because a picture is ever pushed twice.
+        PushedContent::Image(_) => return,
     };
     if let Err(error) = surface.pusher.push(frame) {
         eprintln!("could not update \"{}\": {error}", source.name);

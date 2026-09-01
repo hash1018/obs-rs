@@ -174,6 +174,15 @@ pub fn media_file_streams(path: &Path) -> MediaFileStreams {
     }
 }
 
+/// The pixel size of a still picture, or `None` when it will not open.
+///
+/// The same reading as a media file's, and through the same library: an image
+/// file is a one-frame container as far as FFmpeg is concerned, so there is no
+/// second decoder here and no image crate to add.
+pub fn image_size(path: &Path) -> Option<[u32; 2]> {
+    video_size(&media_pp::ffmpeg::format::input(path).ok()?)
+}
+
 fn video_size(input: &media_pp::ffmpeg::format::context::Input) -> Option<[u32; 2]> {
     use media_pp::ffmpeg;
 

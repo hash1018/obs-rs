@@ -176,6 +176,10 @@ fn handle_source_command(
             SourceStore::add_media_file(transaction, scene_id, &settings)?;
             Ok(())
         }
+        SourceCommand::AddImage { scene_id, settings } => {
+            SourceStore::add_image(transaction, scene_id, &settings)?;
+            Ok(())
+        }
         SourceCommand::SetMediaLooping(scene_item_id, looping) => {
             SourceStore::set_media_looping(transaction, scene_item_id, looping)
         }
@@ -684,6 +688,39 @@ mod tests {
                         title: "Untitled - Notepad".into(),
                     }
                     && settings.size_hint == Some([1280, 720])
+        ));
+    }
+
+    #[test]
+    fn image_source_is_named_after_its_file_and_keeps_the_path() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        let path = std::path::PathBuf::from("/pictures/logo.png");
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddImage {
+                scene_id,
+                settings: crate::domain::ImageSourceSettings {
+                    path: path.clone(),
+                    size_hint: Some([512, 128]),
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert_eq!(sources.items.len(), 1);
+        assert_eq!(sources.items[0].name, "logo");
+        // Its own shape, not the Canvas's: a logo is not 1920 wide.
+        assert_eq!(sources.items[0].source_size, [512.0, 128.0]);
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::Image(settings)
+                if settings.path == path && settings.size_hint == Some([512, 128])
         ));
     }
 

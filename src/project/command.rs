@@ -1,6 +1,6 @@
 use crate::domain::{
-    AudioSourceId, DisplayCaptureSettings, MediaFileSettings, SceneId, SceneItemId, Stroke,
-    Transform, WindowCaptureSettings,
+    AudioSourceId, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings, SceneId,
+    SceneItemId, Stroke, Transform, WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +44,10 @@ pub enum SourceCommand {
     AddMediaFile {
         scene_id: SceneId,
         settings: MediaFileSettings,
+    },
+    AddImage {
+        scene_id: SceneId,
+        settings: ImageSourceSettings,
     },
     Delete(SceneItemId),
     MoveUp(SceneItemId),

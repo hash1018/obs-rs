@@ -258,6 +258,7 @@ impl Backend {
             SourceKind::MediaFile => {
                 source::media_file::open(&self.device, &self.compositor, mixer, item, layer)
             }
+            SourceKind::Image => source::image::open(&self.device, &self.compositor, item, layer),
             SourceKind::Color => {
                 source::color::open(&self.device, &self.compositor, item, layer).map(Some)
             }

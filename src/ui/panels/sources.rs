@@ -6,8 +6,8 @@ use eframe::egui;
 
 use crate::capture::{MonitorTarget, SourcePicker, WindowTarget};
 use crate::domain::{
-    DisplayCaptureSettings, DisplayCaptureTarget, MediaFileSettings, SceneId, SceneItemId,
-    SourceKind, WindowCaptureSettings, WindowCaptureTarget,
+    DisplayCaptureSettings, DisplayCaptureTarget, ImageSourceSettings, MediaFileSettings, SceneId,
+    SceneItemId, SourceKind, WindowCaptureSettings, WindowCaptureTarget,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
@@ -21,17 +21,18 @@ use super::toolbar::{self, ToolIcon};
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
 const ICON_WIDTH: f32 = 22.0;
 const LIST_ROW_HEIGHT: f32 = 26.0;
-const SOURCE_KIND_LIST_HEIGHT: f32 = 148.0;
+const SOURCE_KIND_LIST_HEIGHT: f32 = 174.0;
 
 /// What the file picker offers before "all files".
 ///
 /// Containers rather than codecs, because that is what a file name says and
-/// what a dialog can filter on. The list is not a claim about what will play:
-/// what opens is whatever this machine's FFmpeg can demux, and a file outside
-/// this list is still reachable through the all-files entry.
+/// what a dialog can filter on. Neither list is a claim about what will open:
+/// what does is whatever this machine's FFmpeg can demux, and a file outside
+/// them is still reachable through the all-files entry.
 const MEDIA_FILE_EXTENSIONS: [&str; 11] = [
     "mp4", "mkv", "mov", "webm", "avi", "m4v", "flv", "ts", "mpg", "mpeg", "wmv",
 ];
+const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "bmp", "webp", "gif", "tif", "tiff"];
 const DISPLAY_LIST_HEIGHT: f32 = 200.0;
 
 #[derive(Default)]
@@ -55,17 +56,28 @@ pub(in crate::ui) struct SourcesPanelState {
     /// opened it and the selected Scene can change while it is up — adding
     /// the file to whichever Scene happens to be showing when the dialog
     /// closes is not what was asked for.
-    media_picker: Option<(SceneId, Receiver<Option<PickedMediaFile>>)>,
+    ///
+    /// One picker for both kinds that take a file: only one dialog can be up
+    /// at a time, and which kind was asked for travels with the answer.
+    file_picker: Option<(SceneId, Receiver<Option<PickedFile>>)>,
     select_new_item: bool,
     rename: Option<RenameState>,
 }
 
 /// What the file picker's thread answers with.
-struct PickedMediaFile {
-    path: PathBuf,
-    /// Read on that thread rather than here: opening a container is quick but
-    /// it is still file I/O, and the picker is already off the UI thread.
-    streams: crate::capture::MediaFileStreams,
+///
+/// Each carries what was read off the file as well as its path. Reading
+/// happens on that thread rather than here: opening a container is quick but
+/// it is still file I/O, and the picker is already off the UI thread.
+enum PickedFile {
+    Media {
+        path: PathBuf,
+        streams: crate::capture::MediaFileStreams,
+    },
+    Image {
+        path: PathBuf,
+        size: Option<[u32; 2]>,
+    },
 }
 
 /// The row being renamed, and what has been typed into it so far.
@@ -86,9 +98,22 @@ enum AddSourceKind {
     DisplayCapture,
     WindowCapture,
     MediaFile,
+    Image,
     #[default]
     Color,
     Drawing,
+}
+
+impl AddSourceKind {
+    /// The two kinds that are a file, and what a dialog should offer for
+    /// each. `None` for the kinds that are picked some other way.
+    fn file_filter(self) -> Option<(TextKey, &'static [&'static str])> {
+        match self {
+            Self::MediaFile => Some((TextKey::SourceMediaFileFilter, &MEDIA_FILE_EXTENSIONS)),
+            Self::Image => Some((TextKey::SourceImageFilter, &IMAGE_EXTENSIONS)),
+            _ => None,
+        }
+    }
 }
 
 /// The gap either side of the disconnected badge.
@@ -125,7 +150,7 @@ pub(in crate::ui) fn show(
         state.select_new_item = false;
     }
     state.known_item_count = snapshot.items.len();
-    poll_media_picker(state, actions);
+    poll_file_picker(state, actions);
 
     // Taken before the strip is shown, so the list gets a `Ui` that cannot
     // reach the buttons — see `toolbar::reserve_list`.
@@ -563,6 +588,15 @@ fn show_add_dialog(
                     add_requested = true;
                 }
 
+                let image_label = i18n.text(TextKey::SourceKindImage);
+                let response = list_row(ui, &image_label, state.add_kind == AddSourceKind::Image);
+                if response.clicked() {
+                    state.add_kind = AddSourceKind::Image;
+                }
+                if response.double_clicked() {
+                    add_requested = true;
+                }
+
                 let color_label = i18n.text(TextKey::SourceKindColor);
                 let response = list_row(ui, &color_label, state.add_kind == AddSourceKind::Color);
                 if response.clicked() {
@@ -619,7 +653,9 @@ fn show_add_dialog(
             AddSourceKind::WindowCapture => {
                 prepare_window_picker(state, snapshot.scene_id, actions)
             }
-            AddSourceKind::MediaFile => open_media_picker(ctx, state, snapshot.scene_id, i18n),
+            kind @ (AddSourceKind::MediaFile | AddSourceKind::Image) => {
+                open_file_picker(ctx, state, snapshot.scene_id, kind, i18n)
+            }
         }
         open = false;
     }
@@ -631,30 +667,37 @@ fn show_add_dialog(
 /// Detached the same way the recording folder's picker is: the dialog outlives
 /// this pass, and dropping the receiver is what tells the thread nobody is
 /// waiting any more. A second one is refused while the first is up.
-fn open_media_picker(
+fn open_file_picker(
     ctx: &egui::Context,
     state: &mut SourcesPanelState,
     scene_id: Option<SceneId>,
+    kind: AddSourceKind,
     i18n: &LocalizationManager,
 ) {
-    let Some(scene_id) = scene_id else {
+    let (Some(scene_id), Some((label, extensions))) = (scene_id, kind.file_filter()) else {
         return;
     };
-    if state.media_picker.is_some() {
+    if state.file_picker.is_some() {
         return;
     }
-    let filter = i18n.text(TextKey::SourceMediaFileFilter).into_owned();
+    let filter = i18n.text(label).into_owned();
     let (sender, receiver) = mpsc::channel();
     let ctx = ctx.clone();
     let spawned = std::thread::Builder::new()
-        .name("media-file-picker".to_owned())
+        .name("source-file-picker".to_owned())
         .spawn(move || {
             let picked = rfd::FileDialog::new()
-                .add_filter(filter, &MEDIA_FILE_EXTENSIONS)
+                .add_filter(filter, extensions)
                 .pick_file()
-                .map(|path| PickedMediaFile {
-                    streams: crate::capture::media_file_streams(&path),
-                    path,
+                .map(|path| match kind {
+                    AddSourceKind::Image => PickedFile::Image {
+                        size: crate::capture::image_size(&path),
+                        path,
+                    },
+                    _ => PickedFile::Media {
+                        streams: crate::capture::media_file_streams(&path),
+                        path,
+                    },
                 });
             if sender.send(picked).is_ok() {
                 ctx.request_repaint();
@@ -664,42 +707,55 @@ fn open_media_picker(
         eprintln!("could not open the file picker: {error}");
         return;
     }
-    state.media_picker = Some((scene_id, receiver));
+    state.file_picker = Some((scene_id, receiver));
 }
 
 /// Takes the file picker's answer, if it has one.
 ///
 /// A cancelled picker is still an answer — it ends the wait — so `Some(None)`
 /// is what tells the two apart.
-fn poll_media_picker(state: &mut SourcesPanelState, actions: &mut Vec<UiAction>) {
-    let Some((scene_id, receiver)) = &state.media_picker else {
+fn poll_file_picker(state: &mut SourcesPanelState, actions: &mut Vec<UiAction>) {
+    let Some((scene_id, receiver)) = &state.file_picker else {
         return;
     };
     let scene_id = *scene_id;
     match receiver.try_recv() {
         Ok(picked) => {
             if let Some(picked) = picked {
-                actions.push(source_action(SourceCommand::AddMediaFile {
-                    scene_id,
-                    settings: MediaFileSettings {
-                        path: picked.path,
-                        // Off to begin with: a file added to a Scene plays
-                        // once unless someone asks for more than that.
-                        looping: false,
-                        size_hint: picked.streams.size,
-                        has_audio: picked.streams.has_audio,
-                        gain_db: 0.0,
-                        muted: false,
-                    },
-                }));
+                actions.push(source_action(add_file(scene_id, picked)));
                 state.select_new_item = true;
             }
-            state.media_picker = None;
+            state.file_picker = None;
         }
         // The thread is gone without answering, which nothing can be done
         // about except stop waiting for it.
-        Err(mpsc::TryRecvError::Disconnected) => state.media_picker = None,
+        Err(mpsc::TryRecvError::Disconnected) => state.file_picker = None,
         Err(mpsc::TryRecvError::Empty) => {}
+    }
+}
+
+fn add_file(scene_id: SceneId, picked: PickedFile) -> SourceCommand {
+    match picked {
+        PickedFile::Media { path, streams } => SourceCommand::AddMediaFile {
+            scene_id,
+            settings: MediaFileSettings {
+                path,
+                // Off to begin with: a file added to a Scene plays once
+                // unless someone asks for more than that.
+                looping: false,
+                size_hint: streams.size,
+                has_audio: streams.has_audio,
+                gain_db: 0.0,
+                muted: false,
+            },
+        },
+        PickedFile::Image { path, size } => SourceCommand::AddImage {
+            scene_id,
+            settings: ImageSourceSettings {
+                path,
+                size_hint: size,
+            },
+        },
     }
 }
 

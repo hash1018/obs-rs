@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -285,6 +285,23 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 10;",
+        )?;
+    }
+
+    if current_version < 11 {
+        // A still picture: the path as it was picked, and the size it was
+        // read at. Nullable for the same reason a media file's is — a file
+        // this machine cannot decode still becomes a Source, and says so
+        // where that happens.
+        transaction.execute_batch(
+            "CREATE TABLE image_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                path      TEXT NOT NULL,
+                width     INTEGER,
+                height    INTEGER
+            );
+
+            PRAGMA user_version = 11;",
         )?;
     }
     transaction.commit()?;

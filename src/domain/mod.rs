@@ -10,6 +10,6 @@ pub use scene::{Scene, SceneId};
 pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
 pub use source::{
     ColorSourceSettings, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    MediaFileSettings, Source, SourceId, SourceKind, SourceSettings, Stroke, WindowCaptureSettings,
-    WindowCaptureTarget,
+    ImageSourceSettings, MediaFileSettings, Source, SourceId, SourceKind, SourceSettings, Stroke,
+    WindowCaptureSettings, WindowCaptureTarget,
 };

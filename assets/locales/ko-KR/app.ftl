@@ -106,6 +106,7 @@ source-kind-window-capture = 윈도우 캡처
 source-kind-video-capture = 비디오 캡처
 source-kind-media-file = 미디어 파일
 source-media-file-filter = 동영상 파일
+source-image-filter = 이미지 파일
 source-ended = 재생 완료
 audio-kind-media-file = 미디어 파일
 source-kind-image = 이미지

@@ -221,6 +221,20 @@ pub struct MediaFileSettings {
     pub muted: bool,
 }
 
+/// A still picture placed in the Scene.
+///
+/// The same shape as a media file's settings minus everything that moves:
+/// one path, stored as it was picked, and the size it was read at. There is
+/// nothing to loop, fade or mute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSourceSettings {
+    pub path: PathBuf,
+    /// The picture's pixel size when it was picked, or `None` when it could
+    /// not be read. A hint like a media file's, and wrong for the same
+    /// reason — a file can be replaced on disk.
+    pub size_hint: Option<[u32; 2]>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
@@ -228,6 +242,7 @@ pub enum SourceSettings {
     DisplayCapture(DisplayCaptureSettings),
     WindowCapture(WindowCaptureSettings),
     MediaFile(MediaFileSettings),
+    Image(ImageSourceSettings),
     None,
 }
 
@@ -255,6 +270,11 @@ impl SourceSettings {
                     [width as f32, height as f32]
                 }),
             Self::MediaFile(settings) => settings
+                .size_hint
+                .map_or([canvas.width, canvas.height], |[width, height]| {
+                    [width as f32, height as f32]
+                }),
+            Self::Image(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {
                     [width as f32, height as f32]

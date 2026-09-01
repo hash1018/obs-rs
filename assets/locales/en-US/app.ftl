@@ -106,6 +106,7 @@ source-kind-window-capture = Window Capture
 source-kind-video-capture = Video Capture
 source-kind-media-file = Media File
 source-media-file-filter = Video files
+source-image-filter = Image files
 source-ended = Ended
 audio-kind-media-file = Media file
 source-kind-image = Image

@@ -5,9 +5,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, SceneCanvas, SceneId, SceneItem, SceneItemId,
-    Source, SourceId, SourceKind, SourceSettings, Stroke, Transform, WindowCaptureSettings,
-    WindowCaptureTarget,
+    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, SceneCanvas, SceneId,
+    SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke, Transform,
+    WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -102,7 +102,10 @@ impl SourceStore {
                 media_file_settings.height,
                 media_file_settings.has_audio,
                 media_file_settings.gain_db,
-                media_file_settings.muted
+                media_file_settings.muted,
+                image_source_settings.path,
+                image_source_settings.width,
+                image_source_settings.height
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -115,6 +118,8 @@ impl SourceStore {
                 ON window_capture_settings.source_id = sources.id
              LEFT JOIN media_file_settings
                 ON media_file_settings.source_id = sources.id
+             LEFT JOIN image_source_settings
+                ON image_source_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -197,6 +202,13 @@ impl SourceStore {
                         has_audio: row.get(41)?,
                         gain_db: row.get(42)?,
                         muted: row.get(43)?,
+                    }),
+                    SourceKind::Image => SourceSettings::Image(ImageSourceSettings {
+                        path: PathBuf::from(row.get::<_, String>(44)?),
+                        size_hint: match (row.get(45)?, row.get(46)?) {
+                            (Some(width), Some(height)) => Some([width, height]),
+                            _ => None,
+                        },
                     }),
                     _ => SourceSettings::None,
                 };
@@ -483,13 +495,7 @@ impl SourceStore {
         scene_id: SceneId,
         settings: &MediaFileSettings,
     ) -> PersistenceResult<SceneItemId> {
-        let base = settings
-            .path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or_else(|| "Media Source".to_owned());
-        let name = unique_source_name(transaction, &base)?;
+        let name = unique_source_name(transaction, &file_stem(&settings.path, "Media Source"))?;
         let source_id = create(transaction, &name, SourceKind::MediaFile)?;
         let [width, height] = settings
             .size_hint
@@ -508,6 +514,26 @@ impl SourceStore {
                 settings.gain_db,
                 settings.muted
             ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
+    /// Adds an image Source, named after the file — see
+    /// [`SourceStore::add_media_file`] for why the file's own name.
+    pub(crate) fn add_image(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        settings: &ImageSourceSettings,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, &file_stem(&settings.path, "Image"))?;
+        let source_id = create(transaction, &name, SourceKind::Image)?;
+        let [width, height] = settings
+            .size_hint
+            .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
+        transaction.execute(
+            "INSERT INTO image_source_settings (source_id, path, width, height)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![source_id.0, settings.path.to_string_lossy(), width, height],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
     }
@@ -828,6 +854,15 @@ fn set_media_column<T: rusqlite::ToSql>(
         params![value, scene_item_id.0],
     )?;
     Ok(())
+}
+
+/// What to call a Source made from a file: the file's own name, or `fallback`
+/// for a path that has none to give.
+fn file_stem(path: &std::path::Path, fallback: &str) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 fn create(

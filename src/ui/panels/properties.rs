@@ -206,6 +206,11 @@ fn show_settings(
             );
             show_looping(ui, item.id, settings.looping, i18n, actions);
         }
+        SourceSettings::Image(settings) => row(
+            ui,
+            i18n.text(TextKey::PropertiesFile).as_ref(),
+            &settings.path.display().to_string(),
+        ),
         SourceSettings::None => {}
     }
 }
