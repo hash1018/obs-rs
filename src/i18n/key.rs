@@ -112,6 +112,8 @@ pub enum TextKey {
     ExitWhileRecordingBody,
     ExitStopAndQuit,
     ExitKeepRecording,
+    /// Beside the clock while a recording is running.
+    StatusRecording,
     StatusRecordingFailed,
     StatusRecordingPaused,
     StatusReady,
@@ -301,6 +303,7 @@ impl TextKey {
             Self::ExitWhileRecordingBody => "exit-while-recording-body",
             Self::ExitStopAndQuit => "exit-stop-and-quit",
             Self::ExitKeepRecording => "exit-keep-recording",
+            Self::StatusRecording => "status-recording",
             Self::StatusRecordingFailed => "status-recording-failed",
             Self::StatusRecordingPaused => "status-recording-paused",
             Self::StatusReady => "status-ready",

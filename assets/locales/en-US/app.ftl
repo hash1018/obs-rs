@@ -61,6 +61,7 @@ control-resume-recording = Resume Recording
 control-stop-recording = Stop Recording
 control-settings = Settings
 status-ready = Ready
+status-recording = Recording
 status-recording-failed = Recording could not start — {$reason}
 status-recording-paused = Recording is paused
 status-gpu-process = GPU used by obs-rs

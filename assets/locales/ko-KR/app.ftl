@@ -61,6 +61,7 @@ control-resume-recording = 녹화 재개
 control-stop-recording = 녹화 중지
 control-settings = 설정
 status-ready = 준비
+status-recording = 녹화 중
 status-recording-failed = 녹화를 시작할 수 없습니다 — {$reason}
 status-recording-paused = 녹화가 일시정지되었습니다
 status-gpu-process = obs-rs가 사용 중인 GPU

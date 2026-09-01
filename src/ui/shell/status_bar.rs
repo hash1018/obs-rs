@@ -39,20 +39,50 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     ui.monospace(format_memory(status.memory))
                         .on_hover_text(memory_tooltip(status.memory, i18n));
                     ui.separator();
-                    // Marked rather than left to a clock that has merely
-                    // stopped moving: a still figure and a stalled
-                    // application look the same for the first few seconds.
                     let clock = format_recording_time(status.recording_elapsed);
-                    if status.recording_paused {
-                        ui.monospace(egui::RichText::new(clock).color(ui.visuals().warn_fg_color))
-                            .on_hover_text(i18n.text(TextKey::StatusRecordingPaused));
-                    } else {
-                        ui.monospace(clock);
+                    match recording_mark(ui.visuals(), status) {
+                        Some((colour, reason)) => {
+                            ui.monospace(egui::RichText::new(clock).color(colour))
+                                .on_hover_text(i18n.text(reason));
+                        }
+                        None => {
+                            ui.monospace(clock);
+                        }
                     }
                 });
             });
         });
 }
+
+/// What the recording clock is coloured, and the line that says why.
+///
+/// `None` while nothing is recording: the clock then reads `REC --:--:--`,
+/// which is a placeholder holding its own width rather than a state to
+/// announce, and colouring it would say something is happening.
+///
+/// Red while it runs, which is the one convention every recorder in the world
+/// shares — a running clock in the same grey as the CPU reading beside it is
+/// a number nobody's eye is drawn to. Paused keeps the warning colour it
+/// already had: a still figure and a stalled application look alike for the
+/// first few seconds, so the difference has to be marked rather than left to
+/// a clock that has merely stopped moving.
+fn recording_mark(
+    visuals: &egui::Visuals,
+    status: &StatusSnapshot,
+) -> Option<(egui::Color32, TextKey)> {
+    status.recording_elapsed?;
+    Some(if status.recording_paused {
+        (visuals.warn_fg_color, TextKey::StatusRecordingPaused)
+    } else {
+        (RECORDING_COLOR, TextKey::StatusRecording)
+    })
+}
+
+/// The recording red, and the same one the mixer paints a clipped channel
+/// with — one red in the application rather than one per dock. Light enough
+/// to read on the dark panel fill and dark enough to read on the light one,
+/// which is why it is a literal rather than either theme's own.
+const RECORDING_COLOR: egui::Color32 = egui::Color32::from_rgb(230, 60, 50);
 
 /// The gap either side of a separator in the status bar. What tells two
 /// readings apart is the separator between them, so this only has to keep
@@ -208,6 +238,38 @@ fn format_fps(active: Option<f32>, target: Option<f32>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn status(elapsed: Option<Duration>, paused: bool) -> StatusSnapshot {
+        StatusSnapshot {
+            recording_elapsed: elapsed,
+            recording_paused: paused,
+            ..StatusSnapshot::default()
+        }
+    }
+
+    /// Three states, and the middle one is the reason this is not a boolean:
+    /// a paused recording is still a recording, and marking it in the running
+    /// colour would say it is still writing.
+    #[test]
+    fn the_clock_is_red_while_it_runs_and_only_while_it_runs() {
+        let visuals = egui::Visuals::dark();
+        let running = status(Some(Duration::from_secs(5)), false);
+        let paused = status(Some(Duration::from_secs(5)), true);
+
+        assert_eq!(
+            recording_mark(&visuals, &running),
+            Some((RECORDING_COLOR, TextKey::StatusRecording))
+        );
+        assert_eq!(
+            recording_mark(&visuals, &paused),
+            Some((visuals.warn_fg_color, TextKey::StatusRecordingPaused))
+        );
+        assert_eq!(
+            recording_mark(&visuals, &status(None, false)),
+            None,
+            "an idle bar shows a placeholder, which is not a state to colour"
+        );
+    }
 
     #[test]
     fn recording_time_is_zero_padded() {

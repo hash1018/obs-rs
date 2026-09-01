@@ -273,6 +273,8 @@ Windows has no plain call for the private working set — `GetProcessMemoryInfo`
 
 The GPU is in neither figure, which is worth knowing before reading these as the application's whole appetite. Measured here: removing two 1080p Display Captures freed 18 MB of dedicated video memory and moved the private figures by one megabyte. Dedicated VRAM is simply not charged to the process — only whatever system memory the driver uses alongside it, which was 95 MB of the 507. What the rest of that claim is has not been accounted for, and this bar does not pretend to say.
 
+The recording clock is the one reading with a colour. It is red while a recording is running, the convention every recorder shares and the thing that makes a running clock findable in a row of grey figures; the warning colour while one is paused, because a still figure and a stalled application look alike for the first few seconds; and unmarked while nothing is recording, when `REC --:--:--` is a placeholder holding its own width rather than a state. The hover says which of the three it is, so the colour is not carrying the meaning alone.
+
 Per-process NVML is trusted only once obs-rs's own process has appeared in a sample. A driver that answers a poll with other processes' entries and never ours is indistinguishable from obs-rs using no GPU, and treating that as zero would alternate a false `0.0%` with the real device figure.
 
 ## Localization
