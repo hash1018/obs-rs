@@ -652,6 +652,7 @@ fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
         | SourceSettings::DisplayCapture(_)
         | SourceSettings::WindowCapture(_)
         | SourceSettings::MediaFile(_)
+        | SourceSettings::Rtsp(_)
         | SourceSettings::Image(_)
         | SourceSettings::None => ui.visuals().widgets.inactive.bg_fill,
     }

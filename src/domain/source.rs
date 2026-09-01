@@ -12,6 +12,8 @@ pub enum SourceKind {
     WindowCapture,
     VideoCapture,
     MediaFile,
+    /// A live network stream, pulled over RTSP — an IP camera, most often.
+    Rtsp,
     Image,
     Color,
     Drawing,
@@ -24,6 +26,7 @@ impl SourceKind {
             Self::WindowCapture => "window_capture",
             Self::VideoCapture => "video_capture",
             Self::MediaFile => "media_file",
+            Self::Rtsp => "rtsp",
             Self::Image => "image",
             Self::Color => "color",
             Self::Drawing => "drawing",
@@ -36,6 +39,7 @@ impl SourceKind {
             "window_capture" => Some(Self::WindowCapture),
             "video_capture" => Some(Self::VideoCapture),
             "media_file" => Some(Self::MediaFile),
+            "rtsp" => Some(Self::Rtsp),
             "image" => Some(Self::Image),
             "color" => Some(Self::Color),
             "drawing" => Some(Self::Drawing),
@@ -252,9 +256,75 @@ pub struct ImageSourceSettings {
     pub size_hint: Option<[u32; 2]>,
 }
 
+/// How the video is carried once an RTSP session is negotiated.
+///
+/// The same two `media_pp::elements::RtspTransport` offers, mirrored here so
+/// the project's own types do not depend on the pipeline library's — this is
+/// stored in the database and read by the UI, neither of which should have to
+/// know what the element takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RtspTransport {
+    /// Interleaved in the control connection. The default because it is the
+    /// one that crosses a firewall or a NAT without being arranged for.
+    #[default]
+    Tcp,
+    /// Separate RTP and RTCP ports, negotiated with the server. Lower latency
+    /// on a network you control, and nothing at all on one where those ports
+    /// do not get through — which is why it is a choice rather than a guess.
+    Udp,
+}
+
+impl RtspTransport {
+    pub(crate) fn storage_name(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        }
+    }
+
+    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "tcp" => Some(Self::Tcp),
+            "udp" => Some(Self::Udp),
+            _ => None,
+        }
+    }
+}
+
+/// A live stream, and what to do when it stops arriving.
+///
+/// The URL is stored as it was typed and never resolved to anything else. A
+/// camera that is switched off, rebooting, or behind a network that is down
+/// is an ordinary state rather than an error — the same standing a closed
+/// window has — so the Source waits for it instead of failing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RtspSourceSettings {
+    pub url: String,
+    pub transport: RtspTransport,
+    /// How long to wait before connecting again after the stream stops, or
+    /// `None` to leave it to the user.
+    ///
+    /// A dropped stream is what a camera does when it reboots, so trying
+    /// again by itself is usually what is wanted. `None` is for the case
+    /// where it is not — a connection that is metered, or a camera that is
+    /// only occasionally on — and then the Sources dock offers it the way it
+    /// offers a disconnected window capture.
+    pub reconnect: Option<Duration>,
+    /// The video's pixel size as the stream reported it when it was added, or
+    /// `None` when nothing could be read — an address that was not answering
+    /// yet still becomes a Source.
+    pub size_hint: Option<[u32; 2]>,
+    /// Whether the stream announced a sound track when it was added. What the
+    /// Audio Mixer draws a channel from, on the same terms as a media file's.
+    pub has_audio: bool,
+    pub gain_db: f32,
+    pub muted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
+    Rtsp(RtspSourceSettings),
     Drawing(DrawingSourceSettings),
     DisplayCapture(DisplayCaptureSettings),
     WindowCapture(WindowCaptureSettings),
@@ -287,6 +357,11 @@ impl SourceSettings {
                     [width as f32, height as f32]
                 }),
             Self::MediaFile(settings) => settings
+                .size_hint
+                .map_or([canvas.width, canvas.height], |[width, height]| {
+                    [width as f32, height as f32]
+                }),
+            Self::Rtsp(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {
                     [width as f32, height as f32]

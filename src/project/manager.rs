@@ -180,6 +180,16 @@ fn handle_source_command(
             SourceStore::add_image(transaction, scene_id, &settings)?;
             Ok(())
         }
+        SourceCommand::AddRtsp { scene_id, settings } => {
+            SourceStore::add_rtsp(transaction, scene_id, &settings)?;
+            Ok(())
+        }
+        SourceCommand::SetRtspTransport(scene_item_id, transport) => {
+            SourceStore::set_rtsp_transport(transaction, scene_item_id, transport)
+        }
+        SourceCommand::SetRtspReconnect(scene_item_id, reconnect) => {
+            SourceStore::set_rtsp_reconnect(transaction, scene_item_id, reconnect)
+        }
         SourceCommand::SetMediaLooping(scene_item_id, looping) => {
             SourceStore::set_media_looping(transaction, scene_item_id, looping)
         }

@@ -183,6 +183,53 @@ pub fn media_file_streams(path: &Path) -> MediaFileStreams {
     }
 }
 
+/// What a live stream announced when it was asked, or why it could not be.
+///
+/// Asked once, when the Source is added, and not again: what this decides is
+/// the shape a new SceneItem starts at and whether its sound gets a channel
+/// in the mixer. A camera that is switched off *afterwards* is an ordinary
+/// state the Source waits out — see `engine::source::rtsp` — but one that
+/// cannot be reached when it is being added is more likely a typed address
+/// that is wrong, and saying so beats a Source that sits there reconnecting
+/// to nothing.
+///
+/// The timeout is short for the same reason: somebody is waiting for the
+/// dialog to answer.
+pub fn network_stream(
+    url: &str,
+    transport: crate::domain::RtspTransport,
+) -> Result<NetworkStream, String> {
+    use media_pp::ffmpeg;
+
+    let mut options = ffmpeg::Dictionary::new();
+    options.set(
+        "rtsp_transport",
+        match transport {
+            crate::domain::RtspTransport::Tcp => "tcp",
+            crate::domain::RtspTransport::Udp => "udp",
+        },
+    );
+    options.set("timeout", &PROBE_TIMEOUT.as_micros().to_string());
+    let input =
+        ffmpeg::format::input_with_dictionary(url, options).map_err(|error| error.to_string())?;
+    Ok(NetworkStream {
+        size: video_size(&input),
+        has_audio: input
+            .streams()
+            .any(|stream| stream.parameters().medium() == ffmpeg::media::Type::Audio),
+    })
+}
+
+/// What one is, as far as adding it needs to know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkStream {
+    pub size: Option<[u32; 2]>,
+    pub has_audio: bool,
+}
+
+/// How long the dialog waits for an address before saying it is not there.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// The pixel size of a still picture, or `None` when it will not open.
 ///
 /// The same reading as a media file's, and through the same library: an image

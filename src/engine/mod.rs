@@ -688,6 +688,7 @@ fn run(
                 looked_for_missing = Instant::now();
                 notice_closed_windows(&backend, &mut open, &scene);
                 notice_ended_media(&backend, &mut open, &scene);
+                notice_dropped_streams(&backend, &mut open, &scene);
                 retry_missing(&engine, recording.mixer_handle(), &mut open, &scene);
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -1135,12 +1136,17 @@ enum SourceState {
     Failed,
     /// Opened cleanly, and the thing it captures is not here right now.
     ///
+    /// The instant is when it started waiting, because how long to wait is
+    /// not one number: a window comes back when the user reopens it and a
+    /// camera comes back when it has finished rebooting, so a stream carries
+    /// its own interval — see `retry_after`.
+    ///
     /// Only a Window Capture reaches this: a window is closed and reopened
     /// as a matter of course, so its absence is a state rather than a
     /// failure. Unlike `Failed` it is looked at again — see `retry_missing`
     /// — and nothing was opened, so there is nothing holding a dialog or a
     /// device while it waits.
-    Missing,
+    Missing(Instant),
     /// Not running, and nothing here may open it again.
     ///
     /// The window a Window Capture was showing has closed, or opening it did
@@ -1164,12 +1170,27 @@ enum SourceState {
     Ended,
 }
 
-/// How long a `Missing` Source waits before it is looked for again.
+/// How long a `Missing` Source waits before it is looked for again, unless
+/// its own settings say otherwise.
 ///
 /// The look enumerates every top-level window, so it is not something to do
 /// on every idle tick; a second is well under what anyone notices between
 /// bringing a window back and seeing it in the Scene.
 const MISSING_RETRY: Duration = Duration::from_secs(1);
+
+/// How long this item waits before it is tried again.
+///
+/// A live stream carries its own, because the wait is a request to somebody
+/// else's machine rather than a look at this one: a camera that is rebooting
+/// wants to be left alone for a moment, and one on a metered link may not
+/// want to be asked at all — which is `None`, and is why such a Source is
+/// held `Disconnected` rather than `Missing` in the first place.
+fn retry_after(item: &SceneItemSnapshot) -> Duration {
+    match &item.settings {
+        SourceSettings::Rtsp(settings) => settings.reconnect.unwrap_or(MISSING_RETRY),
+        _ => MISSING_RETRY,
+    }
+}
 
 /// Opens one Scene item, turning both kinds of "no Source" into a state.
 fn request_open(
@@ -1250,7 +1271,7 @@ fn state_of(
     match result {
         // Nothing to open yet, and nothing wrong. Looked at again on the next
         // pass rather than reported.
-        Ok(None) => SourceState::Missing,
+        Ok(None) => SourceState::Missing(Instant::now()),
         Ok(Some(source)) => {
             // The portal may hand back a different token than the one it was
             // given. Keeping the old one would mean prompting on every launch,
@@ -1363,7 +1384,49 @@ fn publish_media_meters(published: &Published, open: &HashMap<SceneItemId, Sourc
 fn needs_asking(item: &SceneItemSnapshot) -> bool {
     match &item.settings {
         SourceSettings::WindowCapture(settings) => !settings.target.can_be_reopened_silently(),
+        // Not because looking costs a dialog, but because the user said not
+        // to: a stream with no reconnect interval is one this may not go back
+        // to on its own, and the Sources dock offers it the same way it
+        // offers a window whose picker cannot be reopened silently.
+        SourceSettings::Rtsp(settings) => settings.reconnect.is_none(),
         _ => false,
+    }
+}
+
+/// Puts a live stream that stopped arriving back where it can be reconnected.
+///
+/// `RtspSource` does not reconnect: a read that fails ends it with an error
+/// and the pipeline finishes, which — since a pipeline is one-shot — means
+/// coming back is a new one. Nothing tells the engine that, so it asks, the
+/// same way it asks about a window that closed.
+///
+/// Where the Source may reconnect by itself this is `Missing` and
+/// `retry_missing` opens it again after its own interval; where it may not it
+/// is `Disconnected` and waits to be asked.
+fn notice_dropped_streams(
+    backend: &Backend,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    snapshot: &SourcesSnapshot,
+) {
+    for item in &snapshot.items {
+        if item.kind != SourceKind::Rtsp {
+            continue;
+        }
+        let Some(SourceState::Open(source)) = open.get(&item.id) else {
+            continue;
+        };
+        if !source.source.ended() {
+            continue;
+        }
+        eprintln!("\"{}\": the stream stopped arriving", item.name);
+        source.source.stop();
+        backend.remove_source(&source.name);
+        let state = if needs_asking(item) {
+            SourceState::Disconnected
+        } else {
+            SourceState::Missing(Instant::now())
+        };
+        open.insert(item.id, state);
     }
 }
 
@@ -1397,7 +1460,7 @@ fn notice_closed_windows(
         let state = if needs_asking(item) {
             SourceState::Disconnected
         } else {
-            SourceState::Missing
+            SourceState::Missing(Instant::now())
         };
         open.insert(item.id, state);
     }
@@ -1455,13 +1518,18 @@ fn retry_missing(
 ) {
     if !open
         .values()
-        .any(|state| matches!(state, SourceState::Missing))
+        .any(|state| matches!(state, SourceState::Missing(_)))
     {
         return;
     }
     let count = snapshot.items.len();
     for (index, item) in snapshot.items.iter().enumerate() {
-        if !matches!(open.get(&item.id), Some(SourceState::Missing)) {
+        let Some(SourceState::Missing(since)) = open.get(&item.id) else {
+            continue;
+        };
+        // Each on its own clock: a stream that asked to be left for a minute
+        // must not be reconnected on the tick that suits a window.
+        if since.elapsed() < retry_after(item) {
             continue;
         }
         let layer = layer_for(item, item.transform, (count - index) as i32);
@@ -1491,7 +1559,7 @@ fn reconcile(
             // Already on its way, and asking again would only open a second
             // one of whatever this is.
             Some(SourceState::Opening) => {}
-            Some(SourceState::Missing) | None => {
+            Some(SourceState::Missing(_)) | None => {
                 request_open(engine, mixer, open, item, layer);
             }
         }
@@ -1740,6 +1808,56 @@ mod tests {
         );
     }
 
+    fn stream_item(id: i64, reconnect: Option<Duration>) -> SceneItemSnapshot {
+        let mut item = window_item(
+            id,
+            WindowCaptureTarget::Portal {
+                restore_token: None,
+            },
+        );
+        item.kind = SourceKind::Rtsp;
+        item.settings = SourceSettings::Rtsp(crate::domain::RtspSourceSettings {
+            url: "rtsp://10.0.0.7/main".to_owned(),
+            transport: crate::domain::RtspTransport::Tcp,
+            reconnect,
+            size_hint: None,
+            has_audio: false,
+            gain_db: 0.0,
+            muted: false,
+        });
+        item
+    }
+
+    /// A stream that may reconnect waits its own interval; one that may not
+    /// is not waiting at all — it is `Disconnected`, and `needs_asking` is
+    /// what puts it there.
+    #[test]
+    fn a_stream_waits_the_interval_it_was_given() {
+        let every_minute = stream_item(1, Some(Duration::from_secs(60)));
+        assert_eq!(retry_after(&every_minute), Duration::from_secs(60));
+        assert!(
+            !needs_asking(&every_minute),
+            "a stream with an interval reconnects by itself"
+        );
+
+        let never = stream_item(2, None);
+        assert!(
+            needs_asking(&never),
+            "a stream told not to reconnect waits to be asked, like a portal window"
+        );
+
+        // Everything else is on the tick, which is what a window's search has
+        // always run at.
+        let window = window_item(
+            3,
+            WindowCaptureTarget::Window {
+                process: "firefox".into(),
+                title: "obs-rs".into(),
+            },
+        );
+        assert_eq!(retry_after(&window), MISSING_RETRY);
+    }
+
     /// Two claims at once, because the second is what makes the first cheap:
     /// the map says which Sources are dark and why, and it is replaced only
     /// when that answer moves. The UI reads it on every pass.
@@ -1755,7 +1873,7 @@ mod tests {
         );
 
         open.insert(SceneItemId(1), SourceState::Disconnected);
-        open.insert(SceneItemId(2), SourceState::Missing);
+        open.insert(SceneItemId(2), SourceState::Missing(Instant::now()));
         // A file that played out is dark for a different reason, and says so.
         open.insert(SceneItemId(3), SourceState::Ended);
         // Still being opened, which is not a state to report: a badge beside

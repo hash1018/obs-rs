@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -321,6 +321,31 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
                 ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));
 
             PRAGMA user_version = 12;",
+        )?;
+    }
+
+    if current_version < 13 {
+        // A live network stream: the address as it was typed, how the session
+        // carries it, and how long to wait before connecting again when it
+        // stops. `reconnect_seconds` is nullable rather than zero-for-off —
+        // zero is a legitimate figure a user could ask for and "never" is not
+        // a duration, so the absence is stored as absence. The size is
+        // nullable for the same reason a media file's is: an address that was
+        // not answering yet still becomes a Source.
+        transaction.execute_batch(
+            "CREATE TABLE rtsp_source_settings (
+                source_id         INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                url               TEXT NOT NULL,
+                transport         TEXT NOT NULL CHECK (transport IN ('tcp', 'udp')),
+                reconnect_seconds INTEGER CHECK (reconnect_seconds > 0),
+                width             INTEGER,
+                height            INTEGER,
+                has_audio         INTEGER NOT NULL CHECK (has_audio IN (0, 1)),
+                gain_db           REAL NOT NULL,
+                muted             INTEGER NOT NULL CHECK (muted IN (0, 1))
+            );
+
+            PRAGMA user_version = 13;",
         )?;
     }
     transaction.commit()?;

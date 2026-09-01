@@ -15,6 +15,8 @@ pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
 pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
+pub(in crate::engine) mod rtsp;
+pub(in crate::engine) mod sound;
 pub(in crate::engine) mod window_capture;
 
 use std::sync::Arc;
@@ -86,7 +88,12 @@ pub(in crate::engine) struct OpenSource {
 /// where it sits — is either fixed for the life of the Source or belongs to
 /// the SceneItem rather than to it.
 pub(in crate::engine) struct MediaFile {
-    pub(in crate::engine) looping: media_pp::elements::FileDemuxerHandle,
+    /// A file's own end-of-file behaviour, and `None` for a live stream —
+    /// which fills this struct for its sound and its meter and has no
+    /// timeline to loop. The name is the file's because a file is what it
+    /// was written for; what the two share is that they carry their own
+    /// sound, which is the half a stream uses.
+    pub(in crate::engine) looping: Option<media_pp::elements::FileDemuxerHandle>,
     /// The file's own fader, and `None` for a file with no sound — or one
     /// opened on a machine whose mixer never started, which is the same
     /// thing from here: there is nothing to turn down.
@@ -154,7 +161,9 @@ pub(in crate::engine) fn refresh_media_file(source: &OpenSource, item: &SceneIte
     let SourceSettings::MediaFile(settings) = &item.settings else {
         return;
     };
-    media.looping.set_looping(settings.looping);
+    if let Some(looping) = &media.looping {
+        looping.set_looping(settings.looping);
+    }
     if let Some(volume) = &media.volume {
         let _ = volume.set_gain_db(settings.gain_db);
         volume.set_muted(muted(settings.muted, item.visible));

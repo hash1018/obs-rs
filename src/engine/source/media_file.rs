@@ -59,14 +59,14 @@ use std::sync::atomic::Ordering;
 use media_pp::element::Context;
 use media_pp::element::Sink;
 use media_pp::elements::{
-    AppSink, AudioVolume, AudioVolumeHandle, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer,
-    StreamInfo, SwDecoder, TeeBuilder,
+    AppSink, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer, StreamInfo, TeeBuilder,
 };
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
 use crate::domain::MediaFileSettings;
 use crate::engine::backend::BackendError;
+use crate::engine::source::sound::{self, Sound, Track};
 use crate::engine::source::{MediaMeters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
@@ -95,15 +95,6 @@ const QUEUE_DEPTH: usize = 8;
 /// surface each.
 const PACKET_LOOKAHEAD: usize = 64;
 
-/// Decoded audio frames kept ahead of the audio `Pacer`, at 1024 samples
-/// each — about a second and a half.
-///
-/// The read-ahead above is only as deep as the shallowest branch: whichever
-/// queue fills first blocks the shared cursor for both. Audio frames are
-/// small and hold no decoder surface, so this is the branch that can afford
-/// to be the deep one.
-const AUDIO_QUEUE_DEPTH: usize = 64;
-
 /// Decoded frames the hardware decoder must have surfaces for beyond its own
 /// reference frames.
 ///
@@ -122,13 +113,6 @@ struct Chosen {
     /// `None` for a file with no audio, and for a machine whose mixer never
     /// started — the picture is worth showing either way.
     audio: Option<Track>,
-}
-
-/// One decoded stream's index and what is needed to build its branch.
-struct Track {
-    index: usize,
-    params: ffmpeg::codec::Parameters,
-    time_base: ffmpeg::Rational,
 }
 
 /// The settings this item is, and the file it names — or `None` where the
@@ -218,33 +202,6 @@ fn start(pipeline: &Arc<Pipeline>, paused: bool) -> Result<(), BackendError> {
     Ok(())
 }
 
-/// What this Source registers its audio with the mixer as.
-///
-/// Distinct from the compositor's input name even though the two registries
-/// could not collide, so a log naming one is never ambiguous about which.
-fn audio_name(name: &str) -> String {
-    format!("{name}-audio")
-}
-
-/// The audio branch, built before the pipeline is.
-///
-/// Everything here can fail for an ordinary reason — a codec this FFmpeg was
-/// not built with, a mixer that has gone — so it is built where an error can
-/// be reported rather than unwrapped inside the builder closure, on the
-/// engine thread.
-struct Audio {
-    index: usize,
-    time_base: ffmpeg::Rational,
-    decoder: SwDecoder,
-    fader: AudioVolume,
-    /// What the Audio Mixer dock moves, and what it reads.
-    volume: AudioVolumeHandle,
-    /// The mixer input this file's sound is summed into.
-    mix: Box<dyn Sink>,
-    /// The `AppSink` that measures the level.
-    meter: Box<dyn Sink>,
-}
-
 /// The sink that records where playback has reached, and how it is wired.
 ///
 /// On the *video* branch rather than the audio one, because every media file
@@ -275,8 +232,7 @@ fn position_sink(
     }))
 }
 
-/// Builds it, or answers `None` for a file with no sound and for a machine
-/// whose mixer never started — the picture is worth showing either way.
+/// This file's sound, if it has any and there is a mixer to take it.
 fn audio(
     name: &str,
     track: Option<Track>,
@@ -284,44 +240,15 @@ fn audio(
     settings: &MediaFileSettings,
     item: &SceneItemSnapshot,
     meters: &Arc<MediaMeters>,
-) -> Result<Option<Audio>, BackendError> {
-    let (Some(track), Some(mixer)) = (track, mixer) else {
-        return Ok(None);
-    };
-    let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
-
-    // The fader lives in this pipeline rather than the audio thread's,
-    // because this file's sound belongs to this Source rather than to a
-    // device everything shares.
-    let (fader, volume) = AudioVolume::new(format!("{name}-volume"));
-    let _ = volume.set_gain_db(settings.gain_db);
-    volume.set_muted(super::muted(settings.muted, item.visible));
-
-    let meter = AppSink::new(format!("{name}-meter"), {
-        let meters = Arc::clone(meters);
-        move |buffer| {
-            if let media_pp::buffer::MediaBuffer::Audio(frame) = &buffer {
-                meters.peak.store(
-                    crate::engine::audio::peak_db(frame).to_bits(),
-                    Ordering::Relaxed,
-                );
-            }
-            Ok(())
-        }
-    });
-
-    let mix = mixer
-        .add_source(audio_name(name))
-        .ok_or("the audio mixer is gone")?;
-    Ok(Some(Audio {
-        index: track.index,
-        time_base: track.time_base,
-        decoder,
-        fader,
-        volume,
-        mix,
-        meter: Box::new(meter),
-    }))
+) -> Result<Option<Sound>, BackendError> {
+    sound::build(
+        name,
+        track,
+        mixer,
+        settings.gain_db,
+        super::muted(settings.muted, item.visible),
+        meters,
+    )
 }
 
 /// Attaches it to the demuxer's audio pad.
@@ -357,28 +284,6 @@ fn attach_video(
         .pipe(Pacer::new("video-pacer", time_base)?)
         .to_branch(tee)?;
     context.attach(source, index, paced)?;
-    Ok(())
-}
-
-fn attach_audio(
-    context: &Arc<Context>,
-    source: &mut FileDemuxer,
-    audio: Audio,
-) -> media_pp::error::Result<()> {
-    let meter = context.branch().to(audio.meter)?;
-    let mix = context.branch().to(audio.mix)?;
-    let tee = TeeBuilder::new("audio-tee", context.clone())
-        .branch(meter)
-        .branch(mix)
-        .build()?;
-    let faded = context
-        .branch()
-        .pipe(audio.decoder)
-        .queue("audio", AUDIO_QUEUE_DEPTH)
-        .pipe(Pacer::new("audio-pacer", audio.time_base)?)
-        .pipe(audio.fader)
-        .to_branch(tee)?;
-    context.attach(source, audio.index, faded)?;
     Ok(())
 }
 
@@ -445,7 +350,7 @@ pub(in crate::engine) fn open(
         )?;
 
         if let Some(audio) = audio {
-            attach_audio(context, source, audio)?;
+            sound::attach(context, source, audio)?;
         }
         Ok(())
     })?;
@@ -460,7 +365,7 @@ pub(in crate::engine) fn open(
         running: !settings.paused,
         pushed: None,
         media_file: Some(MediaFile {
-            looping,
+            looping: Some(looping),
             volume,
             meters,
             pipeline: Arc::clone(&pipeline),
@@ -528,7 +433,7 @@ pub(in crate::engine) fn open(
         )?;
 
         if let Some(audio) = audio {
-            attach_audio(context, source, audio)?;
+            sound::attach(context, source, audio)?;
         }
         Ok(())
     })?;
@@ -543,7 +448,7 @@ pub(in crate::engine) fn open(
         running: !settings.paused,
         pushed: None,
         media_file: Some(MediaFile {
-            looping,
+            looping: Some(looping),
             volume,
             meters,
             pipeline: Arc::clone(&pipeline),

@@ -1,6 +1,7 @@
 use crate::domain::{
-    AudioSourceId, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings, SceneId,
-    SceneItemId, Stroke, Transform, WindowCaptureSettings,
+    AudioSourceId, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
+    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
+    WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +50,10 @@ pub enum SourceCommand {
         scene_id: SceneId,
         settings: ImageSourceSettings,
     },
+    AddRtsp {
+        scene_id: SceneId,
+        settings: RtspSourceSettings,
+    },
     Delete(SceneItemId),
     MoveUp(SceneItemId),
     MoveDown(SceneItemId),
@@ -91,6 +96,17 @@ pub enum SourceCommand {
     /// handle rather than reopened, so switching this does not restart what
     /// is playing.
     SetMediaLooping(SceneItemId, bool),
+    /// How a live stream's session carries its video.
+    ///
+    /// Unlike the media file settings above, this cannot take effect where it
+    /// is: a transport is negotiated when the session opens, so the Source is
+    /// reopened to apply it — which for a stream is a reconnect and nothing
+    /// more.
+    SetRtspTransport(SceneItemId, RtspTransport),
+    /// How long to wait before connecting again after a stream drops, or
+    /// `None` to leave it to the user. Read the next time it drops, so
+    /// changing it disturbs nothing that is running.
+    SetRtspReconnect(SceneItemId, Option<std::time::Duration>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

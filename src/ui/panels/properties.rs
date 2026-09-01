@@ -212,6 +212,18 @@ fn show_settings(
             show_looping(ui, item.id, settings.looping, i18n, actions);
             show_playback(ui, item, settings, ended, i18n, actions);
         }
+        SourceSettings::Rtsp(settings) => {
+            // The whole address, elided with the rest on hover: two cameras
+            // differ by a path or a port, which is exactly the part a
+            // shortened URL would drop.
+            row(
+                ui,
+                i18n.text(TextKey::PropertiesUrl).as_ref(),
+                &settings.url,
+            );
+            show_transport(ui, item.id, settings.transport, i18n, actions);
+            show_reconnect(ui, item.id, settings.reconnect, i18n, actions);
+        }
         SourceSettings::Image(settings) => row(
             ui,
             i18n.text(TextKey::PropertiesFile).as_ref(),
@@ -369,6 +381,88 @@ fn show_scrub(
 fn clock(duration: std::time::Duration) -> String {
     let seconds = duration.as_secs();
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// How the session carries its video.
+///
+/// Applied by reopening, unlike everything else on this page: a transport is
+/// negotiated when the session opens, so there is nothing to change about one
+/// that is already running. For a stream that is what a reconnect is, and the
+/// Source comes back a moment later on the other transport.
+fn show_transport(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: crate::domain::RtspTransport,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::domain::RtspTransport;
+
+    ui.label(i18n.text(TextKey::PropertiesTransport));
+    ui.horizontal(|ui| {
+        for (transport, label) in [(RtspTransport::Tcp, "TCP"), (RtspTransport::Udp, "UDP")] {
+            if ui.selectable_label(stored == transport, label).clicked() && stored != transport {
+                actions.push(UiAction::Project(ProjectCommand::Source(
+                    SourceCommand::SetRtspTransport(item, transport),
+                )));
+                actions.push(UiAction::ReopenSource(item));
+            }
+        }
+    });
+    ui.end_row();
+}
+
+/// How long to wait before connecting again after the stream drops.
+///
+/// A list rather than a number field: what anybody wants here is "soon",
+/// "in a while", or "not without me", and a free figure would need validating
+/// to say the same thing. Off is the one that changes the Source's behaviour
+/// rather than its timing — see `needs_asking`.
+fn show_reconnect(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: Option<std::time::Duration>,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.label(i18n.text(TextKey::PropertiesReconnect));
+    let label = reconnect_label(stored, i18n);
+    egui::ComboBox::from_id_salt(("rtsp-reconnect", item.0))
+        .selected_text(label)
+        .show_ui(ui, |ui| {
+            for choice in RECONNECT_CHOICES {
+                let choice = choice.map(std::time::Duration::from_secs);
+                if ui
+                    .selectable_label(stored == choice, reconnect_label(choice, i18n))
+                    .clicked()
+                    && stored != choice
+                {
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::SetRtspReconnect(item, choice),
+                    )));
+                }
+            }
+        });
+    ui.end_row();
+}
+
+/// What the reconnect list offers, in seconds. `None` is "wait to be asked".
+///
+/// Shared with the dialog that adds a stream: the same list in both places,
+/// so what is chosen when a Source is made is what can be chosen afterwards.
+pub(super) const RECONNECT_CHOICES: [Option<u64>; 5] = [None, Some(1), Some(5), Some(15), Some(60)];
+
+pub(super) fn reconnect_label(
+    reconnect: Option<std::time::Duration>,
+    i18n: &LocalizationManager,
+) -> String {
+    let Some(reconnect) = reconnect else {
+        return i18n.text(TextKey::PropertiesReconnectOff).into_owned();
+    };
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("seconds", reconnect.as_secs() as i64);
+    i18n.text_with(TextKey::PropertiesReconnectSeconds, &args)
+        .into_owned()
 }
 
 /// Whether the file starts again at its end.
@@ -529,6 +623,7 @@ fn kind_key(kind: SourceKind) -> TextKey {
         SourceKind::VideoCapture => TextKey::SourceKindVideoCapture,
         SourceKind::Image => TextKey::SourceKindImage,
         SourceKind::MediaFile => TextKey::SourceKindMediaFile,
+        SourceKind::Rtsp => TextKey::SourceKindRtsp,
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
     }

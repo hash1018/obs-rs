@@ -5,9 +5,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, SceneCanvas, SceneId,
-    SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke, Transform,
-    WindowCaptureSettings, WindowCaptureTarget,
+    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings,
+    RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
+    SourceSettings, Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -107,7 +107,15 @@ impl SourceStore {
                 media_file_settings.paused,
                 image_source_settings.path,
                 image_source_settings.width,
-                image_source_settings.height
+                image_source_settings.height,
+                rtsp_source_settings.url,
+                rtsp_source_settings.transport,
+                rtsp_source_settings.reconnect_seconds,
+                rtsp_source_settings.width,
+                rtsp_source_settings.height,
+                rtsp_source_settings.has_audio,
+                rtsp_source_settings.gain_db,
+                rtsp_source_settings.muted
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -122,6 +130,8 @@ impl SourceStore {
                 ON media_file_settings.source_id = sources.id
              LEFT JOIN image_source_settings
                 ON image_source_settings.source_id = sources.id
+             LEFT JOIN rtsp_source_settings
+                ON rtsp_source_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -216,6 +226,28 @@ impl SourceStore {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
+                    }),
+                    SourceKind::Rtsp => SourceSettings::Rtsp(RtspSourceSettings {
+                        url: row.get(49)?,
+                        transport: RtspTransport::from_storage_name(&row.get::<_, String>(50)?)
+                            .ok_or_else(|| {
+                                rusqlite::Error::InvalidColumnType(
+                                    50,
+                                    "transport".into(),
+                                    rusqlite::types::Type::Text,
+                                )
+                            })?,
+                        reconnect: row
+                            .get::<_, Option<i64>>(51)?
+                            .and_then(|seconds| u64::try_from(seconds).ok())
+                            .map(std::time::Duration::from_secs),
+                        size_hint: match (row.get(52)?, row.get(53)?) {
+                            (Some(width), Some(height)) => Some([width, height]),
+                            _ => None,
+                        },
+                        has_audio: row.get(54)?,
+                        gain_db: row.get(55)?,
+                        muted: row.get(56)?,
                     }),
                     _ => SourceSettings::None,
                 };
@@ -528,6 +560,79 @@ impl SourceStore {
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
+    /// Adds a live stream Source, named after the address it pulls from.
+    ///
+    /// The last path segment rather than the whole URL: `rtsp://10.0.0.7/live`
+    /// becomes "live", which is short enough for the dock and is what
+    /// distinguishes two streams off one camera. A URL with nothing to take
+    /// falls back to the host, and one with neither to the kind's own name —
+    /// the same ladder [`SourceStore::add_media_file`] climbs.
+    pub(crate) fn add_rtsp(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        settings: &RtspSourceSettings,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, &stream_name(&settings.url))?;
+        let source_id = create(transaction, &name, SourceKind::Rtsp)?;
+        let [width, height] = settings
+            .size_hint
+            .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
+        transaction.execute(
+            "INSERT INTO rtsp_source_settings
+                (source_id, url, transport, reconnect_seconds, width, height,
+                 has_audio, gain_db, muted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                source_id.0,
+                settings.url,
+                settings.transport.storage_name(),
+                settings
+                    .reconnect
+                    .and_then(|wait| i64::try_from(wait.as_secs()).ok())
+                    .filter(|seconds| *seconds > 0),
+                width,
+                height,
+                settings.has_audio,
+                settings.gain_db,
+                settings.muted
+            ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
+    /// How this stream's session carries its video. Takes effect by reopening
+    /// the Source — a transport is negotiated at connect and there is nothing
+    /// to change about a session that is already running.
+    pub(crate) fn set_rtsp_transport(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        transport: RtspTransport,
+    ) -> PersistenceResult<()> {
+        set_rtsp_column(
+            transaction,
+            scene_item_id,
+            "transport",
+            transport.storage_name(),
+        )
+    }
+
+    /// How long to wait before connecting again, or `None` to wait to be
+    /// asked. Stored as absence rather than as zero — see the migration.
+    pub(crate) fn set_rtsp_reconnect(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        reconnect: Option<std::time::Duration>,
+    ) -> PersistenceResult<()> {
+        set_rtsp_column(
+            transaction,
+            scene_item_id,
+            "reconnect_seconds",
+            reconnect
+                .and_then(|wait| i64::try_from(wait.as_secs()).ok())
+                .filter(|seconds| *seconds > 0),
+        )
     }
 
     /// Adds an image Source, named after the file — see
@@ -879,6 +984,39 @@ fn set_media_column<T: rusqlite::ToSql>(
     Ok(())
 }
 
+fn set_rtsp_column<T: rusqlite::ToSql>(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    column: &'static str,
+    value: T,
+) -> PersistenceResult<()> {
+    transaction.execute(
+        &format!(
+            "UPDATE rtsp_source_settings
+             SET {column} = ?1
+             WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)"
+        ),
+        params![value, scene_item_id.0],
+    )?;
+    Ok(())
+}
+
+/// What to call a Source made from a URL.
+///
+/// The last non-empty path segment, then the host, then the kind's own name.
+/// A whole URL would fill the dock and elide to its scheme, which is the half
+/// that says nothing about which stream this is.
+fn stream_name(url: &str) -> String {
+    let without_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let (host, path) = without_scheme
+        .split_once('/')
+        .map_or((without_scheme, ""), |(host, path)| (host, path));
+    path.rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .or(Some(host).filter(|host| !host.is_empty()))
+        .map_or_else(|| "Network Stream".to_owned(), |name| name.to_owned())
+}
+
 /// What to call a Source made from a file: the file's own name, or `fallback`
 /// for a path that has none to give.
 fn file_stem(path: &std::path::Path, fallback: &str) -> String {
@@ -960,6 +1098,16 @@ mod tests {
             .expect("a new project opens with a Scene selected")
     }
 
+    fn settings_of(database: &ProjectDatabase, scene_id: SceneId) -> SourceSettings {
+        SourceStore::list_for_scene(database.connection(), scene_id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("the Scene has an item")
+            .1
+            .settings
+    }
+
     fn names_in_scene(database: &ProjectDatabase, scene_id: SceneId) -> Vec<String> {
         SourceStore::list_for_scene(database.connection(), scene_id)
             .unwrap()
@@ -1003,6 +1151,73 @@ mod tests {
             names,
             HashSet::from(["Color Source".to_owned(), "Drawing".to_owned()])
         );
+    }
+
+    /// The three things a stream stores that nothing else does, through the
+    /// write and back out of the read — a transport that came back as the
+    /// other one, or a reconnect that came back as zero, would each be a
+    /// Source behaving differently after a restart than before it.
+    #[test]
+    fn a_stream_keeps_its_address_transport_and_reconnect() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_rtsp(
+                    transaction,
+                    scene_id,
+                    &RtspSourceSettings {
+                        url: "rtsp://10.0.0.7:554/main".to_owned(),
+                        transport: RtspTransport::Udp,
+                        reconnect: Some(std::time::Duration::from_secs(15)),
+                        size_hint: Some([1920, 1080]),
+                        has_audio: true,
+                        gain_db: 0.0,
+                        muted: false,
+                    },
+                )
+            })
+            .unwrap();
+
+        let SourceSettings::Rtsp(stored) = settings_of(&database, scene_id) else {
+            panic!("a stream Source must read back as one");
+        };
+        assert_eq!(stored.url, "rtsp://10.0.0.7:554/main");
+        assert_eq!(stored.transport, RtspTransport::Udp);
+        assert_eq!(stored.reconnect, Some(std::time::Duration::from_secs(15)));
+        assert_eq!(stored.size_hint, Some([1920, 1080]));
+        assert!(stored.has_audio);
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_rtsp_transport(transaction, item_id, RtspTransport::Tcp)?;
+                SourceStore::set_rtsp_reconnect(transaction, item_id, None)
+            })
+            .unwrap();
+
+        let SourceSettings::Rtsp(changed) = settings_of(&database, scene_id) else {
+            panic!("a stream Source must read back as one");
+        };
+        assert_eq!(changed.transport, RtspTransport::Tcp);
+        assert_eq!(
+            changed.reconnect, None,
+            "reconnecting never is stored as absence rather than as zero"
+        );
+    }
+
+    /// A dock is narrow and a URL is not. What tells two streams off one
+    /// camera apart is the end of the path, which is why that is what a new
+    /// Source is called.
+    #[test]
+    fn a_stream_is_named_after_the_end_of_its_path() {
+        assert_eq!(stream_name("rtsp://10.0.0.7:554/main"), "main");
+        assert_eq!(stream_name("rtsp://10.0.0.7:554/cam/1/sub/"), "sub");
+        assert_eq!(
+            stream_name("rtsp://10.0.0.7:554"),
+            "10.0.0.7:554",
+            "an address with no path is named after the camera"
+        );
+        assert_eq!(stream_name(""), "Network Stream");
     }
 
     /// Why the dock checks before it sends: a taken name is not an edit that

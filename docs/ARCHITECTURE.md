@@ -68,6 +68,8 @@ While a Source is moved or resized, the layer follows the pointer directly and t
 - A Display Capture source stores the pixel size its picker reported, so a new SceneItem starts at the display's own shape rather than being squared off to the Canvas. The size is a hint, not a fact: the display layout can change between runs and a compositor may scale a Wayland stream to a size the portal never named, so the capture layer replaces it with the stream's negotiated size once the Source opens. A Source with no reported size stands in at Canvas size, because an item with no rectangle cannot be selected or dragged at all.
 - Display Capture can enumerate monitors on Windows and Linux/X11, persist the selected monitor name, and create a SceneItem. On Wayland, source creation opens the system-owned `xdg-desktop-portal` picker and persists the restore token it issues, and a later run reopens the same display from that token without showing the picker again.
 
+Network Stream pulls a live RTSP session — an IP camera, most often — and is built like a Media File with a different source at the top: the same two branches, the same hardware decode, the same mixer input for its sound. See "A stream that stopped arriving" below for the half a file does not have.
+
 Window Capture is composited on Windows and written for Linux, where it narrows the same portal source to windows rather than monitors. It is the one source whose target is expected to come and go — see "A window that is not there" below.
 
 ## Media File
@@ -212,6 +214,16 @@ So `SourceOpener` holds a thread, and the loop asks it. The reply comes back as 
 The wait is not held open. A Scene can change, an item can be deleted, and the same Source can be asked for again, all while one is still opening; so a reply is installed only where the slot still says `Opening`, and a Source that arrives with nowhere to go is stopped where it lands rather than left running with nothing holding it. One that does land is placed where its item stands *now* rather than where it stood when it was asked for.
 
 The backend is shared with that thread, which is why `Backend` has to be `Send + Sync` on every platform — asserted by a test in `engine::backend` so a field that is not says so at compile time rather than by the engine mysteriously blocking again.
+
+### A stream that stopped arriving
+
+`RtspSource` does not reconnect, deliberately: a read that fails ends it with an error and the pipeline finishes, which — a pipeline being one-shot — means coming back is a *new* one. That is the engine's job rather than the element's, and it is the same shape as a window that closed: `notice_dropped_streams` asks the running stream Sources whether their pipeline has ended, and puts the ones that have back to `Missing`.
+
+What is different is how long the wait is. A window's search costs nothing and runs on the idle tick; a reconnect is a request to somebody else's machine, and a camera that is rebooting wants to be left alone for a moment. So the interval is stored per Source and `retry_after` reads it, with the tick as the granularity rather than the answer. Off is a value too: a stream told not to reconnect is `Disconnected` rather than `Missing` — `needs_asking` covers both it and a portal window — so the Sources dock offers it and nothing goes back to that address until someone asks.
+
+The transport is stored beside it because there is no default that works everywhere. TCP interleaves the media in the control connection and crosses a firewall; UDP is lower latency on a network you control and nothing at all where those ports do not get through. Changing it reopens the Source, since a transport is negotiated when the session opens.
+
+An address that cannot be reached *while it is being added* is refused rather than accepted — somebody is standing at the dialog, and a typed address that is wrong is likelier than a camera that happens to be off at that exact second. After that, not answering is an ordinary state the Source waits out.
 
 ## One instance
 

@@ -118,8 +118,8 @@ you try it:
 
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
-- **Six source kinds.** Display Capture, Window Capture, Media File, Image,
-  Drawing and Color. Cameras are not there.
+- **Seven source kinds.** Display Capture, Window Capture, Media File,
+  Network Stream, Image, Drawing and Color. Cameras are not there.
 
 - **No filters, transitions or hotkeys.** Switching Scenes is a cut.
 

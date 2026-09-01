@@ -4,10 +4,11 @@ use std::sync::mpsc::{self, Receiver};
 
 use eframe::egui;
 
-use crate::capture::{MonitorTarget, SourcePicker, WindowTarget};
+use crate::capture::{MonitorTarget, NetworkStream, SourcePicker, WindowTarget};
 use crate::domain::{
-    DisplayCaptureSettings, DisplayCaptureTarget, ImageSourceSettings, MediaFileSettings, SceneId,
-    SceneItemId, SourceKind, WindowCaptureSettings, WindowCaptureTarget,
+    DisplayCaptureSettings, DisplayCaptureTarget, ImageSourceSettings, MediaFileSettings,
+    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, WindowCaptureSettings,
+    WindowCaptureTarget,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
@@ -16,6 +17,7 @@ use crate::ui::UiAction;
 use crate::ui::editor::SceneEditorState;
 
 use super::elide;
+use super::properties::{RECONNECT_CHOICES, reconnect_label};
 use super::toolbar::{self, ToolIcon};
 
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
@@ -60,6 +62,8 @@ pub(in crate::ui) struct SourcesPanelState {
     /// One picker for both kinds that take a file: only one dialog can be up
     /// at a time, and which kind was asked for travels with the answer.
     file_picker: Option<(SceneId, Receiver<Option<PickedFile>>)>,
+    /// The stream dialog, while it is up — see [`StreamDialog`].
+    stream: Option<StreamDialog>,
     select_new_item: bool,
     rename: Option<RenameState>,
 }
@@ -93,11 +97,34 @@ struct RenameState {
     error: Option<TextKey>,
 }
 
+/// What is being typed into the network stream dialog, and what came back
+/// when it was tried.
+///
+/// The address is asked of the camera before the Source is made, on a thread
+/// of its own: what it answers decides the shape the SceneItem starts at and
+/// whether its sound gets a channel in the mixer, and neither can be guessed.
+/// An address that does not answer *here* is refused rather than accepted and
+/// left reconnecting — somebody is standing at the dialog, and a typed
+/// address that is wrong is likelier than a camera that happens to be off at
+/// this exact moment. Once added, a stream that stops is an ordinary state.
+struct StreamDialog {
+    scene_id: SceneId,
+    url: String,
+    transport: RtspTransport,
+    reconnect: Option<std::time::Duration>,
+    /// Where the probe's answer arrives, while one is out. The dialog shows
+    /// that it is waiting and takes no second Add until it comes back.
+    probe: Option<Receiver<Result<NetworkStream, String>>>,
+    /// Why the last attempt did not become a Source, until the next one.
+    error: Option<String>,
+}
+
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum AddSourceKind {
     DisplayCapture,
     WindowCapture,
     MediaFile,
+    Rtsp,
     Image,
     #[default]
     Color,
@@ -186,6 +213,196 @@ pub(in crate::ui) fn show(
     show_add_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_display_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_window_dialog(ui.ctx(), state, snapshot, i18n, actions);
+    show_stream_dialog(ui.ctx(), state, i18n, actions);
+}
+
+/// How long a new stream waits before reconnecting, unless it is changed.
+///
+/// Five seconds rather than one: this is somebody else's machine, and a
+/// camera that dropped is usually rebooting rather than momentarily busy.
+const DEFAULT_RECONNECT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The address of a live stream, and what to do when it stops.
+///
+/// Typed rather than picked: there is no list of cameras on a network that
+/// this could enumerate, and the address is what the camera's own
+/// configuration page gives you.
+fn show_stream_dialog(
+    ctx: &egui::Context,
+    state: &mut SourcesPanelState,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    poll_stream_probe(state, actions);
+    let Some(dialog) = &mut state.stream else {
+        return;
+    };
+
+    let mut open = true;
+    let mut add = false;
+    let mut cancel = false;
+    let waiting = dialog.probe.is_some();
+    egui::Window::new(i18n.text(TextKey::SourceStreamTitle))
+        .id(egui::Id::new("network_stream_dialog"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            ui.label(i18n.text(TextKey::SourceStreamPrompt));
+            ui.add_space(4.0);
+            let typed = ui.add_sized(
+                [ui.available_width(), 24.0],
+                egui::TextEdit::singleline(&mut dialog.url)
+                    .hint_text("rtsp://192.168.0.10:554/stream")
+                    .interactive(!waiting),
+            );
+            if typed.changed() {
+                dialog.error = None;
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(i18n.text(TextKey::PropertiesTransport));
+                for (transport, label) in [(RtspTransport::Tcp, "TCP"), (RtspTransport::Udp, "UDP")]
+                {
+                    if ui
+                        .selectable_label(dialog.transport == transport, label)
+                        .clicked()
+                    {
+                        dialog.transport = transport;
+                        // The last attempt was against the other transport,
+                        // so whatever it said no longer describes this one.
+                        dialog.error = None;
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(i18n.text(TextKey::PropertiesReconnect));
+                egui::ComboBox::from_id_salt("new_stream_reconnect")
+                    .selected_text(reconnect_label(dialog.reconnect, i18n))
+                    .show_ui(ui, |ui| {
+                        for seconds in RECONNECT_CHOICES {
+                            let choice = seconds.map(std::time::Duration::from_secs);
+                            if ui
+                                .selectable_label(
+                                    dialog.reconnect == choice,
+                                    reconnect_label(choice, i18n),
+                                )
+                                .clicked()
+                            {
+                                dialog.reconnect = choice;
+                            }
+                        }
+                    });
+            });
+
+            if waiting {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.weak(i18n.text(TextKey::SourceStreamTrying));
+                });
+            } else if let Some(error) = &dialog.error {
+                ui.add_space(8.0);
+                ui.colored_label(ui.visuals().error_fg_color, error)
+                    .on_hover_text(error);
+            }
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        !waiting && !dialog.url.trim().is_empty(),
+                        egui::Button::new(i18n.text(TextKey::ActionAdd)),
+                    )
+                    .clicked()
+                {
+                    add = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionCancel)).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+
+    if cancel || !open {
+        state.stream = None;
+        return;
+    }
+    if add {
+        try_stream(ctx, state);
+    }
+}
+
+/// Asks the address whether it is there, on a thread of its own.
+///
+/// The wait is the whole reason: a camera that is not answering takes the
+/// connect timeout to say so, and that is not something to do on the thread
+/// drawing the dialog it is being typed into.
+fn try_stream(ctx: &egui::Context, state: &mut SourcesPanelState) {
+    let Some(dialog) = &mut state.stream else {
+        return;
+    };
+    let url = dialog.url.trim().to_owned();
+    let transport = dialog.transport;
+    let (sender, receiver) = mpsc::channel();
+    let ctx = ctx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("stream-probe".to_owned())
+        .spawn(move || {
+            if sender
+                .send(crate::capture::network_stream(&url, transport))
+                .is_ok()
+            {
+                ctx.request_repaint();
+            }
+        });
+    match spawned {
+        Ok(_) => {
+            dialog.error = None;
+            dialog.probe = Some(receiver);
+        }
+        Err(error) => dialog.error = Some(error.to_string()),
+    }
+}
+
+/// Takes the probe's answer, if it has one.
+fn poll_stream_probe(state: &mut SourcesPanelState, actions: &mut Vec<UiAction>) {
+    let Some(dialog) = &mut state.stream else {
+        return;
+    };
+    let Some(probe) = &dialog.probe else {
+        return;
+    };
+    let Ok(answered) = probe.try_recv() else {
+        return;
+    };
+    dialog.probe = None;
+    match answered {
+        Ok(stream) => {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::AddRtsp {
+                    scene_id: dialog.scene_id,
+                    settings: RtspSourceSettings {
+                        url: dialog.url.trim().to_owned(),
+                        transport: dialog.transport,
+                        reconnect: dialog.reconnect,
+                        size_hint: stream.size,
+                        has_audio: stream.has_audio,
+                        gain_db: 0.0,
+                        muted: false,
+                    },
+                },
+            )));
+            state.select_new_item = true;
+            state.stream = None;
+        }
+        // Left open on what was typed: an address that did not answer is
+        // usually one to correct, and cancel is still there for the rest.
+        Err(error) => dialog.error = Some(error),
+    }
 }
 
 fn show_source_row(
@@ -461,6 +678,7 @@ fn source_kind_key(kind: SourceKind) -> TextKey {
         SourceKind::VideoCapture => TextKey::SourceKindVideoCapture,
         SourceKind::Image => TextKey::SourceKindImage,
         SourceKind::MediaFile => TextKey::SourceKindMediaFile,
+        SourceKind::Rtsp => TextKey::SourceKindRtsp,
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
     }
@@ -588,6 +806,15 @@ fn show_add_dialog(
                     add_requested = true;
                 }
 
+                let stream_label = i18n.text(TextKey::SourceKindRtsp);
+                let response = list_row(ui, &stream_label, state.add_kind == AddSourceKind::Rtsp);
+                if response.clicked() {
+                    state.add_kind = AddSourceKind::Rtsp;
+                }
+                if response.double_clicked() {
+                    add_requested = true;
+                }
+
                 let image_label = i18n.text(TextKey::SourceKindImage);
                 let response = list_row(ui, &image_label, state.add_kind == AddSourceKind::Image);
                 if response.clicked() {
@@ -652,6 +879,18 @@ fn show_add_dialog(
             }
             AddSourceKind::WindowCapture => {
                 prepare_window_picker(state, snapshot.scene_id, actions)
+            }
+            AddSourceKind::Rtsp => {
+                if let Some(scene_id) = snapshot.scene_id {
+                    state.stream = Some(StreamDialog {
+                        scene_id,
+                        url: String::new(),
+                        transport: RtspTransport::default(),
+                        reconnect: Some(DEFAULT_RECONNECT),
+                        probe: None,
+                        error: None,
+                    });
+                }
             }
             kind @ (AddSourceKind::MediaFile | AddSourceKind::Image) => {
                 open_file_picker(ctx, state, snapshot.scene_id, kind, i18n)
