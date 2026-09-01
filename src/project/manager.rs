@@ -179,6 +179,12 @@ fn handle_source_command(
         SourceCommand::SetMediaLooping(scene_item_id, looping) => {
             SourceStore::set_media_looping(transaction, scene_item_id, looping)
         }
+        SourceCommand::SetMediaGain(scene_item_id, gain_db) => {
+            SourceStore::set_media_gain_db(transaction, scene_item_id, gain_db)
+        }
+        SourceCommand::SetMediaMuted(scene_item_id, muted) => {
+            SourceStore::set_media_muted(transaction, scene_item_id, muted)
+        }
         SourceCommand::Delete(scene_item_id) => {
             SourceStore::delete_scene_item(transaction, scene_item_id)
         }
@@ -696,6 +702,9 @@ mod tests {
                     path: path.clone(),
                     looping: false,
                     size_hint: Some([1280, 720]),
+                    has_audio: true,
+                    gain_db: 0.0,
+                    muted: false,
                 },
             },
         )
@@ -736,6 +745,9 @@ mod tests {
                         path: std::path::PathBuf::from(format!("{folder}/clip.mp4")),
                         looping: false,
                         size_hint: None,
+                        has_audio: false,
+                        gain_db: 0.0,
+                        muted: false,
                     },
                 },
             )
@@ -755,6 +767,98 @@ mod tests {
         assert_eq!(sources.items[0].source_size, [1920.0, 1080.0]);
     }
 
+    /// The fader and the mute button are the Source's own, the way a device
+    /// channel's are the device's — and a file with no sound still carries
+    /// them, because nothing here knows that and the columns cost nothing.
+    #[test]
+    fn media_file_keeps_its_own_fader_and_mute() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddMediaFile {
+                scene_id,
+                settings: crate::domain::MediaFileSettings {
+                    path: std::path::PathBuf::from("/media/clip.mp4"),
+                    looping: false,
+                    size_hint: None,
+                    has_audio: true,
+                    gain_db: 0.0,
+                    muted: false,
+                },
+            },
+        )
+        .unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings)
+                if settings.has_audio && settings.gain_db == 0.0 && !settings.muted
+        ));
+
+        handle_source_command(&mut database, SourceCommand::SetMediaGain(item_id, -12.0)).unwrap();
+        handle_source_command(&mut database, SourceCommand::SetMediaMuted(item_id, true)).unwrap();
+
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings)
+                if settings.gain_db == -12.0 && settings.muted
+        ));
+    }
+
+    /// A fader cannot be pushed past the ends of its own scale, whatever
+    /// asks: the dock clamps what it draws, and this is what a command
+    /// arriving from anywhere else meets.
+    #[test]
+    fn a_media_file_gain_is_held_to_the_faders_range() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddMediaFile {
+                scene_id,
+                settings: crate::domain::MediaFileSettings {
+                    path: std::path::PathBuf::from("/media/clip.mp4"),
+                    looping: false,
+                    size_hint: None,
+                    has_audio: true,
+                    gain_db: 0.0,
+                    muted: false,
+                },
+            },
+        )
+        .unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+
+        handle_source_command(&mut database, SourceCommand::SetMediaGain(item_id, -400.0)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings)
+                if settings.gain_db == crate::domain::MIN_GAIN_DB
+        ));
+
+        handle_source_command(&mut database, SourceCommand::SetMediaGain(item_id, 400.0)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(matches!(
+            &sources.items[0].settings,
+            crate::domain::SourceSettings::MediaFile(settings)
+                if settings.gain_db == crate::domain::MAX_GAIN_DB
+        ));
+    }
+
     #[test]
     fn media_file_looping_is_off_until_it_is_switched_on() {
         let mut database = ProjectDatabase::open_in_memory().unwrap();
@@ -771,6 +875,9 @@ mod tests {
                     path: std::path::PathBuf::from("/media/clip.mp4"),
                     looping: false,
                     size_hint: None,
+                    has_audio: true,
+                    gain_db: 0.0,
+                    muted: false,
                 },
             },
         )

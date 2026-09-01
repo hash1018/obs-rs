@@ -269,7 +269,7 @@ fn show_panel(
                 content.sources_state,
                 content.editor,
                 &content.snapshots.sources,
-                content.snapshots.status.disconnected_sources.as_deref(),
+                content.snapshots.status.source_status.as_deref(),
                 content.i18n,
                 content.actions,
             );
@@ -278,6 +278,8 @@ fn show_panel(
             panels::audio_mixer::show(
                 &mut child,
                 &content.snapshots.audio,
+                &content.snapshots.sources,
+                content.snapshots.status.source_status.as_deref(),
                 content.audio_devices,
                 content.i18n,
                 content.actions,

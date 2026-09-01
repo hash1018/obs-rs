@@ -75,6 +75,10 @@ pub(in crate::engine) struct OpenSource {
 /// the SceneItem rather than to it.
 pub(in crate::engine) struct MediaFile {
     pub(in crate::engine) looping: media_pp::elements::FileDemuxerHandle,
+    /// The file's own fader, and `None` for a file with no sound — or one
+    /// opened on a machine whose mixer never started, which is the same
+    /// thing from here: there is nothing to turn down.
+    pub(in crate::engine) volume: Option<media_pp::elements::AudioVolumeHandle>,
 }
 
 /// The name a SceneItem's compositor input is registered under.
@@ -103,10 +107,39 @@ pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendEr
 pub(in crate::engine) fn refresh_media_file(source: &OpenSource, item: &SceneItemSnapshot) {
     use crate::domain::SourceSettings;
 
+    let Some(media) = &source.media_file else {
+        return;
+    };
+    let SourceSettings::MediaFile(settings) = &item.settings else {
+        return;
+    };
+    media.looping.set_looping(settings.looping);
+    if let Some(volume) = &media.volume {
+        let _ = volume.set_gain_db(settings.gain_db);
+        volume.set_muted(muted(settings.muted, item.visible));
+    }
+}
+
+/// Whether this file's sound is off, from the two things that can turn it off.
+///
+/// Hiding the SceneItem silences it. One state with two effects rather than
+/// two states to keep in step: unhiding must not have to remember what the
+/// mute button was before, and a Source that is not in the picture has no
+/// channel in the Audio Mixer dock to unmute it from either.
+pub(in crate::engine) fn muted(muted: bool, visible: bool) -> bool {
+    muted || !visible
+}
+
+/// One media file Source's gain, while the fader is still held.
+///
+/// Straight to the handle, which is what makes it audible under the pointer;
+/// the project hears the same value once, when the gesture ends, and
+/// [`refresh_media_file`] then sets it again to no effect.
+pub(in crate::engine) fn set_media_gain_db(source: &OpenSource, gain_db: f32) {
     if let Some(media) = &source.media_file
-        && let SourceSettings::MediaFile(settings) = &item.settings
+        && let Some(volume) = &media.volume
     {
-        media.looping.set_looping(settings.looping);
+        let _ = volume.set_gain_db(gain_db);
     }
 }
 

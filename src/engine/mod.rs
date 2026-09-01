@@ -22,7 +22,7 @@ mod source;
 
 pub use audio::AudioManager;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -38,7 +38,7 @@ use time::OffsetDateTime;
 
 use crate::domain::{SceneCanvas, SceneItemId, SourceKind, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
-use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
+use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 
 use backend::{Backend, BackendError};
 use source::{OpenSource, PushedContent, push_content, refresh_media_file, refresh_pushed};
@@ -88,6 +88,10 @@ enum EngineCommand {
     /// reason `Drawing` exists: the picture has to follow the pointer, and
     /// the project is told once when it is let go.
     Colour(SceneItemId, [u8; 4]),
+    /// A media file Source's gain while the fader is still held — the audio
+    /// counterpart of `Colour`, and on this thread rather than the audio one
+    /// because a file's fader belongs to its own pipeline.
+    MediaGain(SceneItemId, f32),
     /// Whether anyone is looking at the Preview — a minimised window is
     /// nobody, and the frame then has nowhere worth going.
     PreviewVisible(bool),
@@ -181,10 +185,11 @@ struct Published {
     /// while paused it is what the elapsed time is measured *to*, so the
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
-    /// The SceneItems whose Source is not running: a window that has closed,
-    /// or one that never opened. The Sources list says so beside them, which
-    /// is the only thing that explains an item drawing nothing.
-    disconnected: Arc<ArcSwapOption<HashSet<SceneItemId>>>,
+    /// The SceneItems whose Source is not running, and why: a window that has
+    /// closed, one that never opened, or a file that played out. The Sources
+    /// list says so beside them, which is the only thing that explains an
+    /// item drawing nothing.
+    source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
     /// Which encoders the backend can open — see `EngineManager::encoders`.
     encoders: Arc<ArcSwapOption<Vec<crate::settings::RecordingEncoder>>>,
     /// Which audio codecs this FFmpeg build can open — see
@@ -210,8 +215,8 @@ pub struct EngineManager {
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
     recording_error: Arc<ArcSwapOption<String>>,
-    /// The SceneItems drawing nothing — see `Published::disconnected`.
-    disconnected: Arc<ArcSwapOption<HashSet<SceneItemId>>>,
+    /// The SceneItems drawing nothing — see `Published::source_status`.
+    source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
     /// Which H.264 encoders the backend can open. Published once, after the
     /// backend has been built — probing needs its device, and the answer
     /// cannot change while the application runs.
@@ -246,7 +251,7 @@ impl EngineManager {
         let recording_paused_at = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
-        let disconnected = Arc::new(ArcSwapOption::empty());
+        let source_status = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
         let audio_codecs = Arc::new(ArcSwapOption::empty());
         let (commands, command_rx) = mpsc::channel();
@@ -257,7 +262,7 @@ impl EngineManager {
             let recording_since = Arc::clone(&recording_since);
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
-            let disconnected = Arc::clone(&disconnected);
+            let source_status = Arc::clone(&source_status);
             let encoders = Arc::clone(&encoders);
             let audio_codecs = Arc::clone(&audio_codecs);
             let stop = Arc::clone(&stop);
@@ -268,7 +273,7 @@ impl EngineManager {
                     recording_since,
                     recording_paused_at,
                     recording_error,
-                    disconnected,
+                    source_status,
                     encoders,
                     audio_codecs,
                 };
@@ -298,7 +303,7 @@ impl EngineManager {
             recording_since,
             recording_paused_at,
             recording_error,
-            disconnected,
+            source_status,
             encoders,
             audio_codecs,
             commands,
@@ -455,8 +460,15 @@ impl EngineManager {
     }
 
     /// The SceneItems that are not producing a picture right now.
-    pub fn disconnected(&self) -> Option<Arc<HashSet<SceneItemId>>> {
-        self.disconnected.load_full()
+    pub fn source_status(&self) -> Option<Arc<HashMap<SceneItemId, SourceStatus>>> {
+        self.source_status.load_full()
+    }
+
+    /// One media file Source's gain while the fader is still held, for the
+    /// same reason `set_source_colour` exists: what is heard has to follow
+    /// the pointer, and the project is told once when the gesture ends.
+    pub fn set_media_gain_db(&self, item: SceneItemId, gain_db: f32) {
+        let _ = self.commands.send(EngineCommand::MediaGain(item, gain_db));
     }
 
     /// Asks for one Source to be opened again, whatever that costs.
@@ -584,6 +596,7 @@ fn run(
                 }
                 looked_for_missing = Instant::now();
                 notice_closed_windows(&backend, &mut open, &scene);
+                notice_ended_media(&backend, &mut open, &scene);
                 retry_missing(
                     &backend,
                     project.as_ref(),
@@ -598,7 +611,7 @@ fn run(
         // `continue`s above skip past: this is a comparison against what the
         // UI already holds, not something to do sixty times a second for an
         // answer that has not moved.
-        publish_disconnected(&published, &open);
+        publish_source_status(&published, &open);
     }
 
     for (_, state) in open.drain() {
@@ -653,6 +666,12 @@ fn apply_command(
         EngineCommand::Colour(item_id, rgba) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
                 push_content(source, PushedContent::Color(rgba));
+            }
+            false
+        }
+        EngineCommand::MediaGain(item_id, gain_db) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id) {
+                source::set_media_gain_db(source, gain_db);
             }
             false
         }
@@ -876,6 +895,11 @@ fn describe(error: &(dyn std::error::Error + 'static)) -> String {
     text
 }
 
+/// Deliberately not boxed. The lint measures the space every variant costs,
+/// which here is a couple of hundred bytes times the number of SceneItems in
+/// one Scene — nothing — against an allocation per open Source and a
+/// dereference on every reconcile pass, which is the map's whole job.
+#[allow(clippy::large_enum_variant)]
 enum SourceState {
     Open(OpenSource),
     /// Opening failed once and will not be retried.
@@ -904,6 +928,14 @@ enum SourceState {
     /// `WindowCaptureTarget::can_be_reopened_silently` is what decides which
     /// of the two a closed window lands in.
     Disconnected,
+    /// A media file that played to its end without looping.
+    ///
+    /// Not a failure and not `Disconnected`: the Source did what it was told
+    /// and there is nothing to recover from. It is a state of its own because
+    /// staying `Open` would be a lie the rest of this cannot see through —
+    /// the layer is already gone, the mixer input would sit registered and
+    /// silent, and the Sources list would say nothing at all.
+    Ended,
 }
 
 /// How long a `Missing` Source waits before it is looked for again.
@@ -952,27 +984,37 @@ fn open_item(
     }
 }
 
-/// Tells the UI which Sources are not producing a picture.
+/// Tells the UI which Sources are not producing a picture, and why.
 ///
 /// Stored only on a change: the Sources list reads this on every pass, and
-/// replacing the set each time would hand it a new allocation a second for a
-/// set that is almost always the same one — usually empty.
-fn publish_disconnected(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
-    let disconnected: HashSet<SceneItemId> = open
+/// replacing the map each time would hand it a new allocation a second for an
+/// answer that is almost always the same one — usually empty.
+fn publish_source_status(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
+    let status: HashMap<SceneItemId, SourceStatus> = open
         .iter()
-        .filter(|(_, state)| !matches!(state, SourceState::Open(_)))
-        .map(|(id, _)| *id)
+        .filter_map(|(id, state)| {
+            let status = match state {
+                SourceState::Open(_) => return None,
+                SourceState::Ended => SourceStatus::Ended,
+                // Failed, Missing and Disconnected are one thing to a reader:
+                // it is not showing, and the engine is not going to fix it by
+                // itself. Which of the three it is decides what this side
+                // does next, not what the list says.
+                _ => SourceStatus::Disconnected,
+            };
+            Some((*id, status))
+        })
         .collect();
-    let unchanged = match published.disconnected.load_full() {
-        Some(current) => *current == disconnected,
-        // Nothing published yet, which an empty set says as well as `None`
+    let unchanged = match published.source_status.load_full() {
+        Some(current) => *current == status,
+        // Nothing published yet, which an empty map says as well as `None`
         // does — and the first pass has nothing to correct.
-        None => disconnected.is_empty(),
+        None => status.is_empty(),
     };
     if unchanged {
         return;
     }
-    published.disconnected.store(Some(Arc::new(disconnected)));
+    published.source_status.store(Some(Arc::new(status)));
 }
 
 /// Whether opening this item's Source would interrupt whoever is at the
@@ -1020,6 +1062,42 @@ fn notice_closed_windows(
             SourceState::Missing
         };
         open.insert(item.id, state);
+    }
+}
+
+/// Notices a media file that has played to its end.
+///
+/// Nothing tells the engine that either, so it asks, the same way it asks
+/// about a closed window — and only about media files, because every other
+/// kind here is live and its pipeline ending means something went wrong
+/// rather than something finished.
+///
+/// The Source is stopped once noticed. That is not tidying: `Stop` is what
+/// takes its input off the audio mixer, which an `Eos` alone leaves
+/// registered and silent, so a finished file would otherwise keep a channel
+/// in the Audio Mixer dock for as long as its SceneItem existed.
+///
+/// It is not reopened. Playing once is what a file that is not looping was
+/// asked to do, and starting it again by itself would make the setting
+/// meaningless.
+fn notice_ended_media(
+    backend: &Backend,
+    open: &mut HashMap<SceneItemId, SourceState>,
+    snapshot: &SourcesSnapshot,
+) {
+    for item in &snapshot.items {
+        if item.kind != SourceKind::MediaFile {
+            continue;
+        }
+        let Some(SourceState::Open(source)) = open.get(&item.id) else {
+            continue;
+        };
+        if !source.source.ended() {
+            continue;
+        }
+        source.source.stop();
+        backend.remove_source(&source.name);
+        open.insert(item.id, SourceState::Ended);
     }
 }
 
@@ -1072,7 +1150,7 @@ fn reconcile(
                 refresh_pushed(source, item);
                 refresh_media_file(source, item);
             }
-            Some(SourceState::Failed | SourceState::Disconnected) => {}
+            Some(SourceState::Failed | SourceState::Disconnected | SourceState::Ended) => {}
             Some(SourceState::Missing) | None => {
                 let state = open_item(backend, project, mixer, item, layer);
                 open.insert(item.id, state);
@@ -1260,7 +1338,7 @@ mod tests {
             active_fps: Arc::new(AtomicU32::new(0)),
             recording_since: Arc::new(ArcSwapOption::empty()),
             recording_paused_at: Arc::new(ArcSwapOption::empty()),
-            disconnected: Arc::new(ArcSwapOption::empty()),
+            source_status: Arc::new(ArcSwapOption::empty()),
             encoders: Arc::new(ArcSwapOption::empty()),
             audio_codecs: Arc::new(ArcSwapOption::empty()),
             recording_error: Arc::new(ArcSwapOption::empty()),
@@ -1308,44 +1386,57 @@ mod tests {
     }
 
     /// Two claims at once, because the second is what makes the first cheap:
-    /// the set says which Sources are dark, and it is replaced only when that
-    /// answer moves. The UI reads it on every pass.
+    /// the map says which Sources are dark and why, and it is replaced only
+    /// when that answer moves. The UI reads it on every pass.
     #[test]
-    fn the_disconnected_set_names_the_dark_sources_and_holds_still() {
+    fn the_status_map_names_the_dark_sources_and_holds_still() {
         let published = published();
         let mut open = HashMap::new();
 
-        publish_disconnected(&published, &open);
+        publish_source_status(&published, &open);
         assert!(
-            published.disconnected.load_full().is_none(),
+            published.source_status.load_full().is_none(),
             "nothing has gone wrong yet, so there is nothing to say"
         );
 
         open.insert(SceneItemId(1), SourceState::Disconnected);
         open.insert(SceneItemId(2), SourceState::Missing);
-        publish_disconnected(&published, &open);
+        // A file that played out is dark for a different reason, and says so.
+        open.insert(SceneItemId(3), SourceState::Ended);
+        publish_source_status(&published, &open);
         let first = published
-            .disconnected
+            .source_status
             .load_full()
             .expect("a dark Source must be published");
-        assert_eq!(*first, HashSet::from([SceneItemId(1), SceneItemId(2)]));
+        assert_eq!(
+            *first,
+            HashMap::from([
+                (SceneItemId(1), SourceStatus::Disconnected),
+                (SceneItemId(2), SourceStatus::Disconnected),
+                (SceneItemId(3), SourceStatus::Ended),
+            ])
+        );
 
-        publish_disconnected(&published, &open);
-        let again = published.disconnected.load_full().expect("still published");
+        publish_source_status(&published, &open);
+        let again = published
+            .source_status
+            .load_full()
+            .expect("still published");
         assert!(
             Arc::ptr_eq(&first, &again),
-            "an unchanged set must not be replaced"
+            "an unchanged map must not be replaced"
         );
 
         open.remove(&SceneItemId(1));
         open.remove(&SceneItemId(2));
-        publish_disconnected(&published, &open);
+        open.remove(&SceneItemId(3));
+        publish_source_status(&published, &open);
         assert_eq!(
             *published
-                .disconnected
+                .source_status
                 .load_full()
                 .expect("the recovery has to be published too"),
-            HashSet::new(),
+            HashMap::new(),
             "a Source that came back must stop being listed"
         );
     }

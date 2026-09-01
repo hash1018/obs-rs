@@ -70,6 +70,12 @@ pub enum SourceCommand {
     /// Repaints a Color Source. Sent when the picker is let go, not while it
     /// is being dragged — see `UiAction::DragSourceColour`.
     SetColor(SceneItemId, [u8; 4]),
+    /// A media file Source's own fader, recorded when the gesture ends — the
+    /// same two-part split a Color's picker makes, with
+    /// `UiAction::DragMediaGain` carrying the live value.
+    SetMediaGain(SceneItemId, f32),
+    /// Whether a media file Source's sound is muted.
+    SetMediaMuted(SceneItemId, bool),
     /// Whether a media file Source starts again when it reaches its end.
     ///
     /// Takes effect where it is: the running Source is told through its own

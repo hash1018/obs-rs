@@ -183,7 +183,7 @@ pub struct WindowCaptureSettings {
 /// the same way a closed window is, and the Source waits for it rather than
 /// being an error. What is stored is therefore the path itself, not a handle
 /// or an id that would stop meaning anything outside this session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MediaFileSettings {
     pub path: PathBuf,
     /// Whether reaching the end of the file starts it again instead of
@@ -201,6 +201,24 @@ pub struct MediaFileSettings {
     /// can be replaced on disk — so it only decides what shape a new
     /// SceneItem starts at.
     pub size_hint: Option<[u32; 2]>,
+    /// Whether the file had a sound track when it was picked.
+    ///
+    /// What the Audio Mixer dock draws a channel from, so it is stored rather
+    /// than asked of the running Source: the dock has to know before anything
+    /// is open, and a Scene the user is not looking at has nothing running at
+    /// all. A hint like the size, and wrong for the same reason — a file can
+    /// be replaced on disk — which costs a channel that moves nothing.
+    pub has_audio: bool,
+    /// Gain in decibels, where `0.0` is unchanged, matching every other
+    /// fader in this application. See [`crate::domain::MIN_GAIN_DB`].
+    pub gain_db: f32,
+    /// Whether this file's sound is muted.
+    ///
+    /// Only what the mute button set. Hiding the SceneItem also silences it,
+    /// but that is not recorded here: hiding is one state with two effects,
+    /// not two states to keep in step, and unhiding must not have to remember
+    /// what the mute was before.
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

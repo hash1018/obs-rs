@@ -26,6 +26,10 @@ pub enum UiAction {
     /// does: what is heard has to follow the pointer, and the edit is
     /// recorded once when the gesture ends.
     DragAudioGain(AudioSourceId, f32),
+    /// One media file Source's gain while the fader is still held. Goes to
+    /// the engine rather than the audio graph: a file's fader lives in its
+    /// own pipeline, which the video engine owns.
+    DragMediaGain(SceneItemId, f32),
     SetFullscreen(bool),
     SetTheme(crate::settings::Theme),
     SetLocale(Locale),

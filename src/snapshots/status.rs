@@ -1,4 +1,18 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
+
+/// Why a Source that is in the Scene is drawing nothing.
+///
+/// Two states rather than one flag, because they are not the same news and
+/// do not offer the same thing to do about them. A disconnected Source is
+/// something that went wrong or went away and can be asked for again; a
+/// finished file did exactly what it was told to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceStatus {
+    /// Not running, and nothing will open it again without being asked.
+    Disconnected,
+    /// A media file that reached the end and was not looping.
+    Ended,
+}
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,12 +31,12 @@ pub struct StatusSnapshot {
     /// running clock — so this is the only thing that says it was tried.
     /// `Arc` because it is read on every pass and rarely changes.
     pub recording_error: Option<Arc<String>>,
-    /// The SceneItems whose Source is not running, from the engine.
+    /// The SceneItems whose Source is not running, and why, from the engine.
     ///
     /// The Sources list says so beside them, which is the only thing that
     /// explains a Source that is there and drawing nothing. `Arc` because it
     /// is read on every pass and changes about as often as a window closes.
-    pub disconnected_sources: Option<Arc<HashSet<crate::domain::SceneItemId>>>,
+    pub source_status: Option<Arc<HashMap<crate::domain::SceneItemId, SourceStatus>>>,
     pub cpu_percent: Option<f32>,
     pub gpu: Option<GpuUsage>,
     /// What is in memory for this process, and what it has claimed — see

@@ -23,7 +23,131 @@ use crate::capture::AudioDeviceTarget;
 use crate::domain::{AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{AudioCommand, ProjectCommand};
-use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
+use crate::snapshots::{AudioSnapshot, SourceStatus, SourcesSnapshot};
+
+/// One column in the dock.
+///
+/// The dock draws a superset of what the audio thread runs: the global
+/// devices, and the audio-bearing Sources in the Scene being shown. Those are
+/// two different things in the project — a device belongs to the person
+/// broadcasting, a file's sound to a SceneItem — and they are brought
+/// together here, where they are drawn, rather than being made one thing in
+/// the project to save this.
+///
+/// "Global" was always a claim about the *devices*, not about the dock. A
+/// microphone must not stop when the Scene changes; a file's sound has no
+/// business playing from a Scene nobody is looking at.
+struct Channel<'a> {
+    id: ChannelId,
+    name: &'a str,
+    gain_db: f32,
+    muted: bool,
+    peak_db: Option<f32>,
+    /// Set for a device channel. A media file has no endpoint to choose, so
+    /// its name is a label rather than a picker.
+    device: Option<Device<'a>>,
+}
+
+/// What a device channel picks from, and what it is picking for.
+struct Device<'a> {
+    source: crate::domain::AudioSourceId,
+    kind: AudioSourceKind,
+    /// The stored endpoint id, or `None` for whichever is the system default.
+    id: Option<&'a str>,
+}
+
+/// Which of the two things a column stands for, and therefore where its
+/// fader and its mute button are recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ChannelId {
+    Device(crate::domain::AudioSourceId),
+    SceneItem(crate::domain::SceneItemId),
+}
+
+/// The columns to draw, devices first.
+///
+/// Devices lead because their set does not move: a dock whose first column
+/// changed with the Scene would make the fader somebody reaches for depend on
+/// what they were last looking at.
+fn channels<'a>(
+    audio: &'a AudioSnapshot,
+    sources: &'a SourcesSnapshot,
+    status: Option<&std::collections::HashMap<crate::domain::SceneItemId, SourceStatus>>,
+) -> Vec<Channel<'a>> {
+    // Only what is actually running. A source whose device is not plugged in
+    // has no channel here at all rather than a dead one — see
+    // `AudioSourceSnapshot::running`.
+    let mut channels: Vec<Channel<'a>> = audio
+        .items
+        .iter()
+        .filter(|source| source.running)
+        .map(|source| Channel {
+            id: ChannelId::Device(source.id),
+            name: &source.name,
+            gain_db: source.gain_db,
+            muted: source.muted,
+            peak_db: source.peak_db,
+            device: Some(Device {
+                source: source.id,
+                kind: source.kind,
+                id: source.device.as_deref(),
+            }),
+        })
+        .collect();
+
+    channels.extend(sources.items.iter().filter_map(|item| {
+        let crate::domain::SourceSettings::MediaFile(settings) = &item.settings else {
+            return None;
+        };
+        // Three ways to have no column, and they are all the same statement:
+        // there is no sound coming from this Source to fade. A hidden item is
+        // silenced (see `engine::source::muted`), and a file that played out
+        // or never opened has nothing running behind it.
+        if !settings.has_audio || !item.visible || status.is_some_and(|s| s.contains_key(&item.id))
+        {
+            return None;
+        }
+        Some(Channel {
+            id: ChannelId::SceneItem(item.id),
+            name: &item.name,
+            gain_db: settings.gain_db,
+            muted: settings.muted,
+            // No meter behind a media file yet: levels are measured on the
+            // audio thread and this Source's audio runs on the video one.
+            peak_db: None,
+            device: None,
+        })
+    }));
+    channels
+}
+
+/// The fader's live value, which goes to whichever graph is carrying this
+/// channel rather than to the project.
+fn gain_drag(id: ChannelId, gain_db: f32) -> UiAction {
+    match id {
+        ChannelId::Device(id) => UiAction::DragAudioGain(id, gain_db),
+        ChannelId::SceneItem(id) => UiAction::DragMediaGain(id, gain_db),
+    }
+}
+
+/// The one edit that is recorded, when the gesture ends.
+fn gain_command(id: ChannelId, gain_db: f32) -> UiAction {
+    match id {
+        ChannelId::Device(id) => audio_action(AudioCommand::SetGainDb(id, gain_db)),
+        ChannelId::SceneItem(id) => UiAction::Project(ProjectCommand::Source(
+            crate::project::SourceCommand::SetMediaGain(id, gain_db),
+        )),
+    }
+}
+
+fn mute_command(id: ChannelId, muted: bool) -> UiAction {
+    match id {
+        ChannelId::Device(id) => audio_action(AudioCommand::SetMuted(id, muted)),
+        ChannelId::SceneItem(id) => UiAction::Project(ProjectCommand::Source(
+            crate::project::SourceCommand::SetMediaMuted(id, muted),
+        )),
+    }
+}
 
 use super::super::UiAction;
 use super::toolbar;
@@ -68,20 +192,15 @@ const CLIP_HOLD_SECONDS: f64 = 2.0;
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     snapshot: &AudioSnapshot,
+    sources: &SourcesSnapshot,
+    status: Option<&std::collections::HashMap<crate::domain::SceneItemId, SourceStatus>>,
     devices: &[AudioDeviceTarget],
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    // Only what is actually running. A source whose device is not plugged
-    // in has no channel here at all rather than a dead one — see
-    // `AudioSourceSnapshot::running`. Collected once because the mute strip
-    // below places its buttons by column index, so the two have to be
-    // walking the same sequence.
-    let channels: Vec<&AudioSourceSnapshot> = snapshot
-        .items
-        .iter()
-        .filter(|source| source.running)
-        .collect();
+    // Collected once because the mute strip below places its buttons by
+    // column index, so the two have to be walking the same sequence.
+    let channels = channels(snapshot, sources, status);
     if channels.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.weak(i18n.text(TextKey::AudioEmpty));
@@ -107,12 +226,12 @@ pub(in crate::ui) fn show(
     .show(&mut list, |ui| {
         ui.spacing_mut().item_spacing.x = COLUMN_GAP;
         ui.horizontal_top(|ui| {
-            for source in &channels {
-                // Scoped per source: every column holds the same widgets,
+            for channel in &channels {
+                // Scoped per channel: every column holds the same widgets,
                 // so without this they would collide on ids derived from
                 // their position alone.
-                ui.push_id(source.id.0, |ui| {
-                    show_channel(ui, source, devices, channel_height, i18n, actions);
+                ui.push_id(channel.id, |ui| {
+                    show_channel(ui, channel, devices, channel_height, i18n, actions);
                 });
             }
         });
@@ -138,14 +257,14 @@ pub(in crate::ui) fn show(
 /// `Ui` happened to have.
 fn show_mute_strip(
     ui: &mut egui::Ui,
-    channels: &[&AudioSourceSnapshot],
+    channels: &[Channel<'_>],
     offset_x: f32,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     toolbar::strip(ui, "audio_mixer_mutes", |ui| {
         let origin = ui.max_rect();
-        for (index, source) in channels.iter().enumerate() {
+        for (index, channel) in channels.iter().enumerate() {
             let left = origin.left() + index as f32 * (SOURCE_WIDTH + COLUMN_GAP) - offset_x;
             let rect = egui::Rect::from_min_size(
                 egui::pos2(left, origin.center().y - MUTE_HEIGHT / 2.0),
@@ -157,14 +276,14 @@ fn show_mute_strip(
             if rect.right() < origin.left() || rect.left() > origin.right() {
                 continue;
             }
-            show_mute(ui, rect, source, i18n, actions);
+            show_mute(ui, rect, channel, i18n, actions);
         }
     });
 }
 
 fn show_channel(
     ui: &mut egui::Ui,
-    source: &AudioSourceSnapshot,
+    channel: &Channel<'_>,
     devices: &[AudioDeviceTarget],
     channel_height: f32,
     i18n: &LocalizationManager,
@@ -174,14 +293,14 @@ fn show_channel(
     ui.allocate_ui(size, |ui| {
         ui.vertical(|ui| {
             ui.set_width(SOURCE_WIDTH);
-            show_name(ui, source, devices, i18n, actions);
+            show_name(ui, channel, devices, i18n, actions);
             ui.horizontal(|ui| {
-                ui.monospace(format_gain(source.gain_db));
-                show_clip_lamp(ui, source, i18n);
+                ui.monospace(format_gain(channel.gain_db));
+                show_clip_lamp(ui, channel, i18n);
             });
             ui.horizontal(|ui| {
-                show_fader(ui, source, channel_height, actions);
-                show_meter(ui, source, channel_height);
+                show_fader(ui, channel, channel_height, actions);
+                show_meter(ui, channel, channel_height);
                 show_scale(ui, channel_height);
             });
         });
@@ -196,11 +315,19 @@ fn show_channel(
 /// the menu.
 fn show_name(
     ui: &mut egui::Ui,
-    source: &AudioSourceSnapshot,
+    channel: &Channel<'_>,
     devices: &[AudioDeviceTarget],
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
+    let Some(source) = &channel.device else {
+        // A media file has no endpoint to choose, so its name is a label
+        // rather than a menu. It is renamed where it lives, in the Sources
+        // dock, and this follows.
+        ui.label(egui::RichText::new(channel.name).strong())
+            .on_hover_text(i18n.text(TextKey::AudioKindMediaFile));
+        return;
+    };
     let kind = i18n.text(match source.kind {
         AudioSourceKind::Output => TextKey::AudioKindOutput,
         AudioSourceKind::Input => TextKey::AudioKindInput,
@@ -209,7 +336,7 @@ fn show_name(
     // The stored id is what a device is known by, but the picker shows names
     // — so an endpoint that has since gone shows its id rather than becoming
     // an empty row that says nothing.
-    let listening = source.device.as_deref().map_or_else(
+    let listening = source.id.map_or_else(
         || default_label.as_ref().to_owned(),
         |id| {
             devices
@@ -220,13 +347,13 @@ fn show_name(
     );
 
     let menu = ui.menu_button(
-        egui::RichText::new(format!("{} ⏷", source.name)).strong(),
+        egui::RichText::new(format!("{} ⏷", channel.name)).strong(),
         |ui| {
             if ui
-                .selectable_label(source.device.is_none(), default_label.as_ref())
+                .selectable_label(source.id.is_none(), default_label.as_ref())
                 .clicked()
             {
-                actions.push(audio_action(AudioCommand::SetDevice(source.id, None)));
+                actions.push(audio_action(AudioCommand::SetDevice(source.source, None)));
                 ui.close();
             }
             ui.separator();
@@ -241,10 +368,10 @@ fn show_name(
                 } else {
                     device.name.clone()
                 };
-                let chosen = source.device.as_deref() == Some(device.id.as_str());
+                let chosen = source.id == Some(device.id.as_str());
                 if ui.selectable_label(chosen, label).clicked() {
                     actions.push(audio_action(AudioCommand::SetDevice(
-                        source.id,
+                        source.source,
                         Some(device.id.clone()),
                     )));
                     ui.close();
@@ -261,18 +388,13 @@ fn show_name(
 /// The fader stays live while muted rather than greying out: muting is not
 /// meant to lose the level somebody set, and a fader that cannot be moved
 /// until unmuted makes setting it a two-step job.
-fn show_fader(
-    ui: &mut egui::Ui,
-    source: &AudioSourceSnapshot,
-    height: f32,
-    actions: &mut Vec<UiAction>,
-) {
+fn show_fader(ui: &mut egui::Ui, channel: &Channel<'_>, height: f32, actions: &mut Vec<UiAction>) {
     // A vertical `Slider` takes its length from `slider_width` — the name is
     // the horizontal case's. Without this it stays at egui's default while
     // the meter and the scale beside it grow with the dock, and a channel
     // made taller ends up with a fader half the height of its own gauge.
     ui.spacing_mut().slider_width = height;
-    let mut gain_db = source.gain_db;
+    let mut gain_db = channel.gain_db;
     let fader = ui.add(
         egui::Slider::new(&mut gain_db, MIN_GAIN_DB..=MAX_GAIN_DB)
             .vertical()
@@ -286,10 +408,10 @@ fn show_fader(
     // project — a fader is a thing somebody moves while listening to it, and
     // a level that only arrived on release would make it guesswork.
     if fader.dragged() && fader.changed() {
-        actions.push(UiAction::DragAudioGain(source.id, gain_db));
+        actions.push(gain_drag(channel.id, gain_db));
     }
     if fader.drag_stopped() || (fader.changed() && !fader.dragged()) {
-        actions.push(audio_action(AudioCommand::SetGainDb(source.id, gain_db)));
+        actions.push(gain_command(channel.id, gain_db));
     }
 }
 
@@ -300,7 +422,7 @@ fn show_fader(
 /// channel, which is also what silence looks like — the two are
 /// indistinguishable here, and saying so is [`AudioSourceSnapshot::peak_db`]'s
 /// job rather than this one's.
-fn show_meter(ui: &mut egui::Ui, source: &AudioSourceSnapshot, height: f32) {
+fn show_meter(ui: &mut egui::Ui, channel: &Channel<'_>, height: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(METER_WIDTH, height), egui::Sense::hover());
     let painter = ui.painter();
     let rounding = egui::CornerRadius::same(1);
@@ -316,7 +438,7 @@ fn show_meter(ui: &mut egui::Ui, source: &AudioSourceSnapshot, height: f32) {
 
     // Muted is silence whatever the source is doing, so the channel says so
     // rather than showing a level that is not reaching anything.
-    let Some(peak_db) = source.peak_db.filter(|_| !source.muted) else {
+    let Some(peak_db) = channel.peak_db.filter(|_| !channel.muted) else {
         return;
     };
     let reached = rect.bottom() - rect.height() * fraction_of_scale(peak_db);
@@ -371,23 +493,20 @@ fn show_scale(ui: &mut egui::Ui, height: f32) {
 fn show_mute(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    source: &AudioSourceSnapshot,
+    channel: &Channel<'_>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let label = if source.muted {
+    let label = if channel.muted {
         TextKey::AudioUnmute
     } else {
         TextKey::AudioMute
     };
-    let button = egui::Button::new("").selected(source.muted);
+    let button = egui::Button::new("").selected(channel.muted);
     let response = ui.put(rect, button);
-    paint_speaker(ui, &response, source.muted);
+    paint_speaker(ui, &response, channel.muted);
     if response.on_hover_text(i18n.text(label)).clicked() {
-        actions.push(audio_action(AudioCommand::SetMuted(
-            source.id,
-            !source.muted,
-        )));
+        actions.push(mute_command(channel.id, !channel.muted));
     }
 }
 
@@ -514,15 +633,15 @@ fn clip_lamp(last_clip: f64, now: f64, peak_db: Option<f32>) -> (f64, bool) {
 /// scale to put it, and a channel that clipped is nearly always a channel
 /// somebody boosted — so the number that caused it and the lamp that reports
 /// it are read together.
-fn show_clip_lamp(ui: &mut egui::Ui, source: &AudioSourceSnapshot, i18n: &LocalizationManager) {
-    let key = egui::Id::new(("audio-clip-lamp", source.id));
+fn show_clip_lamp(ui: &mut egui::Ui, channel: &Channel<'_>, i18n: &LocalizationManager) {
+    let key = egui::Id::new(("audio-clip-lamp", channel.id));
     let now = ui.input(|input| input.time);
     let was = ui
         .data(|data| data.get_temp::<f64>(key))
         .unwrap_or(f64::MIN);
     // Muted is silence whatever the source is doing, the same reading the
     // meter takes — a muted channel cannot be clipping anything.
-    let peak = source.peak_db.filter(|_| !source.muted);
+    let peak = channel.peak_db.filter(|_| !channel.muted);
     let (last_clip, lit) = clip_lamp(was, now, peak);
     if last_clip != was {
         ui.data_mut(|data| data.insert_temp(key, last_clip));

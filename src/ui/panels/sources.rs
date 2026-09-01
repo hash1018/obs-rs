@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 
@@ -11,7 +11,7 @@ use crate::domain::{
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
-use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
+use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 use crate::ui::UiAction;
 use crate::ui::editor::SceneEditorState;
 
@@ -65,7 +65,7 @@ struct PickedMediaFile {
     path: PathBuf,
     /// Read on that thread rather than here: opening a container is quick but
     /// it is still file I/O, and the picker is already off the UI thread.
-    size: Option<[u32; 2]>,
+    streams: crate::capture::MediaFileStreams,
 }
 
 /// The row being renamed, and what has been typed into it so far.
@@ -99,7 +99,7 @@ pub(in crate::ui) fn show(
     state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
-    disconnected: Option<&HashSet<SceneItemId>>,
+    status: Option<&HashMap<SceneItemId, SourceStatus>>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -152,8 +152,8 @@ pub(in crate::ui) fn show(
                     show_rename_editor(ui, state, snapshot, item, i18n, actions);
                     continue;
                 }
-                let disconnected = disconnected.is_some_and(|items| items.contains(&item.id));
-                show_source_row(ui, state, editor, item, disconnected, i18n, actions);
+                let status = status.and_then(|items| items.get(&item.id)).copied();
+                show_source_row(ui, state, editor, item, status, i18n, actions);
             }
         });
     }
@@ -168,7 +168,7 @@ fn show_source_row(
     state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
     item: &SceneItemSnapshot,
-    disconnected: bool,
+    status: Option<SourceStatus>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -200,7 +200,7 @@ fn show_source_row(
     // Painted before the name, because it is what the name has to fit
     // alongside: a source that is drawing nothing has to say so even where
     // its name is long enough to fill the row on its own.
-    let badge = disconnected.then(|| show_disconnected_badge(ui, rect, i18n));
+    let badge = status.map(|status| show_status_badge(ui, rect, status, i18n));
     let name_right = badge
         .as_ref()
         .map_or(rect.right(), |badge: &egui::Response| {
@@ -229,7 +229,9 @@ fn show_source_row(
         response.on_hover_text(kind)
     };
 
-    if badge.is_some_and(|badge| badge.clicked()) {
+    // Only a disconnected Source offers to be opened again; a file that
+    // played out did what it was asked and has nothing to recover from.
+    if status == Some(SourceStatus::Disconnected) && badge.is_some_and(|badge| badge.clicked()) {
         actions.push(UiAction::ReopenSource(item.id));
     } else if eye.clicked() {
         actions.push(source_action(SourceCommand::SetVisible(
@@ -357,12 +359,16 @@ fn judge_rename(typed: &str, current: &str, names: &HashSet<String>) -> RenameOu
 /// and the row has the width for it once the name gives way. Clickable
 /// because on Linux reopening is the user's to ask for — the portal picker is
 /// a dialog, so nothing may raise it on its own.
-fn show_disconnected_badge(
+fn show_status_badge(
     ui: &egui::Ui,
     row: egui::Rect,
+    status: SourceStatus,
     i18n: &LocalizationManager,
 ) -> egui::Response {
-    let text = i18n.text(TextKey::SourceDisconnected);
+    let text = i18n.text(match status {
+        SourceStatus::Disconnected => TextKey::SourceDisconnected,
+        SourceStatus::Ended => TextKey::SourceEnded,
+    });
     let galley = elide::one_row(ui, &text, row.width(), &egui::TextStyle::Small);
     let size = galley.size();
     let rect = egui::Rect::from_min_size(
@@ -372,17 +378,33 @@ fn show_disconnected_badge(
         ),
         size,
     );
-    let response = ui
-        .interact(
-            rect.expand2(egui::vec2(BADGE_PADDING / 2.0, 2.0)),
-            ui.id().with(("disconnected", row.top().to_bits())),
-            egui::Sense::click(),
-        )
-        .on_hover_text(i18n.text(TextKey::SourceReopen));
-    let color = if response.hovered() {
-        ui.visuals().warn_fg_color
+    // A finished file is news, not a warning: nothing went wrong and there is
+    // nothing to click, so it neither senses clicks nor offers to reopen.
+    let ended = status == SourceStatus::Ended;
+    let sense = if ended {
+        egui::Sense::hover()
     } else {
-        ui.visuals().warn_fg_color.gamma_multiply(0.8)
+        egui::Sense::click()
+    };
+    let response = ui.interact(
+        rect.expand2(egui::vec2(BADGE_PADDING / 2.0, 2.0)),
+        ui.id().with(("source-status", row.top().to_bits())),
+        sense,
+    );
+    let response = if ended {
+        response
+    } else {
+        response.on_hover_text(i18n.text(TextKey::SourceReopen))
+    };
+    let base = if ended {
+        ui.visuals().weak_text_color()
+    } else {
+        ui.visuals().warn_fg_color
+    };
+    let color = if response.hovered() {
+        base
+    } else {
+        base.gamma_multiply(0.8)
     };
     ui.painter().galley(rect.min, galley, color);
     response
@@ -631,7 +653,7 @@ fn open_media_picker(
                 .add_filter(filter, &MEDIA_FILE_EXTENSIONS)
                 .pick_file()
                 .map(|path| PickedMediaFile {
-                    size: crate::capture::media_file_size(&path),
+                    streams: crate::capture::media_file_streams(&path),
                     path,
                 });
             if sender.send(picked).is_ok() {
@@ -664,7 +686,10 @@ fn poll_media_picker(state: &mut SourcesPanelState, actions: &mut Vec<UiAction>)
                         // Off to begin with: a file added to a Scene plays
                         // once unless someone asks for more than that.
                         looping: false,
-                        size_hint: picked.size,
+                        size_hint: picked.streams.size,
+                        has_audio: picked.streams.has_audio,
+                        gain_db: 0.0,
+                        muted: false,
                     },
                 }));
                 state.select_new_item = true;
@@ -1180,7 +1205,7 @@ mod tests {
                 &mut state,
                 &mut editor,
                 &item,
-                false,
+                None,
                 &i18n,
                 &mut actions,
             );
@@ -1199,7 +1224,7 @@ mod tests {
                 &mut state,
                 &mut editor,
                 &item,
-                false,
+                None,
                 &i18n,
                 &mut actions,
             );

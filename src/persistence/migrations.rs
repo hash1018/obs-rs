@@ -267,13 +267,21 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
         // The size is the video stream's own, read when the file was picked.
         // Nullable because a file with no video stream, or one this machine
         // cannot demux, still becomes a Source.
+        //
+        // `has_audio` is read at the same moment and for the same reason: the
+        // Audio Mixer dock has to know whether to draw a channel before
+        // anything is open. `gain_db` and `muted` are that channel's fader
+        // and button, per Source the way a device's are per device.
         transaction.execute_batch(
             "CREATE TABLE media_file_settings (
                 source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
                 path      TEXT NOT NULL,
                 looping   INTEGER NOT NULL CHECK (looping IN (0, 1)),
                 width     INTEGER,
-                height    INTEGER
+                height    INTEGER,
+                has_audio INTEGER NOT NULL CHECK (has_audio IN (0, 1)),
+                gain_db   REAL NOT NULL,
+                muted     INTEGER NOT NULL CHECK (muted IN (0, 1))
             );
 
             PRAGMA user_version = 10;",

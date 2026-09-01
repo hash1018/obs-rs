@@ -207,7 +207,7 @@ impl ObsApp {
         self.snapshots.status.recording_elapsed = engine.recording();
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
-        self.snapshots.status.disconnected_sources = engine.disconnected();
+        self.snapshots.status.source_status = engine.source_status();
         if self.snapshots.status.encoders.is_empty()
             && let Some(encoders) = engine.encoders()
         {
@@ -483,6 +483,25 @@ impl ObsApp {
             UiAction::DragSourceColour(item_id, rgba) => {
                 if let Some(engine) = &self.engine {
                     engine.set_source_colour(item_id, rgba);
+                }
+            }
+            UiAction::DragMediaGain(item_id, gain_db) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_media_gain_db(item_id, gain_db);
+                }
+                // And into the snapshot the dock's readout reads, for the
+                // same reason `DragAudioGain` does it: the project is not
+                // told until the fader is let go, and a readout waiting for
+                // that would sit at the old number while the level moved.
+                if let Some(item) = self
+                    .snapshots
+                    .sources
+                    .items
+                    .iter_mut()
+                    .find(|item| item.id == item_id)
+                    && let crate::domain::SourceSettings::MediaFile(settings) = &mut item.settings
+                {
+                    settings.gain_db = gain_db;
                 }
             }
             UiAction::DragSceneItem(item_id, transform) => {

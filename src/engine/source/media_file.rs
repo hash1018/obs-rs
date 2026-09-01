@@ -163,7 +163,9 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
-    use media_pp::elements::{D3d11Decoder, D3d11VideoCompositorInput, Pacer, SwDecoder};
+    use media_pp::elements::{
+        AudioVolume, D3d11Decoder, D3d11VideoCompositorInput, Pacer, SwDecoder,
+    };
     use media_pp::pipeline::Pipeline;
 
     use crate::engine::backend::RunningSource;
@@ -194,13 +196,21 @@ pub(in crate::engine) fn open(
     let audio = match (chosen.audio, mixer) {
         (Some(track), Some(mixer)) => {
             let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
+            // The fader lives in this pipeline rather than the audio thread's,
+            // because this file's sound belongs to this Source rather than to
+            // a device everything shares. Its handle is what the Audio Mixer
+            // dock moves.
+            let (fader, volume) = AudioVolume::new(format!("{name}-volume"));
+            let _ = volume.set_gain_db(settings.gain_db);
+            volume.set_muted(super::muted(settings.muted, item.visible));
             let sink = mixer
                 .add_source(audio_name(&name))
                 .ok_or("the audio mixer is gone")?;
-            Some((track.index, track.time_base, decoder, sink))
+            Some((track.index, track.time_base, decoder, fader, volume, sink))
         }
         _ => None,
     };
+    let volume = audio.as_ref().map(|(_, _, _, _, volume, _)| volume.clone());
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -221,12 +231,13 @@ pub(in crate::engine) fn open(
             .to(sink)?;
         context.attach(source, video_index, branch)?;
 
-        if let Some((index, time_base, decoder, sink)) = audio {
+        if let Some((index, time_base, decoder, fader, _, sink)) = audio {
             let branch = context
                 .branch()
                 .pipe(decoder)
                 .queue("audio", QUEUE_DEPTH)
                 .pipe(Pacer::new("audio-pacer", time_base, context.clock.clone())?)
+                .pipe(fader)
                 .to(sink)?;
             context.attach(source, index, branch)?;
         }
@@ -241,7 +252,7 @@ pub(in crate::engine) fn open(
         refreshed_token: None,
         showing: true,
         pushed: None,
-        media_file: Some(MediaFile { looping }),
+        media_file: Some(MediaFile { looping, volume }),
     }))
 }
 
@@ -253,7 +264,9 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
-    use media_pp::elements::{CudaDecoder, CudaVideoCompositorInput, Pacer, SwDecoder};
+    use media_pp::elements::{
+        AudioVolume, CudaDecoder, CudaVideoCompositorInput, Pacer, SwDecoder,
+    };
     use media_pp::pipeline::Pipeline;
 
     use crate::engine::backend::RunningSource;
@@ -281,13 +294,21 @@ pub(in crate::engine) fn open(
     let audio = match (chosen.audio, mixer) {
         (Some(track), Some(mixer)) => {
             let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
+            // The fader lives in this pipeline rather than the audio thread's,
+            // because this file's sound belongs to this Source rather than to
+            // a device everything shares. Its handle is what the Audio Mixer
+            // dock moves.
+            let (fader, volume) = AudioVolume::new(format!("{name}-volume"));
+            let _ = volume.set_gain_db(settings.gain_db);
+            volume.set_muted(super::muted(settings.muted, item.visible));
             let sink = mixer
                 .add_source(audio_name(&name))
                 .ok_or("the audio mixer is gone")?;
-            Some((track.index, track.time_base, decoder, sink))
+            Some((track.index, track.time_base, decoder, fader, volume, sink))
         }
         _ => None,
     };
+    let volume = audio.as_ref().map(|(_, _, _, _, volume, _)| volume.clone());
 
     let CudaVideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -308,12 +329,13 @@ pub(in crate::engine) fn open(
             .to(sink)?;
         context.attach(source, video_index, branch)?;
 
-        if let Some((index, time_base, decoder, sink)) = audio {
+        if let Some((index, time_base, decoder, fader, _, sink)) = audio {
             let branch = context
                 .branch()
                 .pipe(decoder)
                 .queue("audio", QUEUE_DEPTH)
                 .pipe(Pacer::new("audio-pacer", time_base, context.clock.clone())?)
+                .pipe(fader)
                 .to(sink)?;
             context.attach(source, index, branch)?;
         }
@@ -328,6 +350,6 @@ pub(in crate::engine) fn open(
         refreshed_token: None,
         showing: true,
         pushed: None,
-        media_file: Some(MediaFile { looping }),
+        media_file: Some(MediaFile { looping, volume }),
     }))
 }

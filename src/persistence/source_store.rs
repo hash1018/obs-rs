@@ -5,8 +5,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    MediaFileSettings, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
-    SourceSettings, Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
+    MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, SceneCanvas, SceneId, SceneItem, SceneItemId,
+    Source, SourceId, SourceKind, SourceSettings, Stroke, Transform, WindowCaptureSettings,
+    WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -98,7 +99,10 @@ impl SourceStore {
                 media_file_settings.path,
                 media_file_settings.looping,
                 media_file_settings.width,
-                media_file_settings.height
+                media_file_settings.height,
+                media_file_settings.has_audio,
+                media_file_settings.gain_db,
+                media_file_settings.muted
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -190,6 +194,9 @@ impl SourceStore {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
+                        has_audio: row.get(41)?,
+                        gain_db: row.get(42)?,
+                        muted: row.get(43)?,
                     }),
                     _ => SourceSettings::None,
                 };
@@ -489,14 +496,17 @@ impl SourceStore {
             .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
         transaction.execute(
             "INSERT INTO media_file_settings
-                (source_id, path, looping, width, height)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                (source_id, path, looping, width, height, has_audio, gain_db, muted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 source_id.0,
                 settings.path.to_string_lossy(),
                 settings.looping,
                 width,
-                height
+                height,
+                settings.has_audio,
+                settings.gain_db,
+                settings.muted
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
@@ -508,13 +518,32 @@ impl SourceStore {
         scene_item_id: SceneItemId,
         looping: bool,
     ) -> PersistenceResult<()> {
-        transaction.execute(
-            "UPDATE media_file_settings
-             SET looping = ?1
-             WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)",
-            params![looping, scene_item_id.0],
-        )?;
-        Ok(())
+        set_media_column(transaction, scene_item_id, "looping", looping)
+    }
+
+    /// This media file Source's own fader, in decibels.
+    pub(crate) fn set_media_gain_db(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        gain_db: f32,
+    ) -> PersistenceResult<()> {
+        set_media_column(
+            transaction,
+            scene_item_id,
+            "gain_db",
+            gain_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB),
+        )
+    }
+
+    /// This media file Source's own mute button. Hiding the SceneItem
+    /// silences it too, and does not come through here — see
+    /// [`crate::domain::MediaFileSettings::muted`].
+    pub(crate) fn set_media_muted(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        muted: bool,
+    ) -> PersistenceResult<()> {
+        set_media_column(transaction, scene_item_id, "muted", muted)
     }
 
     pub(crate) fn set_transform(
@@ -775,6 +804,28 @@ fn swap_with_neighbour(
          SET z_index = CASE id WHEN ?1 THEN ?2 WHEN ?3 THEN ?4 END
          WHERE id IN (?1, ?3)",
         params![scene_item_id.0, other_z, other_id, z_index],
+    )?;
+    Ok(())
+}
+
+/// One column of the media file settings behind a SceneItem's Source.
+///
+/// The column name is a literal from the three callers above and never comes
+/// from outside, which is what makes formatting it into the statement safe —
+/// a bound parameter cannot name a column.
+fn set_media_column<T: rusqlite::ToSql>(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    column: &'static str,
+    value: T,
+) -> PersistenceResult<()> {
+    transaction.execute(
+        &format!(
+            "UPDATE media_file_settings
+             SET {column} = ?1
+             WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)"
+        ),
+        params![value, scene_item_id.0],
     )?;
     Ok(())
 }

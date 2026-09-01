@@ -139,22 +139,44 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
     }
 }
 
-/// The pixel size of a media file's video stream, or `None` when it has none
-/// or would not open.
+/// What a media file turns out to hold, as far as a new Source needs to know.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MediaFileStreams {
+    /// The video stream's pixel size, or `None` when there is none to read.
+    pub size: Option<[u32; 2]>,
+    pub has_audio: bool,
+}
+
+/// Reads what a picked file holds, so a new Source starts at its own shape
+/// and its sound gets a channel.
 ///
 /// Reads through `media-pp` for the same reason [`audio_devices`] does: a
 /// static call that opens no pipeline and shows nothing. There is no picker
 /// to write here either — the file dialog belongs to the system, and it hands
 /// back a path.
 ///
-/// `None` is not a failure and is not reported as one. A file this machine
-/// cannot demux still becomes a Source, which reports that where it happens;
-/// here it only means a new SceneItem starts at Canvas size instead of the
-/// video's own shape.
-pub fn media_file_size(path: &Path) -> Option<[u32; 2]> {
+/// Nothing here is a failure and nothing is reported as one. A file this
+/// machine cannot demux still becomes a Source, which reports that where it
+/// happens; an empty answer here only means the SceneItem starts at Canvas
+/// size and gets no audio channel.
+pub fn media_file_streams(path: &Path) -> MediaFileStreams {
     use media_pp::ffmpeg;
 
-    let input = ffmpeg::format::input(path).ok()?;
+    let Ok(input) = ffmpeg::format::input(path) else {
+        return MediaFileStreams::default();
+    };
+    let has_audio = input
+        .streams()
+        .any(|stream| stream.parameters().medium() == ffmpeg::media::Type::Audio);
+    MediaFileStreams {
+        size: video_size(&input),
+        has_audio,
+    }
+}
+
+fn video_size(input: &media_pp::ffmpeg::format::context::Input) -> Option<[u32; 2]> {
+    use media_pp::ffmpeg;
+
     let parameters = input
         .streams()
         .find(|stream| stream.parameters().medium() == ffmpeg::media::Type::Video)?
