@@ -15,8 +15,8 @@
 //! # Shape
 //!
 //! ```text
-//! FileDemuxer ┬ video ─ hardware decoder ─ Queue ─ Pacer ─ compositor input
-//!             └ audio ─ SwDecoder        ─ Queue ─ Pacer ─ mixer input
+//! FileDemuxer ┬ video ─ Queue ─ hardware decoder ─ Queue ─ Pacer ─ compositor input
+//!             └ audio ─ SwDecoder ─ Queue ──────────────── Pacer ─ mixer input
 //! ```
 //!
 //! One pipeline, two branches off one demuxer. That is what keeps the picture
@@ -35,6 +35,14 @@
 //! until a frame is due, and without a queue in front of it that sleep would
 //! be the demuxer's too — one read cursor serves both streams, so a stalled
 //! video branch would starve the audio one.
+//!
+//! That is also why the video branch has two. Its decoded frames are decoder
+//! surfaces, which are counted and few, so that queue has to stay shallow;
+//! but a shallow queue there is a short leash on the cursor, and the cursor
+//! is what feeds the audio. The first queue holds packets instead — still
+//! compressed, still host memory — so the read-ahead that keeps sound coming
+//! costs neither a surface nor the decode happening on the cursor's thread.
+//! See `PACKET_LOOKAHEAD`.
 //!
 //! # Playing once is a state, not an end
 //!
@@ -70,6 +78,31 @@ use crate::snapshots::SceneItemSnapshot;
 /// here is also a decoder surface that cannot be reused, which is what the
 /// budget below has to cover.
 const QUEUE_DEPTH: usize = 8;
+
+/// Packets the demuxer may read ahead of the video decoder.
+///
+/// One read cursor serves both streams, and until this queue existed the
+/// video decoder ran on the cursor's own thread: a keyframe took longer to
+/// decode than the frames around it, and the audio packets behind it in the
+/// file waited for it. The mixer does not wait — an input short for a tick
+/// contributes silence for the shortfall — so every keyframe became a hole
+/// in the mix, and since the mixer emits what arrives rather than what a
+/// timestamp asks for, each hole also pushed the rest of the file's sound
+/// permanently later against its picture.
+///
+/// Packets, not frames: these are still compressed and in host memory, so
+/// reading a second ahead costs a few megabytes rather than a decoder
+/// surface each.
+const PACKET_LOOKAHEAD: usize = 64;
+
+/// Decoded audio frames kept ahead of the audio `Pacer`, at 1024 samples
+/// each — about a second and a half.
+///
+/// The read-ahead above is only as deep as the shallowest branch: whichever
+/// queue fills first blocks the shared cursor for both. Audio frames are
+/// small and hold no decoder surface, so this is the branch that can afford
+/// to be the deep one.
+const AUDIO_QUEUE_DEPTH: usize = 64;
 
 /// Decoded frames the hardware decoder must have surfaces for beyond its own
 /// reference frames.
@@ -318,6 +351,7 @@ fn attach_video(
         .build()?;
     let paced = context
         .branch()
+        .queue("video-packets", PACKET_LOOKAHEAD)
         .pipe(decoder)
         .queue("video", QUEUE_DEPTH)
         .pipe(Pacer::new("video-pacer", time_base)?)
@@ -340,7 +374,7 @@ fn attach_audio(
     let faded = context
         .branch()
         .pipe(audio.decoder)
-        .queue("audio", QUEUE_DEPTH)
+        .queue("audio", AUDIO_QUEUE_DEPTH)
         .pipe(Pacer::new("audio-pacer", audio.time_base)?)
         .pipe(audio.fader)
         .to_branch(tee)?;
