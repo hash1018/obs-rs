@@ -482,7 +482,7 @@ fn show_fader(ui: &mut egui::Ui, channel: &Channel<'_>, height: f32, actions: &m
 /// Drawn at the size it will keep even with nothing behind it: what arrives
 /// later is a number, not a layout. An unmeasured source shows the empty
 /// channel, which is also what silence looks like — the two are
-/// indistinguishable here, and saying so is [`AudioSourceSnapshot::peak_db`]'s
+/// indistinguishable here, and saying so is [`crate::snapshots::AudioSourceSnapshot::peak_db`]'s
 /// job rather than this one's.
 fn show_meter(ui: &mut egui::Ui, channel: &Channel<'_>, height: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(METER_WIDTH, height), egui::Sense::hover());
