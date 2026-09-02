@@ -30,10 +30,12 @@ fn pack_points(points: &[[f32; 2]]) -> Vec<u8> {
 /// failing would cost the whole project.
 fn unpack_points(packed: &[u8]) -> Vec<[f32; 2]> {
     packed
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|pair| {
-            let read = |bytes: &[u8]| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-            [read(&pair[..4]), read(&pair[4..])]
+            let (halves, _) = pair.as_chunks::<4>();
+            [f32::from_le_bytes(halves[0]), f32::from_le_bytes(halves[1])]
         })
         .collect()
 }
