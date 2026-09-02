@@ -2,20 +2,26 @@ use eframe::egui;
 
 use crate::ui::editor::ResizeHandle;
 
+/// Enough to tie the white dot to the outline's colour without becoming a
+/// ring in its own right.
+const HANDLE_RING_WIDTH: f32 = 1.5;
 const HANDLE_RADIUS: f32 = 4.0;
 const HANDLE_HIT_RADIUS: f32 = 8.0;
 const MIN_ITEM_SIZE: f32 = 16.0;
 
-pub(super) fn paint(painter: &egui::Painter, selection: egui::Color32, rect: egui::Rect) {
-    painter.rect_stroke(
-        rect,
-        0.0,
-        egui::Stroke::new(2.0, selection),
-        egui::StrokeKind::Outside,
-    );
+/// The grab points, without the outline between them.
+///
+/// The outline is drawn by the caller, because whether an edge is the
+/// picture's own or one a crop cut is not something this module knows — see
+/// `preview::paint_outline`.
+pub(super) fn paint_handles(painter: &egui::Painter, selection: egui::Color32, rect: egui::Rect) {
     for (_, center) in handle_centers(rect) {
         painter.circle_filled(center, HANDLE_RADIUS, egui::Color32::WHITE);
-        painter.circle_stroke(center, HANDLE_RADIUS, egui::Stroke::new(1.0, selection));
+        painter.circle_stroke(
+            center,
+            HANDLE_RADIUS,
+            egui::Stroke::new(HANDLE_RING_WIDTH, selection),
+        );
     }
 }
 

@@ -5,7 +5,7 @@ mod viewport_transform;
 
 use eframe::egui;
 
-use crate::domain::{Crop, SourceSettings, Stroke, Transform};
+use crate::domain::{Crop, SceneCanvas, SourceSettings, Stroke, Transform};
 use crate::engine::CompositeFrame;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
@@ -755,7 +755,168 @@ fn paint_editor_overlay(
     let rect = edited_canvas_rect(item, editor, viewport);
     let painter = ui.painter().with_clip_rect(workspace);
     paint_cropped_away(&painter, ui.visuals(), item, editor, viewport);
-    gizmo::paint(&painter, ui.visuals().selection.bg_fill, rect);
+    paint_alignment_guides(
+        &painter,
+        ui.visuals(),
+        item,
+        editor,
+        viewport,
+        snapshot.canvas,
+    );
+    paint_outline(&painter, rect, editor.effective_crop(item.id, item.crop));
+    gizmo::paint_handles(&painter, EDITOR_MARK, rect);
+}
+
+/// The selected item's outline, one edge at a time.
+///
+/// An edge a crop cut is marked instead of outlined: green and dashed, and
+/// no red line under it. Both at once would be one thicker line of an
+/// in-between colour, and the thing worth seeing is which of the four this
+/// is.
+///
+/// Without it a cropped Source is indistinguishable from a smaller one — the
+/// same rectangle either way — and the difference matters as soon as anyone
+/// wonders where the rest of the picture went.
+fn paint_outline(painter: &egui::Painter, rect: egui::Rect, crop: Crop) {
+    let edge = egui::Stroke::new(OUTLINE_WIDTH, EDITOR_MARK);
+    let cut_edge = egui::Stroke::new(CROP_EDGE_WIDTH, EDITOR_CROP_MARK);
+    for (cut, segment) in cropped_edges(rect, crop) {
+        if cut > 0.0 {
+            painter.extend(egui::Shape::dashed_line(
+                &segment, cut_edge, CROP_DASH, CROP_GAP,
+            ));
+        } else {
+            painter.line_segment(segment, edge);
+        }
+    }
+}
+
+/// How much each edge of `rect` had cut off it, with the line that edge is —
+/// top, left, right, bottom.
+fn cropped_edges(rect: egui::Rect, crop: Crop) -> [(f32, [egui::Pos2; 2]); 4] {
+    [
+        (crop.top, [rect.left_top(), rect.right_top()]),
+        (crop.left, [rect.left_top(), rect.left_bottom()]),
+        (crop.right, [rect.right_top(), rect.right_bottom()]),
+        (crop.bottom, [rect.left_bottom(), rect.right_bottom()]),
+    ]
+}
+
+/// What the editor draws over the picture with.
+///
+/// Not the theme's selection colour, which everything else selected uses.
+/// That colour is chosen to sit on the application's own surfaces, where the
+/// background is ours and any legible colour stays legible. These marks sit
+/// on the Scene, where what is underneath is whatever the user is capturing
+/// — and a blue outline over a window title bar, a code editor or a browser
+/// is a blue line on blue. Red is the one hue interfaces almost never use as
+/// a background, which is why every editor that draws over video reaches for
+/// it.
+///
+/// Fixed rather than derived, and the same in either theme, because what it
+/// has to contrast with is not the theme.
+const EDITOR_MARK: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x3B, 0x30);
+
+/// Thinner than the outline the guides measure to, so the two read as what
+/// they are: one is the item's edge, the others are distances from it.
+const GUIDE_WIDTH: f32 = 2.0;
+
+/// What a cropped edge is drawn with — see [`paint_outline`].
+///
+/// A second colour because it answers a second question. The outline says
+/// where the item is; this says the picture stops there because it was cut,
+/// and the two are worth telling apart at a glance.
+const EDITOR_CROP_MARK: egui::Color32 = egui::Color32::from_rgb(0x32, 0xD7, 0x4B);
+
+/// Screen pixels, not Canvas ones: these are marks on the display rather
+/// than part of the Scene, so they stay the same width at every zoom.
+const OUTLINE_WIDTH: f32 = 3.0;
+
+/// Heavier than the plain edge, because a dashed line of the same weight
+/// reads lighter than a solid one — half of it is not there.
+const CROP_EDGE_WIDTH: f32 = 4.0;
+
+/// Long enough to read as a dash at the size an edge usually is, with a gap
+/// wide enough that the line never reads as solid at a glance.
+const CROP_DASH: f32 = 9.0;
+const CROP_GAP: f32 = 9.0;
+
+/// How far the selected item sits from each Canvas edge.
+///
+/// In Canvas pixels, which is the only unit the answer is useful in: the
+/// Workspace is whatever size the window leaves it, so a distance measured on
+/// screen would read differently at every zoom for the same Scene. What the
+/// numbers are for is placing a Source exactly — centred, or flush to an edge
+/// — which is arithmetic the user would otherwise do by eye.
+///
+/// From the moment it is selected rather than only while it is moving: where
+/// a Source sits is worth reading before deciding to move it, and a figure
+/// that appears only once the pointer is down cannot be read against the one
+/// it had before.
+fn paint_alignment_guides(
+    painter: &egui::Painter,
+    visuals: &egui::Visuals,
+    item: &SceneItemSnapshot,
+    editor: &SceneEditorState,
+    viewport: ViewportTransform,
+    canvas: SceneCanvas,
+) {
+    let transform = editor.effective_transform(item.id, item.transform);
+    let crop = editor.effective_crop(item.id, item.crop);
+    let rect = egui::Rect::from(RectOf(item.canvas_rect_cropped(transform, crop)));
+    let stroke = egui::Stroke::new(GUIDE_WIDTH, EDITOR_MARK);
+
+    // Each guide runs from the edge of the item to the edge of the Canvas,
+    // along the middle of the side it measures — which is where there is
+    // most room for it and where the eye already is.
+    let middle = rect.center();
+    let ends = [
+        (egui::pos2(middle.x, rect.min.y), egui::pos2(middle.x, 0.0)),
+        (egui::pos2(rect.min.x, middle.y), egui::pos2(0.0, middle.y)),
+        (
+            egui::pos2(rect.max.x, middle.y),
+            egui::pos2(canvas.width, middle.y),
+        ),
+        (
+            egui::pos2(middle.x, rect.max.y),
+            egui::pos2(middle.x, canvas.height),
+        ),
+    ];
+    for (gap, (from, to)) in edge_gaps(rect, canvas).into_iter().zip(ends) {
+        let from = viewport.canvas_to_screen(from);
+        let to = viewport.canvas_to_screen(to);
+        painter.line_segment([from, to], stroke);
+        paint_guide_label(painter, visuals, from.lerp(to, 0.5), gap);
+    }
+}
+
+/// The gap from each Canvas edge to `rect` — top, left, right, bottom.
+///
+/// Signed, so an item past an edge reports how far past rather than zero.
+fn edge_gaps(rect: egui::Rect, canvas: SceneCanvas) -> [f32; 4] {
+    [
+        rect.min.y,
+        rect.min.x,
+        canvas.width - rect.max.x,
+        canvas.height - rect.max.y,
+    ]
+}
+
+/// One guide's number, on a chip so the digits stay legible over whatever the
+/// Scene happens to be showing there.
+fn paint_guide_label(painter: &egui::Painter, visuals: &egui::Visuals, at: egui::Pos2, gap: f32) {
+    let text = painter.layout_no_wrap(
+        format!("{} px", gap.round() as i32),
+        egui::FontId::proportional(11.0),
+        visuals.strong_text_color(),
+    );
+    let chip = egui::Rect::from_center_size(at, text.size() + egui::vec2(6.0, 2.0));
+    painter.rect_filled(chip, 2.0, visuals.extreme_bg_color.gamma_multiply(0.85));
+    painter.galley(
+        chip.center() - text.size() / 2.0,
+        text,
+        visuals.strong_text_color(),
+    );
 }
 
 /// The crop with whichever edges this handle holds put back.
@@ -1026,6 +1187,74 @@ mod tests {
             peak_db: None,
             position: None,
         }
+    }
+
+    /// Each cropped edge is marked on the side it was cut from. Getting this
+    /// wrong is drawing the mark on the opposite edge, which looks right
+    /// until someone crops one side.
+    #[test]
+    fn a_cropped_edge_is_marked_on_the_side_it_was_cut_from() {
+        let rect = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 70.0));
+        let crop = Crop {
+            left: 0.0,
+            top: 8.0,
+            right: 4.0,
+            bottom: 0.0,
+        };
+
+        let marked: Vec<[egui::Pos2; 2]> = cropped_edges(rect, crop)
+            .into_iter()
+            .filter(|(cut, _)| *cut > 0.0)
+            .map(|(_, segment)| segment)
+            .collect();
+
+        assert_eq!(
+            marked,
+            vec![
+                [rect.left_top(), rect.right_top()],
+                [rect.right_top(), rect.right_bottom()],
+            ],
+            "the top and right were cut, so the top and right are marked"
+        );
+    }
+
+    /// The four numbers are gaps to the Canvas edges, so they and the item
+    /// account for the whole of it — which is what makes them addable, and
+    /// how a Source gets centred by making two of them equal.
+    #[test]
+    fn the_alignment_gaps_and_the_item_span_the_canvas() {
+        let canvas = SceneCanvas {
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let rect = egui::Rect::from_min_size(egui::pos2(1106.0, 427.0), egui::vec2(633.0, 357.0));
+
+        let [top, left, right, bottom] = edge_gaps(rect, canvas);
+
+        assert_eq!(
+            [top, left],
+            [427.0, 1106.0],
+            "measured from the Canvas edge"
+        );
+        assert_eq!(left + rect.width() + right, canvas.width);
+        assert_eq!(top + rect.height() + bottom, canvas.height);
+    }
+
+    /// An item hanging off the edge has a negative gap rather than a clamped
+    /// zero: how far past it went is the thing worth knowing, and zero would
+    /// say it was flush.
+    #[test]
+    fn an_item_outside_the_canvas_has_a_negative_gap() {
+        let canvas = SceneCanvas {
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let rect = egui::Rect::from_min_size(egui::pos2(-40.0, 0.0), egui::vec2(200.0, 100.0));
+
+        let [_, left, right, _] = edge_gaps(rect, canvas);
+
+        assert_eq!(left, -40.0);
+        assert_eq!(right, 1760.0, "still measured from the far edge");
     }
 
     /// A stripe crossing the area has both ends on its border, at 45
