@@ -225,6 +225,7 @@ impl Backend {
                     frame_rate,
                     bit_rate,
                     gop_size,
+                    max_b_frames: None,
                 },
             )?)),
         }
