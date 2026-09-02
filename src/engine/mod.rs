@@ -33,10 +33,10 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwapOption;
 use eframe::egui_wgpu::RenderState;
-use media_pp::elements::{VideoFit, VideoLayer, VideoRect};
+use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 use time::OffsetDateTime;
 
-use crate::domain::{SceneCanvas, SceneItemId, SourceKind, SourceSettings, Transform};
+use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceKind, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 
@@ -81,7 +81,7 @@ enum EngineCommand {
     /// opener thread rather than by the UI — see [`SourceOpener`].
     Opened(Box<Opened>),
     /// One item's Transform mid-gesture, which the project does not hold yet.
-    Dragging(SceneItemId, Transform),
+    Dragging(SceneItemId, Transform, Crop),
     /// A Drawing's strokes mid-gesture, for the same reason `Dragging` exists:
     /// the mark has to appear under the pointer, and the project is not told
     /// until the pointer comes up. Carries the whole list rather than the one
@@ -385,8 +385,10 @@ impl EngineManager {
     /// would then show the item where it used to be until the pointer is
     /// released, with the gizmo somewhere else entirely, so the layer follows
     /// the gesture directly and the snapshot confirms it afterwards.
-    pub fn set_dragging_transform(&self, item: SceneItemId, transform: Transform) {
-        let _ = self.commands.send(EngineCommand::Dragging(item, transform));
+    pub fn set_dragging_transform(&self, item: SceneItemId, transform: Transform, crop: Crop) {
+        let _ = self
+            .commands
+            .send(EngineCommand::Dragging(item, transform, crop));
     }
 
     /// Tells the engine whether anyone is looking at the Preview.
@@ -864,7 +866,12 @@ fn apply_command(
                 engine.backend.remove_source(&source.name);
             }
             let item = &scene.items[index];
-            let layer = layer_for(item, item.transform, (scene.items.len() - index) as i32);
+            let layer = layer_for(
+                item,
+                item.transform,
+                item.crop,
+                (scene.items.len() - index) as i32,
+            );
             request_open(engine, recording.mixer_handle(), open, item, layer);
             true
         }
@@ -900,7 +907,7 @@ fn apply_command(
             }
             false
         }
-        EngineCommand::Dragging(item_id, transform) => {
+        EngineCommand::Dragging(item_id, transform, crop) => {
             let Some(index) = scene.items.iter().position(|item| item.id == item_id) else {
                 return false;
             };
@@ -908,7 +915,7 @@ fn apply_command(
                 return false;
             };
             let item = &scene.items[index];
-            let layer = layer_for(item, transform, (scene.items.len() - index) as i32);
+            let layer = layer_for(item, transform, crop, (scene.items.len() - index) as i32);
             let _ = source.layer.set_layer(layer);
             false
         }
@@ -1260,6 +1267,7 @@ fn finish_open(
         let _ = source.layer.set_layer(layer_for(
             item,
             item.transform,
+            item.crop,
             (scene.items.len() - index) as i32,
         ));
         refresh_pushed(source, item);
@@ -1538,7 +1546,7 @@ fn retry_missing(
         if since.elapsed() < retry_after(item) {
             continue;
         }
-        let layer = layer_for(item, item.transform, (count - index) as i32);
+        let layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
         request_open(engine, mixer, open, item, layer);
     }
 }
@@ -1554,7 +1562,7 @@ fn reconcile(
     for (index, item) in snapshot.items.iter().enumerate() {
         // The snapshot is ordered front-most first, and the compositor draws
         // larger z later, so the two run opposite ways.
-        let layer = layer_for(item, item.transform, (count - index) as i32);
+        let layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
         match open.get_mut(&item.id) {
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
@@ -1623,8 +1631,13 @@ fn reconcile(
 /// Transform, so the fit is [`VideoFit::Stretch`]: whatever aspect the user
 /// asked for is expressed in that rectangle, and letterboxing inside it would
 /// second-guess them.
-fn layer_for(item: &SceneItemSnapshot, transform: Transform, z_index: i32) -> VideoLayer {
-    let [x, y, width, height] = item.canvas_rect(transform);
+fn layer_for(
+    item: &SceneItemSnapshot,
+    transform: Transform,
+    crop: Crop,
+    z_index: i32,
+) -> VideoLayer {
+    let [x, y, width, height] = item.canvas_rect_cropped(transform, crop);
     let mut layer = VideoLayer::new(VideoRect::new(
         x.round() as i32,
         y.round() as i32,
@@ -1634,12 +1647,37 @@ fn layer_for(item: &SceneItemSnapshot, transform: Transform, z_index: i32) -> Vi
     layer.z_index = z_index;
     layer.visible = item.visible;
     layer.fit = VideoFit::Stretch;
+    layer.source = source_rect(item, crop);
     // NV12 carries no alpha, so a Color Source's own is the layer's opacity
     // rather than something the blend could read out of its pixels.
     if let SourceSettings::Color(settings) = &item.settings {
         layer.opacity = f32::from(settings.rgba[3]) / 255.0;
     }
     layer
+}
+
+/// The part of the Source this item shows, or `None` for all of it.
+///
+/// The item's own crop, in the Source's own pixels — which is the unit it is
+/// stored in, and the reason it survives the item being scaled afterwards.
+/// `source_size` is a `f32` because the editor works in Canvas units, so the
+/// edges are rounded inwards here: a crop that grew by half a pixel would put
+/// back a sliver the user had cut off.
+///
+/// `None` where nothing is cropped, so a layer that was never cropped is the
+/// same layer it always was — and where the crop would leave nothing, which
+/// the compositor treats as a layer with nothing to draw rather than as an
+/// error.
+fn source_rect(item: &SceneItemSnapshot, crop: Crop) -> Option<VideoSourceRect> {
+    if crop == Crop::default() {
+        return None;
+    }
+    let [source_width, source_height] = item.source_size;
+    let x = crop.left.max(0.0).ceil() as u32;
+    let y = crop.top.max(0.0).ceil() as u32;
+    let width = (source_width - crop.left - crop.right).floor().max(0.0) as u32;
+    let height = (source_height - crop.top - crop.bottom).floor().max(0.0) as u32;
+    (width > 0 && height > 0).then(|| VideoSourceRect::new(x, y, width, height))
 }
 
 /// Counts composited frames over a rolling one-second window.
@@ -1862,6 +1900,55 @@ mod tests {
             },
         );
         assert_eq!(retry_after(&window), MISSING_RETRY);
+    }
+
+    /// What the compositor is told to draw, from what the item stores.
+    ///
+    /// Rounded inwards on every edge, because a crop is in the Source's own
+    /// pixels and the editor works in Canvas units: half a pixel back would
+    /// put a sliver of what was cut off into the picture.
+    #[test]
+    fn a_crop_becomes_the_region_the_layer_draws() {
+        let mut item = window_item(
+            1,
+            WindowCaptureTarget::Portal {
+                restore_token: None,
+            },
+        );
+        item.source_size = [1920.0, 1080.0];
+
+        assert_eq!(
+            source_rect(&item, Crop::default()),
+            None,
+            "an uncropped layer draws the whole frame, as it always did"
+        );
+
+        let region = source_rect(
+            &item,
+            Crop {
+                left: 100.5,
+                top: 50.0,
+                right: 200.0,
+                bottom: 0.0,
+            },
+        )
+        .expect("a crop that leaves something");
+        assert_eq!((region.x, region.y), (101, 50));
+        assert_eq!((region.width, region.height), (1619, 1030));
+
+        assert_eq!(
+            source_rect(
+                &item,
+                Crop {
+                    left: 1920.0,
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                }
+            ),
+            None,
+            "a crop that leaves nothing is a layer with nothing to draw"
+        );
     }
 
     /// Two claims at once, because the second is what makes the first cheap:

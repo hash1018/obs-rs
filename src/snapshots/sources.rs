@@ -50,10 +50,19 @@ impl SceneItemSnapshot {
     /// editor asks for the value it is part-way through dragging, which is not
     /// what the project database holds yet.
     pub fn canvas_rect(&self, transform: Transform) -> [f32; 4] {
-        let width = (self.source_size[0] - self.crop.left - self.crop.right).max(1.0)
-            * transform.scale[0].max(0.001);
-        let height = (self.source_size[1] - self.crop.top - self.crop.bottom).max(1.0)
-            * transform.scale[1].max(0.001);
+        self.canvas_rect_cropped(transform, self.crop)
+    }
+
+    /// The same, for a crop this item does not have yet.
+    ///
+    /// What a crop drag needs: the rectangle follows the edge being dragged
+    /// while the pointer is still down, and the crop it is following has not
+    /// been recorded — the same split every other gesture here makes.
+    pub fn canvas_rect_cropped(&self, transform: Transform, crop: Crop) -> [f32; 4] {
+        let width =
+            (self.source_size[0] - crop.left - crop.right).max(1.0) * transform.scale[0].max(0.001);
+        let height =
+            (self.source_size[1] - crop.top - crop.bottom).max(1.0) * transform.scale[1].max(0.001);
         [
             transform.position[0] - width * transform.anchor[0],
             transform.position[1] - height * transform.anchor[1],

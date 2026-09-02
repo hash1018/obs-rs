@@ -33,6 +33,10 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
   list says when one has finished — and play starts it again. It can be
   paused and scrubbed from the Properties dock, and seeking a paused clip
   moves the picture without starting it again.
+- **Crop.** Alt-drag a source's handle to cut into its picture instead of
+  resizing it: the dragged edge moves, the opposite one stays, and what is
+  being cut off shows faintly behind while you aim. Alt+double-click puts an
+  edge back, and the Properties dock takes the four numbers exactly.
 - **Recording** to MP4, Matroska or HLS, with hardware encoding where the
   machine has it. One recording can be split into several files by elapsed
   time or by size.
@@ -121,7 +125,7 @@ you try it:
 - **Seven source kinds.** Display Capture, Window Capture, Media File,
   Network Stream, Image, Drawing and Color. Cameras are not there.
 
-- **No filters, transitions or hotkeys.** Switching Scenes is a cut.
+- **No filters or transitions.** Switching Scenes is a cut.
 
 ## Contributing
 

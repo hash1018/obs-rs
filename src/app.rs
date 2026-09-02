@@ -523,9 +523,9 @@ impl ObsApp {
                     settings.gain_db = gain_db;
                 }
             }
-            UiAction::DragSceneItem(item_id, transform) => {
+            UiAction::DragSceneItem(item_id, transform, crop) => {
                 if let Some(engine) = &self.engine {
-                    engine.set_dragging_transform(item_id, transform);
+                    engine.set_dragging_transform(item_id, transform, crop);
                 }
             }
             UiAction::SetFullscreen(fullscreen) => {

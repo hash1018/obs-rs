@@ -263,6 +263,18 @@ The settings page binds by listening: the button shows what is bound and, while 
 
 Global hotkeys — keys that work while another application has focus — are a different mechanism per platform and a separate piece of work.
 
+## Crop
+
+A SceneItem stores how much of its Source to leave out, on each of the four edges, in the Source's own pixels. Its own rather than the Canvas's, so a crop survives the item being resized afterwards — the same reason a Drawing's strokes are stored in the Drawing's coordinates.
+
+`media-pp`'s `VideoLayer::source` is what makes it real: the compositor draws that region and fits *it* into the item's rectangle, so cropping a 16:9 capture square and containing it in a square rectangle fills the square. Until that existed the crop was stored, honoured by the editor's geometry, and ignored by the compositor — a number describing something the recording did not do.
+
+Alt held on a resize handle crops instead of resizing, which is the convention every editor with both gestures uses. The edge under the pointer moves and the opposite one stays put: cropping from the left while the whole item slid left would be aiming at a moving target, and the undragged edges are what a person lines the picture up against. The scale comes out of the gesture unchanged, because the rectangle and the region behind it shrank by the same amount.
+
+While the gesture runs, what is being cut is drawn faintly behind the item rather than simply removed. A crop with nothing showing behind it is one you cannot judge — the edge being lined up is exactly what has just been hidden. It goes when the pointer comes up, because after that the crop *is* the picture.
+
+Alt+double-click puts a crop back: on a handle, the edges that handle holds; inside the item, all four. The Properties dock carries the same four numbers, editable, because "a hundred pixels off the left" is not something a drag can be trusted with. Both paths go straight to the compositor while they move and to the project once, when they settle — the split every gesture in this application makes.
+
 ## The Properties dock
 
 What the selected SceneItem is, as it currently stands: name and kind, its place and size on the Canvas, whether it is visible and locked, and then whatever its kind has to say — the monitor and its rectangle in the virtual desktop, a window's program and title, a Drawing's stroke count, a Color's colour, a media file's path and whether it loops.

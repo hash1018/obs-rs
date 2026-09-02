@@ -5,13 +5,13 @@ mod viewport_transform;
 
 use eframe::egui;
 
-use crate::domain::{SourceSettings, Stroke, Transform};
+use crate::domain::{Crop, SourceSettings, Stroke, Transform};
 use crate::engine::CompositeFrame;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
 
-use super::editor::{SceneEditorState, Tool, TransformDrag, TransformDragMode};
+use super::editor::{ResizeHandle, SceneEditorState, Tool, TransformDrag, TransformDragMode};
 use super::{UiAction, UiResources};
 use viewport_transform::{ViewportTransform, fit_aspect_ratio};
 
@@ -228,8 +228,12 @@ fn handle_pointer(
 
     if response.dragged() && editor.drag.is_none() {
         let drag_origin = ui.input(|input| input.pointer.press_origin()).or(pointer);
+        // Read as the drag begins rather than per frame: letting go of Alt
+        // half way through a gesture must not turn a crop into a resize under
+        // the pointer.
+        let cropping = ui.input(|input| input.modifiers.alt);
         if let Some(drag_origin) = drag_origin {
-            begin_drag(drag_origin, viewport, editor, snapshot);
+            begin_drag(drag_origin, viewport, editor, snapshot, cropping);
         }
     }
 
@@ -241,39 +245,90 @@ fn handle_pointer(
         // use the total gesture delta rather than the previous frame's delta.
         let screen_delta = response.total_drag_delta().unwrap_or_default();
         let delta = viewport.screen_delta_to_canvas(screen_delta);
-        let transform = match drag.mode {
-            TransformDragMode::Move => Transform {
-                position: [
-                    drag.original.position[0] + delta.x,
-                    drag.original.position[1] + delta.y,
-                ],
-                ..drag.original
-            },
+        let (transform, crop) = match drag.mode {
+            TransformDragMode::Move => (
+                Transform {
+                    position: [
+                        drag.original.position[0] + delta.x,
+                        drag.original.position[1] + delta.y,
+                    ],
+                    ..drag.original
+                },
+                drag.crop,
+            ),
             TransformDragMode::Resize(handle) => {
                 let original_rect = item_canvas_rect(item, drag.original);
-                transform_from_rect(
-                    gizmo::resize_rect(original_rect, handle, delta),
-                    drag.original,
-                    item,
+                (
+                    transform_from_rect(
+                        gizmo::resize_rect(original_rect, handle, delta),
+                        drag.original,
+                        item,
+                    ),
+                    drag.crop,
                 )
             }
+            TransformDragMode::Crop(handle) => crop_drag(item, drag, handle, delta),
         };
-        if editor.transform_override != Some((drag.item_id, transform)) {
-            actions.push(UiAction::DragSceneItem(drag.item_id, transform));
+        if editor.transform_override != Some((drag.item_id, transform))
+            || editor.crop_override != Some((drag.item_id, crop))
+        {
+            actions.push(UiAction::DragSceneItem(drag.item_id, transform, crop));
         }
         editor.transform_override = Some((drag.item_id, transform));
+        editor.crop_override = Some((drag.item_id, crop));
         ui.ctx().request_repaint();
     }
 
     if response.drag_stopped()
         && let Some(drag) = editor.drag.take()
-        && let Some((item_id, transform)) = editor.transform_override
-        && item_id == drag.item_id
-        && transform != drag.original
     {
-        actions.push(UiAction::Project(ProjectCommand::Source(
-            SourceCommand::SetTransform(item_id, transform),
-        )));
+        // A crop drag moves both, so both are recorded — and each only when
+        // it actually moved, so a plain drag still writes one row.
+        if let Some((item_id, crop)) = editor.crop_override
+            && item_id == drag.item_id
+            && crop != drag.crop
+        {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::SetCrop(item_id, crop),
+            )));
+        }
+        if let Some((item_id, transform)) = editor.transform_override
+            && item_id == drag.item_id
+            && transform != drag.original
+        {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::SetTransform(item_id, transform),
+            )));
+        }
+    }
+
+    // Alt+double-click on the selected item puts a crop back. On a handle it
+    // is that edge alone, in the middle of the item it is all four — the same
+    // place each gesture starts, so undoing one is where doing it was.
+    if response.double_clicked()
+        && ui.input(|input| input.modifiers.alt)
+        && let Some(pointer) = pointer
+        && let Some(item) = selected_item(editor, snapshot)
+        && !item.locked
+    {
+        let crop = editor.effective_crop(item.id, item.crop);
+        let reset = match selected_handle_at(pointer, viewport, editor, snapshot) {
+            Some((handle, _)) => uncrop_edges(crop, handle),
+            None if edited_canvas_rect(item, editor, viewport).contains(pointer) => Crop::default(),
+            None => crop,
+        };
+        if reset != crop {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::SetCrop(item.id, reset),
+            )));
+            // Straight to the compositor as well, for the same reason the
+            // drag goes there: the project's answer arrives a frame or two
+            // later, and the picture should not wait for it.
+            let transform = editor.effective_transform(item.id, item.transform);
+            actions.push(UiAction::DragSceneItem(item.id, transform, reset));
+            editor.crop_override = Some((item.id, reset));
+        }
+        return;
     }
 
     if response.clicked()
@@ -439,6 +494,7 @@ fn begin_drag(
     viewport: ViewportTransform,
     editor: &mut SceneEditorState,
     snapshot: &SourcesSnapshot,
+    cropping: bool,
 ) {
     if let Some((handle, item)) = selected_handle_at(drag_origin, viewport, editor, snapshot) {
         if !item.locked {
@@ -446,7 +502,15 @@ fn begin_drag(
             editor.drag = Some(TransformDrag {
                 item_id: item.id,
                 original,
-                mode: TransformDragMode::Resize(handle),
+                crop: editor.effective_crop(item.id, item.crop),
+                // The same handles either way. Alt is what every editor with
+                // both gestures uses to tell them apart, and a handle is
+                // where both of them start.
+                mode: if cropping {
+                    TransformDragMode::Crop(handle)
+                } else {
+                    TransformDragMode::Resize(handle)
+                },
             });
         }
     } else if let Some(item) = drag_target(drag_origin, viewport, editor, snapshot) {
@@ -456,11 +520,117 @@ fn begin_drag(
             editor.drag = Some(TransformDrag {
                 item_id: item.id,
                 original,
+                crop: editor.effective_crop(item.id, item.crop),
                 mode: TransformDragMode::Move,
             });
         }
     } else {
         editor.clear_selection();
+    }
+}
+
+/// Where a crop drag has taken the item: what is cut off, and the rectangle
+/// that leaves.
+///
+/// The edge under the pointer moves and the opposite one stays put. Cropping
+/// from the left while the whole item slid left would be aiming at a moving
+/// target — and it is the *un*dragged edges that a person is lining the
+/// picture up against.
+///
+/// The delta arrives in Canvas units and the crop is in the Source's own
+/// pixels, so it is divided by the scale on the way in. What comes back out
+/// is a rectangle whose width is `(source - crop) * scale` again, which is
+/// why the scale survives the gesture unchanged: both sides shrank by the
+/// same amount.
+fn crop_drag(
+    item: &SceneItemSnapshot,
+    drag: TransformDrag,
+    handle: ResizeHandle,
+    delta: egui::Vec2,
+) -> (Transform, Crop) {
+    let scale = [
+        drag.original.scale[0].max(0.001),
+        drag.original.scale[1].max(0.001),
+    ];
+    let (left, right, top, bottom) = (
+        matches!(
+            handle,
+            ResizeHandle::Left | ResizeHandle::TopLeft | ResizeHandle::BottomLeft
+        ),
+        matches!(
+            handle,
+            ResizeHandle::Right | ResizeHandle::TopRight | ResizeHandle::BottomRight
+        ),
+        matches!(
+            handle,
+            ResizeHandle::Top | ResizeHandle::TopLeft | ResizeHandle::TopRight
+        ),
+        matches!(
+            handle,
+            ResizeHandle::Bottom | ResizeHandle::BottomLeft | ResizeHandle::BottomRight
+        ),
+    );
+    // In source pixels, and only on the edges this handle holds.
+    let horizontal = delta.x / scale[0];
+    let vertical = delta.y / scale[1];
+    let crop = clamp_crop(
+        Crop {
+            left: drag.crop.left + if left { horizontal } else { 0.0 },
+            right: drag.crop.right - if right { horizontal } else { 0.0 },
+            top: drag.crop.top + if top { vertical } else { 0.0 },
+            bottom: drag.crop.bottom - if bottom { vertical } else { 0.0 },
+        },
+        item.source_size,
+    );
+
+    // What was actually taken, after the clamp — the pointer can ask for more
+    // than the picture has, and the rectangle must follow what happened
+    // rather than what was asked.
+    let original_rect =
+        egui::Rect::from(RectOf(item.canvas_rect_cropped(drag.original, drag.crop)));
+    let cut = egui::vec2(
+        (crop.left - drag.crop.left) * scale[0],
+        (crop.top - drag.crop.top) * scale[1],
+    );
+    let width = (item.source_size[0] - crop.left - crop.right).max(1.0) * scale[0];
+    let height = (item.source_size[1] - crop.top - crop.bottom).max(1.0) * scale[1];
+    let rect = egui::Rect::from_min_size(original_rect.min + cut, egui::vec2(width, height));
+
+    (
+        transform_from_rect_cropped(rect, drag.original, item, crop),
+        crop,
+    )
+}
+
+/// Keeps a crop inside the picture: never negative, and never so deep that
+/// nothing is left. One pixel is the floor because a layer of no width is one
+/// the compositor would refuse — and because a source you have cropped away
+/// entirely is one you meant to hide.
+///
+/// Shared with the Properties dock, which can be typed into as freely as this
+/// can be dragged.
+pub(in crate::ui) fn clamp_crop(crop: Crop, source_size: [f32; 2]) -> Crop {
+    let clamp = |near: f32, far: f32, extent: f32| {
+        let near = near.max(0.0).min((extent - 1.0).max(0.0));
+        let far = far.max(0.0).min((extent - near - 1.0).max(0.0));
+        (near, far)
+    };
+    let (left, right) = clamp(crop.left, crop.right, source_size[0]);
+    let (top, bottom) = clamp(crop.top, crop.bottom, source_size[1]);
+    Crop {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+/// `[x, y, width, height]` as egui reads it.
+struct RectOf([f32; 4]);
+
+impl From<RectOf> for egui::Rect {
+    fn from(RectOf([x, y, width, height]): RectOf) -> Self {
+        Self::from_min_size(egui::pos2(x, y), egui::vec2(width, height))
     }
 }
 
@@ -511,8 +681,7 @@ fn paint_editor_overflow(
     let Some(item) = selected_item(editor, snapshot).filter(|item| item.visible) else {
         return;
     };
-    let transform = editor.effective_transform(item.id, item.transform);
-    let source_rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform));
+    let source_rect = edited_canvas_rect(item, editor, viewport);
     let color = overflow_fill(ui, item);
 
     for overflow_rect in workspace_overflow_rects(workspace, viewport.viewport()) {
@@ -534,10 +703,87 @@ fn paint_editor_overlay(
     let Some(item) = selected_item(editor, snapshot) else {
         return;
     };
-    let transform = editor.effective_transform(item.id, item.transform);
-    let rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform));
+    let rect = edited_canvas_rect(item, editor, viewport);
     let painter = ui.painter().with_clip_rect(workspace);
+    paint_cropped_away(&painter, ui.visuals(), item, editor, viewport);
     gizmo::paint(&painter, ui.visuals().selection.bg_fill, rect);
+}
+
+/// The crop with whichever edges this handle holds put back.
+fn uncrop_edges(crop: Crop, handle: ResizeHandle) -> Crop {
+    let cleared = |held: bool, value: f32| if held { 0.0 } else { value };
+    Crop {
+        left: cleared(
+            matches!(
+                handle,
+                ResizeHandle::Left | ResizeHandle::TopLeft | ResizeHandle::BottomLeft
+            ),
+            crop.left,
+        ),
+        right: cleared(
+            matches!(
+                handle,
+                ResizeHandle::Right | ResizeHandle::TopRight | ResizeHandle::BottomRight
+            ),
+            crop.right,
+        ),
+        top: cleared(
+            matches!(
+                handle,
+                ResizeHandle::Top | ResizeHandle::TopLeft | ResizeHandle::TopRight
+            ),
+            crop.top,
+        ),
+        bottom: cleared(
+            matches!(
+                handle,
+                ResizeHandle::Bottom | ResizeHandle::BottomLeft | ResizeHandle::BottomRight
+            ),
+            crop.bottom,
+        ),
+    }
+}
+
+/// What a crop is leaving out, while it is being dragged.
+///
+/// Faint, and only during the gesture: a crop with nothing showing behind it
+/// is a cut you cannot judge — you can see how much is gone but not what, and
+/// the edge you are lining up is exactly what has just been hidden. It goes
+/// as soon as the pointer comes up, because after that the crop *is* the
+/// picture.
+fn paint_cropped_away(
+    painter: &egui::Painter,
+    visuals: &egui::Visuals,
+    item: &SceneItemSnapshot,
+    editor: &SceneEditorState,
+    viewport: ViewportTransform,
+) {
+    let Some(drag) = editor.drag else {
+        return;
+    };
+    if !matches!(drag.mode, TransformDragMode::Crop(_)) || drag.item_id != item.id {
+        return;
+    }
+    let transform = editor.effective_transform(item.id, item.transform);
+    let crop = editor.effective_crop(item.id, item.crop);
+    let [visible_x, visible_y, _, _] = item.canvas_rect_cropped(transform, crop);
+    let [scale_x, scale_y] = [transform.scale[0].max(0.001), transform.scale[1].max(0.001)];
+    // The whole picture where it would be if nothing were cut: the visible
+    // rectangle, pushed back out by what each edge took.
+    let whole = viewport.canvas_rect_to_screen(egui::Rect::from_min_size(
+        egui::pos2(
+            visible_x - crop.left * scale_x,
+            visible_y - crop.top * scale_y,
+        ),
+        egui::vec2(item.source_size[0] * scale_x, item.source_size[1] * scale_y),
+    ));
+    painter.rect_filled(whole, 0.0, visuals.extreme_bg_color.gamma_multiply(0.35));
+    painter.rect_stroke(
+        whole,
+        0.0,
+        egui::Stroke::new(1.0, visuals.weak_text_color()),
+        egui::StrokeKind::Inside,
+    );
 }
 
 fn selected_handle_at<'a>(
@@ -547,8 +793,7 @@ fn selected_handle_at<'a>(
     snapshot: &'a SourcesSnapshot,
 ) -> Option<(super::editor::ResizeHandle, &'a SceneItemSnapshot)> {
     let item = selected_item(editor, snapshot)?;
-    let transform = editor.effective_transform(item.id, item.transform);
-    let rect = viewport.canvas_rect_to_screen(item_canvas_rect(item, transform));
+    let rect = edited_canvas_rect(item, editor, viewport);
     gizmo::hit_test(rect, pointer).map(|handle| (handle, item))
 }
 
@@ -608,11 +853,7 @@ fn item_contains_pointer(
     viewport: ViewportTransform,
     editor: &SceneEditorState,
 ) -> bool {
-    let transform = editor.effective_transform(item.id, item.transform);
-    item.visible
-        && viewport
-            .canvas_rect_to_screen(item_canvas_rect(item, transform))
-            .contains(pointer)
+    item.visible && edited_canvas_rect(item, editor, viewport).contains(pointer)
 }
 
 fn workspace_overflow_rects(workspace: egui::Rect, viewport: egui::Rect) -> [egui::Rect; 4] {
@@ -660,8 +901,25 @@ fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
 }
 
 fn item_canvas_rect(item: &SceneItemSnapshot, transform: Transform) -> egui::Rect {
-    let [x, y, width, height] = item.canvas_rect(transform);
-    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height))
+    egui::Rect::from(RectOf(item.canvas_rect(transform)))
+}
+
+/// Where the item is *right now*, gesture included: the transform being
+/// dragged and the crop being dragged, either of which may be ahead of what
+/// the project holds.
+///
+/// Everything the editor draws and hit-tests goes through this, so a gizmo
+/// follows a crop as closely as it follows a resize.
+fn edited_canvas_rect(
+    item: &SceneItemSnapshot,
+    editor: &SceneEditorState,
+    viewport: ViewportTransform,
+) -> egui::Rect {
+    let transform = editor.effective_transform(item.id, item.transform);
+    let crop = editor.effective_crop(item.id, item.crop);
+    viewport.canvas_rect_to_screen(egui::Rect::from(RectOf(
+        item.canvas_rect_cropped(transform, crop),
+    )))
 }
 
 fn transform_from_rect(
@@ -669,8 +927,19 @@ fn transform_from_rect(
     original: Transform,
     item: &SceneItemSnapshot,
 ) -> Transform {
-    let source_width = (item.source_size[0] - item.crop.left - item.crop.right).max(1.0);
-    let source_height = (item.source_size[1] - item.crop.top - item.crop.bottom).max(1.0);
+    transform_from_rect_cropped(rect, original, item, item.crop)
+}
+
+/// The same, for a crop the item does not have yet — see
+/// [`SceneItemSnapshot::canvas_rect_cropped`].
+fn transform_from_rect_cropped(
+    rect: egui::Rect,
+    original: Transform,
+    item: &SceneItemSnapshot,
+    crop: Crop,
+) -> Transform {
+    let source_width = (item.source_size[0] - crop.left - crop.right).max(1.0);
+    let source_height = (item.source_size[1] - crop.top - crop.bottom).max(1.0);
     let anchor = egui::vec2(original.anchor[0], original.anchor[1]);
     let position = rect.min + rect.size() * anchor;
     Transform {
@@ -708,6 +977,86 @@ mod tests {
             peak_db: None,
             position: None,
         }
+    }
+
+    /// The whole of a crop drag: the edge under the pointer moves, the
+    /// opposite one stays where it was, and the scale comes out unchanged —
+    /// which is what makes a crop a crop rather than a resize.
+    #[test]
+    fn cropping_moves_the_dragged_edge_and_leaves_the_others_alone() {
+        let item = color_item();
+        let drag = TransformDrag {
+            item_id: item.id,
+            original: item.transform,
+            crop: Crop::default(),
+            mode: TransformDragMode::Crop(ResizeHandle::Left),
+        };
+        let before = egui::Rect::from(RectOf(item.canvas_rect(item.transform)));
+
+        // A hundred Canvas units in, at scale 1.
+        let (transform, crop) = crop_drag(&item, drag, ResizeHandle::Left, egui::vec2(100.0, 0.0));
+
+        assert_eq!(crop.left, 100.0);
+        assert_eq!((crop.right, crop.top, crop.bottom), (0.0, 0.0, 0.0));
+        assert_eq!(
+            transform.scale, item.transform.scale,
+            "a crop takes pixels away, it does not resize what is left"
+        );
+        let after = egui::Rect::from(RectOf(item.canvas_rect_cropped(transform, crop)));
+        assert!(
+            (after.right() - before.right()).abs() < 0.01,
+            "the edge that was not dragged must not move: {} against {}",
+            after.right(),
+            before.right()
+        );
+        assert!(
+            (after.left() - (before.left() + 100.0)).abs() < 0.01,
+            "the dragged edge follows the pointer"
+        );
+    }
+
+    /// A crop cannot eat the whole picture, and cannot go negative — the
+    /// pointer is free to ask for both.
+    #[test]
+    fn a_crop_is_held_inside_the_picture() {
+        let item = color_item();
+        let drag = TransformDrag {
+            item_id: item.id,
+            original: item.transform,
+            crop: Crop::default(),
+            mode: TransformDragMode::Crop(ResizeHandle::Left),
+        };
+
+        let (_, past_the_end) =
+            crop_drag(&item, drag, ResizeHandle::Left, egui::vec2(9_000.0, 0.0));
+        assert_eq!(past_the_end.left, item.source_size[0] - 1.0);
+
+        let (_, backwards) = crop_drag(&item, drag, ResizeHandle::Left, egui::vec2(-500.0, 0.0));
+        assert_eq!(
+            backwards.left, 0.0,
+            "dragging a crop outwards past the edge uncrops it and stops"
+        );
+    }
+
+    /// The reset gesture: a handle puts back the edges it holds, and nothing
+    /// else.
+    #[test]
+    fn uncropping_a_corner_clears_only_its_own_two_edges() {
+        let crop = Crop {
+            left: 10.0,
+            top: 20.0,
+            right: 30.0,
+            bottom: 40.0,
+        };
+
+        let corner = uncrop_edges(crop, ResizeHandle::TopLeft);
+
+        assert_eq!((corner.left, corner.top), (0.0, 0.0));
+        assert_eq!(
+            (corner.right, corner.bottom),
+            (30.0, 40.0),
+            "the edges the handle does not hold are left as they were"
+        );
     }
 
     #[test]
@@ -764,7 +1113,13 @@ mod tests {
         );
         let mut editor = SceneEditorState::default();
 
-        begin_drag(egui::pos2(480.0, 270.0), viewport, &mut editor, &snapshot);
+        begin_drag(
+            egui::pos2(480.0, 270.0),
+            viewport,
+            &mut editor,
+            &snapshot,
+            false,
+        );
 
         assert_eq!(editor.selected_item_id(), Some(SceneItemId(2)));
         assert!(matches!(
@@ -793,7 +1148,13 @@ mod tests {
         );
         let mut editor = SceneEditorState::default();
 
-        begin_drag(egui::pos2(480.0, 270.0), viewport, &mut editor, &snapshot);
+        begin_drag(
+            egui::pos2(480.0, 270.0),
+            viewport,
+            &mut editor,
+            &snapshot,
+            false,
+        );
 
         assert_eq!(editor.selected_item_id(), Some(SceneItemId(1)));
         assert!(matches!(

@@ -190,6 +190,9 @@ fn handle_source_command(
         SourceCommand::SetRtspReconnect(scene_item_id, reconnect) => {
             SourceStore::set_rtsp_reconnect(transaction, scene_item_id, reconnect)
         }
+        SourceCommand::SetCrop(scene_item_id, crop) => {
+            SourceStore::set_crop(transaction, scene_item_id, crop)
+        }
         SourceCommand::SetMediaLooping(scene_item_id, looping) => {
             SourceStore::set_media_looping(transaction, scene_item_id, looping)
         }

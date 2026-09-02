@@ -1,4 +1,4 @@
-use crate::domain::{SceneId, SceneItemId, Transform};
+use crate::domain::{Crop, SceneId, SceneItemId, Transform};
 use crate::snapshots::SourcesSnapshot;
 
 #[derive(Debug, Clone, Copy)]
@@ -17,12 +17,20 @@ pub(super) enum ResizeHandle {
 pub(super) enum TransformDragMode {
     Move,
     Resize(ResizeHandle),
+    /// The same handles with Alt held: what moves is where the Source's own
+    /// picture is cut rather than how large it is drawn. See
+    /// `preview::crop_drag`.
+    Crop(ResizeHandle),
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct TransformDrag {
     pub item_id: SceneItemId,
     pub original: Transform,
+    /// What the item was cropped to when the gesture began. Held for the
+    /// same reason `original` is: every frame's crop is computed from the
+    /// whole gesture's delta rather than accumulated from the last one.
+    pub crop: Crop,
     pub mode: TransformDragMode,
 }
 
@@ -144,6 +152,10 @@ pub(super) struct SceneEditorState {
     scene_id: Option<SceneId>,
     selected_item_id: Option<SceneItemId>,
     pub transform_override: Option<(SceneItemId, Transform)>,
+    /// What a crop drag has reached, until the project is told. Separate
+    /// from `transform_override` because a crop drag moves both and either
+    /// can settle first.
+    pub crop_override: Option<(SceneItemId, Crop)>,
     pub drag: Option<TransformDrag>,
     pub pen: PenState,
 }
@@ -172,6 +184,16 @@ impl SceneEditorState {
         {
             self.transform_override = None;
         }
+
+        if let Some((item_id, crop)) = self.crop_override
+            && snapshot
+                .items
+                .iter()
+                .find(|item| item.id == item_id)
+                .is_some_and(|item| item.crop == crop)
+        {
+            self.crop_override = None;
+        }
     }
 
     pub fn selected_item_id(&self) -> Option<SceneItemId> {
@@ -181,6 +203,7 @@ impl SceneEditorState {
     pub fn select(&mut self, item_id: SceneItemId) {
         if self.selected_item_id != Some(item_id) {
             self.transform_override = None;
+            self.crop_override = None;
             self.drag = None;
             // The tool belongs to the item it was chosen for. Carrying a pen
             // across to whatever is selected next would draw on something the
@@ -203,5 +226,12 @@ impl SceneEditorState {
         self.transform_override
             .filter(|(overridden_id, _)| *overridden_id == item_id)
             .map_or(stored, |(_, transform)| transform)
+    }
+
+    /// The crop being dragged, or the one the project holds.
+    pub fn effective_crop(&self, item_id: SceneItemId, stored: Crop) -> Crop {
+        self.crop_override
+            .filter(|(overridden_id, _)| *overridden_id == item_id)
+            .map_or(stored, |(_, crop)| crop)
     }
 }

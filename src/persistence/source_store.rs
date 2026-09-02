@@ -702,6 +702,35 @@ impl SourceStore {
         set_media_column(transaction, scene_item_id, "muted", muted)
     }
 
+    /// How much of the Source this item leaves out, in the Source's own
+    /// pixels.
+    ///
+    /// On the item rather than the Source, unlike a colour or a file path:
+    /// two items standing for one capture crop it differently, which is the
+    /// whole point of cropping one of them.
+    pub(crate) fn set_crop(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        crop: Crop,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_items
+             SET crop_left = ?1,
+                 crop_top = ?2,
+                 crop_right = ?3,
+                 crop_bottom = ?4
+             WHERE id = ?5",
+            params![
+                crop.left.max(0.0),
+                crop.top.max(0.0),
+                crop.right.max(0.0),
+                crop.bottom.max(0.0),
+                scene_item_id.0
+            ],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn set_transform(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,

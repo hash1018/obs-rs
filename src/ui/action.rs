@@ -1,6 +1,6 @@
 use crate::i18n::Locale;
 use crate::{
-    domain::{AudioSourceId, SceneId, SceneItemId, Transform},
+    domain::{AudioSourceId, Crop, SceneId, SceneItemId, Transform},
     project::ProjectCommand,
 };
 
@@ -12,7 +12,7 @@ pub enum UiAction {
     /// One item's Transform while the pointer is still down. Goes to the
     /// compositor and not to the project: a drag is one edit, recorded when it
     /// ends, but the picture has to follow the pointer meanwhile.
-    DragSceneItem(SceneItemId, Transform),
+    DragSceneItem(SceneItemId, Transform, Crop),
     /// A Drawing's strokes while the pointer is still down, for the same
     /// reason `DragSceneItem` exists: the mark has to be under the pointer,
     /// and the stroke is recorded once when the gesture ends.

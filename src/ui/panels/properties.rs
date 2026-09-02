@@ -12,12 +12,13 @@
 //! the Preview moves the numbers here. A dialog would have to be reopened to
 //! see that, and would cover the picture the numbers are about.
 //!
-//! # Nothing about crop
+//! # Crop is the second thing that can be set here
 //!
-//! `SceneItemSnapshot` carries one and the editor's geometry honours it, but
-//! nothing in the engine does — a cropped source composites uncropped. Until
-//! that is true, a crop shown here would be a number describing something the
-//! recording does not do.
+//! Alt-dragging a handle in the Preview is how a crop is usually made, and
+//! four numbers are how it is made *exactly* — "a hundred pixels off the
+//! left" is not something a drag can be trusted with. So these rows are
+//! editable, and they are in the Source's own pixels because that is the unit
+//! a crop survives a resize in.
 
 use eframe::egui;
 
@@ -29,6 +30,7 @@ use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 
 use super::super::UiAction;
 use super::super::editor::SceneEditorState;
+use super::super::preview::clamp_crop;
 use super::elide;
 
 pub(in crate::ui) fn show(
@@ -59,6 +61,7 @@ pub(in crate::ui) fn show(
                     i18n.text(kind_key(item.kind)).as_ref(),
                 );
                 show_placement(ui, item, editor, i18n);
+                show_crop(ui, item, editor, i18n, actions);
                 let ended = status
                     .and_then(|status| status.get(&item.id))
                     .is_some_and(|status| *status == SourceStatus::Ended);
@@ -108,6 +111,76 @@ fn show_placement(
         i18n.text(TextKey::PropertiesLocked).as_ref(),
         i18n.text(yes_no(item.locked)).as_ref(),
     );
+}
+
+/// How much of the Source this item leaves out, on one row and editable.
+///
+/// One row rather than four, because four labels for four numbers would be
+/// most of the dock — and because the four are one thing: what is cut off
+/// each side. The order is the one every CSS-shaped box uses, left first and
+/// clockwise, which the hover on each field names in case it is not.
+///
+/// Dragged with the pointer as well as typed: a drag gives the number the
+/// engine can follow live, and lets go of it once — the same split the
+/// Preview's own gestures make. `speed` is in Source pixels, so a slow drag
+/// moves single ones.
+fn show_crop(
+    ui: &mut egui::Ui,
+    item: &SceneItemSnapshot,
+    editor: &SceneEditorState,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let stored = editor.effective_crop(item.id, item.crop);
+    let mut crop = stored;
+    ui.label(i18n.text(TextKey::PropertiesCrop));
+    let mut released = false;
+    // Two by two rather than four across: at the dock's minimum width four
+    // fields on one line reach past its edge, and the pairs are the ones that
+    // belong together anyway — the two horizontal edges, then the vertical.
+    ui.vertical(|ui| {
+        let field_width = ((ui.available_width() - FIELD_MARGIN) / 2.0).max(28.0);
+        for pair in [
+            [
+                (&mut crop.left, TextKey::PropertiesCropLeft),
+                (&mut crop.right, TextKey::PropertiesCropRight),
+            ],
+            [
+                (&mut crop.top, TextKey::PropertiesCropTop),
+                (&mut crop.bottom, TextKey::PropertiesCropBottom),
+            ],
+        ] {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (value, label) in pair {
+                    let field = ui.add_sized(
+                        [field_width, 18.0],
+                        egui::DragValue::new(value)
+                            .speed(1.0)
+                            .range(0.0..=f32::from(u16::MAX))
+                            .fixed_decimals(0),
+                    );
+                    released |= field.drag_stopped() || field.lost_focus();
+                    field.on_hover_text(i18n.text(label));
+                }
+            });
+        }
+    });
+    ui.end_row();
+
+    let crop = clamp_crop(crop, item.source_size);
+    if crop == stored {
+        return;
+    }
+    // The picture follows every change; the project hears about it when the
+    // field is let go, which is what keeps a drag from writing a row a frame.
+    let transform = editor.effective_transform(item.id, item.transform);
+    actions.push(UiAction::DragSceneItem(item.id, transform, crop));
+    if released {
+        actions.push(UiAction::Project(ProjectCommand::Source(
+            SourceCommand::SetCrop(item.id, crop),
+        )));
+    }
 }
 
 /// What only this kind of Source has to say.

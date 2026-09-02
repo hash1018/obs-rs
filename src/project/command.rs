@@ -1,5 +1,5 @@
 use crate::domain::{
-    AudioSourceId, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
+    AudioSourceId, Crop, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
     RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
     WindowCaptureSettings,
 };
@@ -95,6 +95,10 @@ pub enum SourceCommand {
     /// Takes effect where it is: the running Source is told through its own
     /// handle rather than reopened, so switching this does not restart what
     /// is playing.
+    /// How much of the Source this item leaves out, in the Source's own
+    /// pixels — see [`crate::domain::Crop`]. Recorded once when the gesture
+    /// ends, like a Transform, and for the same reason.
+    SetCrop(SceneItemId, Crop),
     SetMediaLooping(SceneItemId, bool),
     /// How a live stream's session carries its video.
     ///
