@@ -204,6 +204,16 @@ impl Backend {
                         frame_rate,
                         bit_rate,
                         gop_size,
+                        // The encoder's own default, which on NVENC does use
+                        // B-frames: better quality at this bitrate, and the
+                        // reason not to was measured and did not hold. What
+                        // they delay is packets out, not frames in — 1080p60
+                        // BGRA takes ~2ms a frame to submit whether they are
+                        // on or off, and the frame comes straight back to its
+                        // pool either way. The first packet arrives 15 frames
+                        // in rather than 3, which a file does not care about;
+                        // a live send would, and that is not this branch.
+                        max_b_frames: None,
                     },
                 )?))
             }
@@ -217,6 +227,7 @@ impl Backend {
                     frame_rate,
                     bit_rate,
                     gop_size,
+                    max_b_frames: None,
                 },
             )?)),
         }
