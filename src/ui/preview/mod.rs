@@ -684,13 +684,62 @@ fn paint_editor_overflow(
     let source_rect = edited_canvas_rect(item, editor, viewport);
     let color = overflow_fill(ui, item);
 
+    let hatch = egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.9));
+
     for overflow_rect in workspace_overflow_rects(workspace, viewport.viewport()) {
-        if overflow_rect.is_positive() {
-            ui.painter()
-                .with_clip_rect(overflow_rect)
-                .rect_filled(source_rect, 0.0, color);
+        if !overflow_rect.is_positive() {
+            continue;
         }
+        let painter = ui.painter().with_clip_rect(overflow_rect);
+        painter.rect_filled(source_rect, 0.0, color);
+        // The fill says what the Source is; the hatching says this part of it
+        // is not in the output. A colour alone cannot say the second thing —
+        // a Color Source is drawn in its own colour on both sides of the
+        // Canvas edge, and a neutral grey over a dark Workspace reads as the
+        // picture merely continuing. A pattern reads whatever it is over.
+        hatch_area(&painter, source_rect.intersect(overflow_rect), hatch);
     }
+}
+
+/// Diagonal stripes across `area`, in screen space.
+///
+/// Placed on a grid the whole Workspace shares rather than measured from the
+/// area's own corner, so the stripes stay put as a Source is dragged: a
+/// pattern that slides with what it covers reads as motion of the thing
+/// rather than as a mark on it.
+fn hatch_area(painter: &egui::Painter, area: egui::Rect, stroke: egui::Stroke) {
+    /// Far enough apart to read as stripes rather than as a tint, close
+    /// enough that a thin sliver of overflow still gets one.
+    const SPACING: f32 = 9.0;
+
+    if !area.is_positive() {
+        return;
+    }
+    // Every 45-degree line is `x + y = offset`, so the ones crossing this
+    // area are the multiples of SPACING between its nearest and furthest
+    // corner sums.
+    let first = ((area.min.x + area.min.y) / SPACING).ceil() * SPACING;
+    let last = area.max.x + area.max.y;
+    let mut offset = first;
+    while offset <= last {
+        if let Some(segment) = hatch_segment(area, offset) {
+            painter.line_segment(segment, stroke);
+        }
+        offset += SPACING;
+    }
+}
+
+/// Where the 45-degree line `x + y == offset` enters and leaves `area`, or
+/// `None` for one that passes outside the corner it is nearest.
+fn hatch_segment(area: egui::Rect, offset: f32) -> Option<[egui::Pos2; 2]> {
+    let top = (offset - area.max.x).max(area.min.y);
+    let bottom = (offset - area.min.x).min(area.max.y);
+    (bottom > top).then(|| {
+        [
+            egui::pos2(offset - top, top),
+            egui::pos2(offset - bottom, bottom),
+        ]
+    })
 }
 
 fn paint_editor_overlay(
@@ -977,6 +1026,56 @@ mod tests {
             peak_db: None,
             position: None,
         }
+    }
+
+    /// A stripe crossing the area has both ends on its border, at 45
+    /// degrees, and nothing outside it — the whole of what makes the
+    /// hatching a hatching rather than a scribble over the Workspace.
+    #[test]
+    fn a_hatch_stripe_is_a_diagonal_across_the_area_and_stays_inside_it() {
+        let area = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(60.0, 50.0));
+
+        // Through the middle: its two corner sums bracket every line that
+        // crosses at all, so this one has to.
+        let offset = (area.min.x + area.min.y + area.max.x + area.max.y) / 2.0;
+        let [enter, leave] = hatch_segment(area, offset).expect("a line through the middle");
+
+        for point in [enter, leave] {
+            assert!(
+                area.contains(point),
+                "{point:?} is outside {area:?}, which the clip would hide \
+                 rather than the geometry preventing"
+            );
+            assert!(
+                (point.x + point.y - offset).abs() < 0.001,
+                "{point:?} is not on the line x + y = {offset}"
+            );
+        }
+        assert!(
+            ((leave.x - enter.x).abs() - (leave.y - enter.y).abs()).abs() < 0.001,
+            "a 45-degree stripe covers as much x as y: {enter:?} to {leave:?}"
+        );
+    }
+
+    /// The lines the loop would draw past either corner have nothing of the
+    /// area in them, and a stripe of zero length is a dot the pattern does
+    /// not want.
+    #[test]
+    fn a_hatch_stripe_outside_the_area_is_not_drawn() {
+        let area = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(60.0, 50.0));
+
+        assert!(
+            hatch_segment(area, area.min.x + area.min.y - 1.0).is_none(),
+            "before the near corner"
+        );
+        assert!(
+            hatch_segment(area, area.max.x + area.max.y + 1.0).is_none(),
+            "past the far corner"
+        );
+        assert!(
+            hatch_segment(area, area.min.x + area.min.y).is_none(),
+            "exactly on the near corner is a point, not a stripe"
+        );
     }
 
     /// The whole of a crop drag: the edge under the pointer moves, the
