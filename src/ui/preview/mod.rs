@@ -109,6 +109,7 @@ pub(super) fn show(
             handle_pointer(ui, &response, viewport, editor, snapshot, actions);
             paint_editor_overflow(ui, workspace_rect, viewport, editor, snapshot);
             paint_composite_frame(ui, viewport, resources.composite_frame, i18n);
+            paint_hovered_item(ui, workspace_rect, viewport, editor, snapshot);
             paint_editor_overlay(ui, workspace_rect, viewport, editor, snapshot);
 
             // Kept inside the panel, and shifted left rather than allowed to
@@ -767,6 +768,50 @@ fn paint_editor_overlay(
     gizmo::paint_handles(&painter, EDITOR_MARK, rect);
 }
 
+/// What a click would take, outlined under the pointer.
+///
+/// A Scene is a stack of rectangles with no edges of their own, and which
+/// one a click lands on is a question the picture cannot answer: a capture
+/// covering the Canvas and a Colour Source behind it look the same until one
+/// of them is selected. This answers it before the click rather than after.
+///
+/// Not the selected item, which has an outline already, and not during a
+/// drag, when what is under the pointer is not what the pointer is doing.
+/// Drawn before the selection overlay so that where the two meet, the
+/// selection is what is on top.
+fn paint_hovered_item(
+    ui: &egui::Ui,
+    workspace: egui::Rect,
+    viewport: ViewportTransform,
+    editor: &SceneEditorState,
+    snapshot: &SourcesSnapshot,
+) {
+    if editor.drag.is_some() {
+        return;
+    }
+    let Some(pointer) = ui.ctx().pointer_hover_pos() else {
+        return;
+    };
+    // Inside the picture only. The margin around it belongs to the Workspace,
+    // and an item hanging into it is being shown where it reaches rather than
+    // offered to be clicked.
+    if !viewport.viewport().contains(pointer) {
+        return;
+    }
+    let Some(item) = hit_test_item(pointer, viewport, editor, snapshot) else {
+        return;
+    };
+    if editor.selected_item_id() == Some(item.id) {
+        return;
+    }
+    ui.painter().with_clip_rect(workspace).rect_stroke(
+        edited_canvas_rect(item, editor, viewport),
+        0.0,
+        egui::Stroke::new(HOVER_WIDTH, EDITOR_HOVER_MARK),
+        egui::StrokeKind::Outside,
+    );
+}
+
 /// The selected item's outline, one edge at a time.
 ///
 /// An edge a crop cut is marked instead of outlined: green and dashed, and
@@ -821,6 +866,17 @@ const EDITOR_MARK: egui::Color32 = egui::Color32::from_rgb(0xFF, 0x3B, 0x30);
 /// they are: one is the item's edge, the others are distances from it.
 const GUIDE_WIDTH: f32 = 2.0;
 
+/// How far a guide's number sits off its line.
+///
+/// Far enough that the line does not strike through the digits, close enough
+/// that it is plainly that line's number and not the next one's.
+const LABEL_MARGIN: f32 = 5.0;
+
+/// Larger than the interface's own text, because it is read at a glance
+/// while the pointer is somewhere else, and with nothing behind it but the
+/// Scene.
+const LABEL_SIZE: f32 = 15.0;
+
 /// What a cropped edge is drawn with — see [`paint_outline`].
 ///
 /// A second colour because it answers a second question. The outline says
@@ -831,6 +887,17 @@ const EDITOR_CROP_MARK: egui::Color32 = egui::Color32::from_rgb(0x32, 0xD7, 0x4B
 /// Screen pixels, not Canvas ones: these are marks on the display rather
 /// than part of the Scene, so they stay the same width at every zoom.
 const OUTLINE_WIDTH: f32 = 3.0;
+
+/// What the item under the pointer is outlined with — see
+/// [`paint_hovered_item`].
+///
+/// Blue against the selection's red, which is the pair every editor that
+/// draws over a picture ends up at: two hues that no interface uses as a
+/// background, far enough apart to tell without looking twice.
+const EDITOR_HOVER_MARK: egui::Color32 = egui::Color32::from_rgb(0x0A, 0x84, 0xFF);
+
+/// Lighter than the selection's, because it is an offer rather than a state.
+const HOVER_WIDTH: f32 = 2.0;
 
 /// Heavier than the plain edge, because a dashed line of the same weight
 /// reads lighter than a solid one — half of it is not there.
@@ -886,7 +953,27 @@ fn paint_alignment_guides(
         let from = viewport.canvas_to_screen(from);
         let to = viewport.canvas_to_screen(to);
         painter.line_segment([from, to], stroke);
-        paint_guide_label(painter, visuals, from.lerp(to, 0.5), gap);
+        // Beside the guide rather than on it. With no plate behind them the
+        // digits have only their own shape to be read by, and a rule through
+        // the middle of that is what takes it away.
+        let (at, align) = if (to.x - from.x).abs() < f32::EPSILON {
+            (
+                from.lerp(to, 0.5) + egui::vec2(LABEL_MARGIN, 0.0),
+                egui::Align2::LEFT_CENTER,
+            )
+        } else {
+            (
+                from.lerp(to, 0.5) - egui::vec2(0.0, LABEL_MARGIN),
+                egui::Align2::CENTER_BOTTOM,
+            )
+        };
+        painter.text(
+            at,
+            align,
+            format!("{} px", gap.round() as i32),
+            egui::FontId::proportional(LABEL_SIZE),
+            visuals.strong_text_color(),
+        );
     }
 }
 
@@ -900,23 +987,6 @@ fn edge_gaps(rect: egui::Rect, canvas: SceneCanvas) -> [f32; 4] {
         canvas.width - rect.max.x,
         canvas.height - rect.max.y,
     ]
-}
-
-/// One guide's number, on a chip so the digits stay legible over whatever the
-/// Scene happens to be showing there.
-fn paint_guide_label(painter: &egui::Painter, visuals: &egui::Visuals, at: egui::Pos2, gap: f32) {
-    let text = painter.layout_no_wrap(
-        format!("{} px", gap.round() as i32),
-        egui::FontId::proportional(11.0),
-        visuals.strong_text_color(),
-    );
-    let chip = egui::Rect::from_center_size(at, text.size() + egui::vec2(6.0, 2.0));
-    painter.rect_filled(chip, 2.0, visuals.extreme_bg_color.gamma_multiply(0.85));
-    painter.galley(
-        chip.center() - text.size() / 2.0,
-        text,
-        visuals.strong_text_color(),
-    );
 }
 
 /// The crop with whichever edges this handle holds put back.
