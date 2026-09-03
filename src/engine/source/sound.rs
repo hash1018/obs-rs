@@ -104,8 +104,12 @@ pub(in crate::engine) fn mixer_name(name: &str) -> String {
 /// string would work in both. It is for the log: a Source in both mixes
 /// draws two branches into two elements, and one name between them leaves a
 /// topology diagram with no way to say which is which.
+///
+/// Built on [`mixer_name`] rather than beside it, because the `-audio` that
+/// one adds is not "the recording" — it is this Source's sound as opposed to
+/// its picture, which is a distinction the monitor's copy shares.
 fn monitor_name(name: &str) -> String {
-    format!("{name}-monitor")
+    format!("{}-monitor", mixer_name(name))
 }
 
 /// Which mixes a running Source's sound is in, and the `Tee` that decides it.

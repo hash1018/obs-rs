@@ -213,12 +213,12 @@ const MIN_CHANNEL_HEIGHT: f32 = 96.0;
 const MUTE_HEIGHT: f32 = 22.0;
 
 /// How much of a column's button strip the monitor button takes, and the gap
-/// between the two.
+/// between them.
 ///
-/// Narrow, because it is the second of the two: mute is what a hand reaches
-/// for in the middle of a take, and monitoring is set once and left.
-const MONITOR_WIDTH: f32 = 34.0;
-const BUTTON_GAP: f32 = 4.0;
+/// One width for both, and the pair centred under its column rather than
+/// filling it — see [`show_buttons`].
+const BUTTON_WIDTH: f32 = 46.0;
+const BUTTON_GAP: f32 = 6.0;
 
 /// Every label on the scale, in decibels. Every 12 rather than the 6 a large
 /// mixer uses: this dock is drawn at whatever height it is given, and half as
@@ -338,21 +338,7 @@ fn show_button_strip(
             if rect.right() < origin.left() || rect.left() > origin.right() {
                 continue;
             }
-            // The split is the same in every column, including one with
-            // nothing to put in the right half. Buttons that line up across
-            // columns are worth more than the width a channel with no
-            // monitor button could reclaim — and a mute button that is wider
-            // in some columns than others reads as a difference that means
-            // something.
-            let (mute, monitor) = rect.split_left_right_at_x(rect.right() - MONITOR_WIDTH);
-            show_mute(
-                ui,
-                mute.with_max_x(mute.right() - BUTTON_GAP),
-                channel,
-                i18n,
-                actions,
-            );
-            show_monitor(ui, monitor, channel, monitoring, i18n, actions);
+            show_buttons(ui, rect, channel, monitoring, i18n, actions);
         }
     });
 }
@@ -610,6 +596,41 @@ fn show_scale(ui: &mut egui::Ui, height: f32) {
             color,
         );
     }
+}
+
+/// One column's buttons: the same size as each other, centred under it.
+///
+/// Centred rather than spread across the column, because how many there are
+/// varies. A channel that cannot be monitored has only its mute button, and
+/// a lone control belongs in the middle of the space it is given — holding
+/// it to the left so that the mute buttons line up between columns would put
+/// every one of them off-centre to say something about the columns beside
+/// it.
+///
+/// The same width for both, because neither is the more important: one is
+/// what a hand reaches for in the middle of a take and the other is set once
+/// and left, and a size difference would be reading that as a ranking.
+fn show_buttons(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    channel: &Channel<'_>,
+    monitoring: bool,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let buttons = if channel.monitor.is_some() { 2.0 } else { 1.0 };
+    let width = buttons * BUTTON_WIDTH + (buttons - 1.0) * BUTTON_GAP;
+    let left = rect.center().x - width / 2.0;
+    let button = |index: f32| {
+        egui::Rect::from_min_size(
+            egui::pos2(left + index * (BUTTON_WIDTH + BUTTON_GAP), rect.top()),
+            egui::vec2(BUTTON_WIDTH, rect.height()),
+        )
+    };
+    show_mute(ui, button(0.0), channel, i18n, actions);
+    // Draws nothing for a channel there is no point monitoring, which is
+    // also the case `buttons` counted above.
+    show_monitor(ui, button(1.0), channel, monitoring, i18n, actions);
 }
 
 /// A speaker, crossed out when muted.
