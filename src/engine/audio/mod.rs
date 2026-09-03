@@ -113,16 +113,20 @@ fn monitor_registration(name: &str) -> String {
 /// Derived from [`MonitorMode`] rather than being it, because the mode is
 /// what the user asked for and this is what the machine can actually do
 /// about it — see [`Wiring::for_mode`].
+///
+/// Shared with the Sources that carry their own sound, so a media file and a
+/// microphone answer the same question the same way — including the part
+/// that matters most, which is what happens when there is nowhere to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Wiring {
+pub(in crate::engine) struct Wiring {
     /// Into the mix a recording is written from.
-    to_mix: bool,
+    pub(in crate::engine) to_mix: bool,
     /// Into the mix that is played back.
-    to_monitor: bool,
+    pub(in crate::engine) to_monitor: bool,
 }
 
 impl Wiring {
-    fn for_mode(mode: MonitorMode, monitoring: bool) -> Self {
+    pub(in crate::engine) fn for_mode(mode: MonitorMode, monitoring: bool) -> Self {
         if !monitoring {
             // No endpoint to play anything to. A source asking to be
             // monitored still has to reach the recording, or picking a mode
@@ -346,6 +350,19 @@ impl AudioEngine {
         self.mixer
             .as_ref()
             .map(|mixer| (mixer.tee.clone(), mixer.handle.clone()))
+    }
+
+    /// The mix that is played back, for a Source that carries its own sound
+    /// and is opened on the other thread.
+    ///
+    /// `None` while no monitoring endpoint is set as well as when the mixer
+    /// never started: a handle to a mix nothing is playing would let a
+    /// Source register with it and hear nothing, and
+    /// [`Wiring::for_mode`] reads exactly this to decide that a source
+    /// asking to be monitored must still be recorded.
+    pub(super) fn monitor_access(&self) -> Option<MixerHandle> {
+        self.monitor_output.as_ref()?;
+        self.monitor.as_ref().map(|mixer| mixer.handle.clone())
     }
 
     /// Brings the running sources in line with what the project holds and

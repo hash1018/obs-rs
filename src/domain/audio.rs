@@ -22,6 +22,21 @@ pub enum AudioSourceKind {
 }
 
 impl AudioSourceKind {
+    /// Whether playing this back could tell anybody anything.
+    ///
+    /// An output is captured by listening to what is *already* being played
+    /// on it, so it is audible before obs-rs touches it — monitoring one
+    /// would be hearing the same sound a second time, late. What that leaves
+    /// of the three modes is "recorded or not", which the mute button
+    /// already is, so the control is not offered at all rather than offered
+    /// and made to mean less than it says elsewhere.
+    ///
+    /// An input is the opposite: a microphone is a sound nothing else in the
+    /// room is making audible.
+    pub fn can_be_monitored(self) -> bool {
+        matches!(self, Self::Input)
+    }
+
     pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
         match name {
             "output" => Some(Self::Output),
@@ -82,6 +97,20 @@ impl MonitorMode {
             "both" => Some(Self::MonitorAndOutput),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The desktop is captured by listening to what is already playing on
+    /// it, so it needs no playing back. An input is the case the control
+    /// exists for.
+    #[test]
+    fn only_what_cannot_already_be_heard_is_worth_monitoring() {
+        assert!(AudioSourceKind::Input.can_be_monitored());
+        assert!(!AudioSourceKind::Output.can_be_monitored());
     }
 }
 

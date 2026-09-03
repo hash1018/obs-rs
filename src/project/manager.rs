@@ -200,6 +200,9 @@ fn handle_source_command(
         SourceCommand::SetMediaGain(scene_item_id, gain_db) => {
             SourceStore::set_media_gain_db(transaction, scene_item_id, gain_db)
         }
+        SourceCommand::SetMediaMonitor(scene_item_id, monitor) => {
+            SourceStore::set_media_monitor(transaction, scene_item_id, monitor)
+        }
         SourceCommand::SetMediaMuted(scene_item_id, muted) => {
             SourceStore::set_media_muted(transaction, scene_item_id, muted)
         }
@@ -765,6 +768,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
+                    monitor: crate::domain::MonitorMode::Off,
                 },
             },
         )
@@ -810,6 +814,7 @@ mod tests {
                         muted: false,
                         duration: None,
                         paused: false,
+                        monitor: crate::domain::MonitorMode::Off,
                     },
                 },
             )
@@ -853,6 +858,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
+                    monitor: crate::domain::MonitorMode::Off,
                 },
             },
         )
@@ -901,6 +907,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
+                    monitor: crate::domain::MonitorMode::Off,
                 },
             },
         )
@@ -949,6 +956,7 @@ mod tests {
                     muted: false,
                     duration: Some(std::time::Duration::from_millis(40_037)),
                     paused: false,
+                    monitor: crate::domain::MonitorMode::Off,
                 },
             },
         )
@@ -996,6 +1004,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
+                    monitor: crate::domain::MonitorMode::Off,
                 },
             },
         )

@@ -148,6 +148,13 @@ struct RecordingState {
         media_pp::elements::TeeHandle,
         media_pp::elements::MixerHandle,
     )>,
+    /// The mix that is played back, read fresh every pass rather than taken
+    /// once like the one above.
+    ///
+    /// It comes and goes: there is none until a monitoring endpoint is
+    /// chosen, and none again when one is taken away. A handle held from
+    /// startup would be a mix nothing plays.
+    monitor: Arc<ArcSwapOption<media_pp::elements::MixerHandle>>,
     /// Which audio codecs the linked FFmpeg carries, probed once at startup
     /// beside the video list. Kept so a stored codec that cannot open falls
     /// back rather than failing the recording — see [`usable_settings`].
@@ -161,6 +168,12 @@ impl RecordingState {
     /// The mixer's own control, for whatever attaches an input to it.
     fn mixer_handle(&self) -> Option<&media_pp::elements::MixerHandle> {
         self.mixer.as_ref().map(|(_, mixer)| mixer)
+    }
+
+    /// The monitor mix as it stands right now, or `None` while nothing is
+    /// being played back.
+    fn monitor_handle(&self) -> Option<media_pp::elements::MixerHandle> {
+        self.monitor.load_full().map(|handle| (*handle).clone())
     }
 
     /// What the mixer is actually summing into, or the default when it never
@@ -265,6 +278,9 @@ impl EngineManager {
             media_pp::elements::TeeHandle,
             media_pp::elements::MixerHandle,
         )>,
+        // The monitor mix, which unlike the one above is read again on every
+        // pass — see `RecordingState::monitor`.
+        monitor: Arc<ArcSwapOption<media_pp::elements::MixerHandle>>,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
         let size = [canvas.width as u32, canvas.height as u32];
@@ -312,6 +328,7 @@ impl EngineManager {
                     recording: RecordingState {
                         settings: recording_settings,
                         mixer,
+                        monitor,
                         // Filled in once the probe has run — see `run`.
                         audio_codecs: Vec::new(),
                         running: None,
@@ -847,11 +864,24 @@ fn apply_command(
     match command {
         EngineCommand::Scene(snapshot) => {
             *scene = *snapshot;
-            reconcile(engine, recording.mixer_handle(), open, scene);
+            reconcile(
+                engine,
+                recording.mixer_handle(),
+                recording.monitor_handle(),
+                open,
+                scene,
+            );
             true
         }
         EngineCommand::Opened(opened) => {
-            finish_open(engine, open, scene, *opened);
+            finish_open(
+                engine,
+                recording.mixer_handle(),
+                recording.monitor_handle(),
+                open,
+                scene,
+                *opened,
+            );
             true
         }
         EngineCommand::ReopenSource(item_id) => {
@@ -1241,6 +1271,8 @@ fn request_open(
 /// nothing else is holding it.
 fn finish_open(
     engine: &Engine<'_>,
+    mixer: Option<&media_pp::elements::MixerHandle>,
+    monitor: Option<media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &SourcesSnapshot,
     opened: Opened,
@@ -1271,7 +1303,10 @@ fn finish_open(
             (scene.items.len() - index) as i32,
         ));
         refresh_pushed(source, item);
-        refresh_media_file(source, item);
+        // Here as well as in `reconcile`, so a Source's sound reaches a mix
+        // from its first buffer rather than from the next pass: a `Tee` with
+        // nothing but a meter on it drops what it is given.
+        refresh_media_file(source, item, mixer, monitor.as_ref());
     }
     open.insert(id, state);
 }
@@ -1555,6 +1590,7 @@ fn retry_missing(
 fn reconcile(
     engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
+    monitor: Option<media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
 ) {
@@ -1567,7 +1603,7 @@ fn reconcile(
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
                 refresh_pushed(source, item);
-                refresh_media_file(source, item);
+                refresh_media_file(source, item, mixer, monitor.as_ref());
             }
             Some(SourceState::Failed | SourceState::Disconnected | SourceState::Ended) => {}
             // Already on its way, and asking again would only open a second

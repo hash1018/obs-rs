@@ -105,6 +105,12 @@ pub(in crate::engine) struct MediaFile {
     /// there is one path for pausing and one for repositioning rather than
     /// two for either.
     pub(in crate::engine) pipeline: Arc<media_pp::pipeline::Pipeline>,
+    /// Which mixes this Source's own sound is in, and what puts it in them.
+    ///
+    /// `None` for one with no sound. Unlike the fields above this is
+    /// *changed* from the engine loop rather than only read — see
+    /// [`refresh_media_file`].
+    pub(in crate::engine) sound: Option<sound::SoundRouting>,
 }
 
 /// What a running media file measures about itself, written by whichever
@@ -152,12 +158,35 @@ pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendEr
 /// No comparison against what was last set, unlike [`refresh_pushed`]: what
 /// that guards is a redraw and a re-upload, and this is a single atomic
 /// store. There is nothing here that would be cheaper to skip than to do.
-pub(in crate::engine) fn refresh_media_file(source: &OpenSource, item: &SceneItemSnapshot) {
-    use crate::domain::SourceSettings;
+pub(in crate::engine) fn refresh_media_file(
+    source: &mut OpenSource,
+    item: &SceneItemSnapshot,
+    record: Option<&media_pp::elements::MixerHandle>,
+    monitor: Option<&media_pp::elements::MixerHandle>,
+) {
+    use crate::domain::{MonitorMode, SourceSettings};
 
-    let Some(media) = &source.media_file else {
+    let Some(media) = &mut source.media_file else {
         return;
     };
+
+    // Which mixes this Source's sound is in, asked of every Source that has
+    // one rather than of media files alone. A live stream has no monitor
+    // setting yet, and answering `Off` for it is what keeps its sound in the
+    // recording — the branch is put on here, so a Source this skipped would
+    // be one whose audio reached nothing.
+    if let Some(routing) = &mut media.sound {
+        let mode = match &item.settings {
+            SourceSettings::MediaFile(settings) => settings.monitor,
+            _ => MonitorMode::Off,
+        };
+        routing.apply(
+            crate::engine::audio::Wiring::for_mode(mode, monitor.is_some()),
+            record,
+            monitor,
+        );
+    }
+
     let SourceSettings::MediaFile(settings) = &item.settings else {
         return;
     };

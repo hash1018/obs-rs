@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -366,6 +366,22 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
                 CHECK (monitor IN ('off', 'only', 'both'));
 
             PRAGMA user_version = 14;",
+        )?;
+    }
+    if current_version < 15 {
+        // The same three states a device channel has, on a file's own sound.
+        // Its own column rather than a shared one because a media file's
+        // settings are a SceneItem's Source and an audio source's are the
+        // mixer's — two tables that have never had a row in common.
+        //
+        // Existing rows get `off`, which is what they have been: a file's
+        // sound reached the recording and nothing else.
+        transaction.execute_batch(
+            "ALTER TABLE media_file_settings
+                ADD COLUMN monitor TEXT NOT NULL DEFAULT 'off'
+                CHECK (monitor IN ('off', 'only', 'both'));
+
+            PRAGMA user_version = 15;",
         )?;
     }
     transaction.commit()?;

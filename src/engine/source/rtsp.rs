@@ -274,7 +274,7 @@ pub(in crate::engine) fn open(
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
 
-    let pipeline = build(
+    let (pipeline, sound) = build(
         name.clone(),
         source,
         chosen.video,
@@ -296,6 +296,7 @@ pub(in crate::engine) fn open(
             volume,
             meters,
             pipeline,
+            sound,
         }),
     }))
 }
@@ -345,7 +346,7 @@ pub(in crate::engine) fn open(
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
-    let pipeline = build(
+    let (pipeline, sound) = build(
         name.clone(),
         source,
         chosen.video,
@@ -367,6 +368,7 @@ pub(in crate::engine) fn open(
             volume,
             meters,
             pipeline,
+            sound,
         }),
     }))
 }
@@ -380,14 +382,20 @@ fn build(
     decoder: impl media_pp::element::Filter + 'static,
     sink: Box<dyn Sink>,
     audio: Option<Sound>,
-) -> Result<Arc<Pipeline>, BackendError> {
+) -> Result<(Arc<Pipeline>, Option<sound::SoundRouting>), BackendError> {
+    let sound_name = name.clone();
+    let mut routing = None;
+    // By `&mut` rather than by value: the closure has to be `move` for what
+    // it consumes, and the routing has to come back out to the engine loop
+    // that decides which mixes this stream is in.
+    let routing_out = &mut routing;
     let pipeline = Pipeline::new(name, source, move |source, context| {
         attach_video(context, source, video_index, video_time_base, decoder, sink)?;
         if let Some(audio) = audio {
-            sound::attach(context, source, audio)?;
+            *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
         }
         Ok(())
     })?;
     pipeline.run()?;
-    Ok(pipeline)
+    Ok((pipeline, routing))
 }

@@ -338,6 +338,12 @@ pub(in crate::engine) fn open(
 
     let video_time_base = chosen.video_time_base;
     let video_index = chosen.video;
+    let sound_name = name.clone();
+    let mut routing = None;
+    // By `&mut` rather than by value: the closure has to be `move` for what
+    // it consumes, and the routing has to come back out to the engine loop
+    // that decides which mixes this file is in.
+    let routing_out = &mut routing;
     let pipeline = Pipeline::new(name.clone(), demuxer, move |source, context| {
         attach_video(
             context,
@@ -350,7 +356,7 @@ pub(in crate::engine) fn open(
         )?;
 
         if let Some(audio) = audio {
-            sound::attach(context, source, audio)?;
+            *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
         }
         Ok(())
     })?;
@@ -369,6 +375,7 @@ pub(in crate::engine) fn open(
             volume,
             meters,
             pipeline: Arc::clone(&pipeline),
+            sound: routing,
         }),
     }))
 }

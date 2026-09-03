@@ -5,9 +5,10 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings,
-    RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
-    SourceSettings, Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
+    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, MonitorMode,
+    RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source,
+    SourceId, SourceKind, SourceSettings, Stroke, Transform, WindowCaptureSettings,
+    WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -107,6 +108,7 @@ impl SourceStore {
                 media_file_settings.muted,
                 media_file_settings.duration_us,
                 media_file_settings.paused,
+                media_file_settings.monitor,
                 image_source_settings.path,
                 image_source_settings.width,
                 image_source_settings.height,
@@ -221,35 +223,42 @@ impl SourceStore {
                             .and_then(|micros| u64::try_from(micros).ok())
                             .map(std::time::Duration::from_micros),
                         paused: row.get(45)?,
+                        // An unknown mode falls back to `Off` rather than
+                        // failing the row: a file this build can otherwise
+                        // read completely is not worth losing over one
+                        // setting, and `Off` neither plays anything
+                        // unexpected nor drops it from the recording.
+                        monitor: MonitorMode::from_storage_name(&row.get::<_, String>(46)?)
+                            .unwrap_or_default(),
                     }),
                     SourceKind::Image => SourceSettings::Image(ImageSourceSettings {
-                        path: PathBuf::from(row.get::<_, String>(46)?),
-                        size_hint: match (row.get(47)?, row.get(48)?) {
+                        path: PathBuf::from(row.get::<_, String>(47)?),
+                        size_hint: match (row.get(48)?, row.get(49)?) {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
                     }),
                     SourceKind::Rtsp => SourceSettings::Rtsp(RtspSourceSettings {
-                        url: row.get(49)?,
-                        transport: RtspTransport::from_storage_name(&row.get::<_, String>(50)?)
+                        url: row.get(50)?,
+                        transport: RtspTransport::from_storage_name(&row.get::<_, String>(51)?)
                             .ok_or_else(|| {
                                 rusqlite::Error::InvalidColumnType(
-                                    50,
+                                    51,
                                     "transport".into(),
                                     rusqlite::types::Type::Text,
                                 )
                             })?,
                         reconnect: row
-                            .get::<_, Option<i64>>(51)?
+                            .get::<_, Option<i64>>(52)?
                             .and_then(|seconds| u64::try_from(seconds).ok())
                             .map(std::time::Duration::from_secs),
-                        size_hint: match (row.get(52)?, row.get(53)?) {
+                        size_hint: match (row.get(53)?, row.get(54)?) {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
-                        has_audio: row.get(54)?,
-                        gain_db: row.get(55)?,
-                        muted: row.get(56)?,
+                        has_audio: row.get(55)?,
+                        gain_db: row.get(56)?,
+                        muted: row.get(57)?,
                     }),
                     _ => SourceSettings::None,
                 };
@@ -700,6 +709,19 @@ impl SourceStore {
         muted: bool,
     ) -> PersistenceResult<()> {
         set_media_column(transaction, scene_item_id, "muted", muted)
+    }
+
+    pub(crate) fn set_media_monitor(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        monitor: MonitorMode,
+    ) -> PersistenceResult<()> {
+        set_media_column(
+            transaction,
+            scene_item_id,
+            "monitor",
+            monitor.storage_name(),
+        )
     }
 
     /// How much of the Source this item leaves out, in the Source's own
@@ -1182,6 +1204,64 @@ mod tests {
             names,
             HashSet::from(["Color Source".to_owned(), "Drawing".to_owned()])
         );
+    }
+
+    /// A media file's own settings, out of the read that follows the write.
+    ///
+    /// The monitor mode is the newest column and the reason this exists: the
+    /// read takes its values by position, so a column added in the middle
+    /// shifts every one after it. A file that came back with a stream's URL
+    /// in its path would be caught by the assertions here long before
+    /// anybody saw it.
+    #[test]
+    fn a_media_file_keeps_its_settings_including_how_it_is_monitored() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_media_file(
+                    transaction,
+                    scene_id,
+                    &MediaFileSettings {
+                        path: PathBuf::from("/tmp/clip.mp4"),
+                        looping: true,
+                        size_hint: Some([1280, 720]),
+                        has_audio: true,
+                        gain_db: -3.0,
+                        duration: Some(std::time::Duration::from_secs(42)),
+                        paused: false,
+                        muted: false,
+                        monitor: MonitorMode::Off,
+                    },
+                )
+            })
+            .unwrap();
+
+        let SourceSettings::MediaFile(stored) = settings_of(&database, scene_id) else {
+            panic!("a media file Source must read back as one");
+        };
+        assert_eq!(stored.path, PathBuf::from("/tmp/clip.mp4"));
+        assert!(stored.looping);
+        assert_eq!(stored.size_hint, Some([1280, 720]));
+        assert!(stored.has_audio);
+        assert_eq!(stored.gain_db, -3.0);
+        assert_eq!(stored.duration, Some(std::time::Duration::from_secs(42)));
+        assert_eq!(stored.monitor, MonitorMode::Off);
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_media_monitor(transaction, item_id, MonitorMode::MonitorAndOutput)
+            })
+            .unwrap();
+
+        let SourceSettings::MediaFile(stored) = settings_of(&database, scene_id) else {
+            panic!("a media file Source must read back as one");
+        };
+        assert_eq!(stored.monitor, MonitorMode::MonitorAndOutput);
+        // ...and the rest of the row is where it was, which is the half a
+        // shifted column would break silently.
+        assert_eq!(stored.path, PathBuf::from("/tmp/clip.mp4"));
+        assert!(stored.has_audio);
     }
 
     /// The three things a stream stores that nothing else does, through the

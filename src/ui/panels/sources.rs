@@ -988,6 +988,12 @@ fn add_file(scene_id: SceneId, picked: PickedFile) -> SourceCommand {
                 muted: false,
                 duration: streams.duration,
                 paused: false,
+                // Not monitored, like every other new source. Hearing it
+                // needs a monitoring endpoint, which nothing can pick for
+                // the user, so a file that arrived already asking to be
+                // played back would still be silent — and would say it was
+                // not.
+                monitor: crate::domain::MonitorMode::Off,
             },
         },
         PickedFile::Image { path, size } => SourceCommand::AddImage {

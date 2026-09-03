@@ -127,6 +127,10 @@ impl ObsApp {
             audio.set_monitor_device(settings.audio.monitor_device.clone());
         }
         let mixer = audio.as_ref().and_then(AudioManager::mixer);
+        let monitor = audio
+            .as_ref()
+            .map(AudioManager::monitor_publisher)
+            .unwrap_or_default();
 
         Self {
             ui_state,
@@ -151,6 +155,7 @@ impl ObsApp {
                     // saved.
                     recording_settings,
                     mixer,
+                    monitor,
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))

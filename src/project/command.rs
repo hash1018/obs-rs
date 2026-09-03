@@ -88,6 +88,9 @@ pub enum SourceCommand {
     SetMediaGain(SceneItemId, f32),
     /// Whether a media file Source's sound is muted.
     SetMediaMuted(SceneItemId, bool),
+    /// Whether this file is played back, and whether it still reaches the
+    /// recording.
+    SetMediaMonitor(SceneItemId, MonitorMode),
     /// Whether a media file Source is stopped where it is.
     ///
     /// Stored rather than kept in the engine because it must survive the

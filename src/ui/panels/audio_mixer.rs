@@ -47,13 +47,11 @@ struct Channel<'a> {
     /// its name is a label rather than a picker.
     device: Option<Device<'a>>,
     /// Whether this channel is played back, and whether it still reaches the
-    /// recording — `None` for a channel that cannot be monitored.
+    /// recording — `None` for a channel there is no point monitoring.
     ///
-    /// A media file's is `None` today. Its audio is registered with the mixer
-    /// from the video thread, by the Source that decodes it, so giving it a
-    /// monitor mix of its own is a second piece of wiring rather than a
-    /// second field — and a control that did nothing would be worse than a
-    /// control that is not there.
+    /// Which today means the desktop: an output is captured by listening to
+    /// what is already being played on it, so it is audible before obs-rs
+    /// touches it. See [`AudioSourceKind::can_be_monitored`].
     monitor: Option<crate::domain::MonitorMode>,
 }
 
@@ -101,7 +99,7 @@ fn channels<'a>(
                 kind: source.kind,
                 id: source.device.as_deref(),
             }),
-            monitor: Some(source.monitor),
+            monitor: source.kind.can_be_monitored().then_some(source.monitor),
         })
         .collect();
 
@@ -128,7 +126,10 @@ fn channels<'a>(
             // was still going.
             peak_db: item.peak_db.filter(|_| !settings.paused),
             device: None,
-            monitor: None,
+            // Always, and this is the channel the control was really wanted
+            // for: a file's sound exists nowhere but inside obs-rs, so with
+            // this off there is no way at all to hear what you have added.
+            monitor: Some(settings.monitor),
         })
     }));
     channels
@@ -172,6 +173,15 @@ fn next_monitor(mode: crate::domain::MonitorMode) -> crate::domain::MonitorMode 
         MonitorMode::Off => MonitorMode::MonitorOnly,
         MonitorMode::MonitorOnly => MonitorMode::MonitorAndOutput,
         MonitorMode::MonitorAndOutput => MonitorMode::Off,
+    }
+}
+
+fn monitor_command(id: ChannelId, monitor: crate::domain::MonitorMode) -> UiAction {
+    match id {
+        ChannelId::Device(id) => audio_action(AudioCommand::SetMonitor(id, monitor)),
+        ChannelId::SceneItem(id) => UiAction::Project(ProjectCommand::Source(
+            crate::project::SourceCommand::SetMediaMonitor(id, monitor),
+        )),
     }
 }
 
@@ -653,7 +663,7 @@ fn show_monitor(
 ) {
     use crate::domain::MonitorMode;
 
-    let (Some(mode), ChannelId::Device(id)) = (channel.monitor, channel.id) else {
+    let Some(mode) = channel.monitor else {
         return;
     };
     let response = ui
@@ -674,10 +684,7 @@ fn show_monitor(
         response.on_disabled_hover_text(i18n.text(TextKey::AudioMonitorUnavailable))
     };
     if response.clicked() {
-        actions.push(audio_action(AudioCommand::SetMonitor(
-            id,
-            next_monitor(mode),
-        )));
+        actions.push(monitor_command(channel.id, next_monitor(mode)));
     }
 }
 

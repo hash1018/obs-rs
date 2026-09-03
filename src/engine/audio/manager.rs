@@ -70,6 +70,13 @@ pub struct AudioManager {
     /// the side that is told when the answer changes. A list taken once at
     /// startup is missing whatever was plugged in since.
     devices: Arc<ArcSwapOption<Vec<AudioDeviceTarget>>>,
+    /// The mix that is played back, for a Source that carries its own sound.
+    ///
+    /// Republished rather than taken once like [`AudioManager::mixer`],
+    /// because unlike the recording's mixer this one comes and goes: it is
+    /// `None` until a monitoring endpoint is chosen, and `None` again when
+    /// one is taken away.
+    monitor: Arc<ArcSwapOption<MixerHandle>>,
     /// Where a recording attaches its audio track, taken once here rather
     /// than asked for later: the recording is opened on the *video* thread,
     /// which cannot reach into this one to fetch it. `None` when the mixer
@@ -86,6 +93,7 @@ impl AudioManager {
         let (commands, command_rx) = mpsc::channel::<AudioCommand>();
         let levels = Arc::new(ArcSwapOption::empty());
         let devices = Arc::new(ArcSwapOption::empty());
+        let monitor: Arc<ArcSwapOption<MixerHandle>> = Arc::new(ArcSwapOption::empty());
         // The engine is built on its own thread and stays there — it holds
         // FFmpeg state that is not `Send`, so it cannot be made here and
         // moved. Only the mixer's `Tee` comes back, over this channel: a
@@ -95,6 +103,7 @@ impl AudioManager {
         let worker = thread::Builder::new().name("audio".to_owned()).spawn({
             let levels = Arc::clone(&levels);
             let published_devices = Arc::clone(&devices);
+            let published_monitor = Arc::clone(&monitor);
             let watch_commands = commands.clone();
             move || {
                 let mut engine = AudioEngine::new(format);
@@ -102,6 +111,7 @@ impl AudioManager {
                 // built against it and a device change arrives without one.
                 let mut mix_format = format;
                 let _ = ready.send(engine.mixer_access());
+                published_monitor.store(engine.monitor_access().map(Arc::new));
                 let mut known_devices = crate::capture::audio_devices();
                 published_devices.store(Some(Arc::new(known_devices.clone())));
                 // Held for the life of the loop: dropping it stops the
@@ -152,6 +162,12 @@ impl AudioManager {
                             }
                             AudioCommand::MonitorDevice(device) => {
                                 engine.set_monitor_device(device.as_deref(), mix_format);
+                                // Published after the attempt rather than
+                                // from the request: an endpoint that refused
+                                // to open leaves no mix to register with,
+                                // and a Source told otherwise would play to
+                                // nothing.
+                                published_monitor.store(engine.monitor_access().map(Arc::new));
                                 // Whether there is anywhere to monitor to
                                 // decides how every source is wired, so this
                                 // is a reason to reconcile even though the
@@ -197,6 +213,7 @@ impl AudioManager {
             commands: Some(commands),
             levels,
             devices,
+            monitor,
             // Waits only for the mixer to be built, which is the worker's
             // first act. An `Err` means it never got that far, which is the
             // same answer as a mixer that failed: record without audio.
@@ -268,6 +285,16 @@ impl AudioManager {
 
     pub fn devices(&self) -> Option<Arc<Vec<AudioDeviceTarget>>> {
         self.devices.load_full()
+    }
+
+    /// Where the monitor mix is published, for the engine thread to read
+    /// again on every pass.
+    ///
+    /// The slot rather than its contents: unlike the recording's mixer this
+    /// one comes and goes with the monitoring endpoint, so a handle taken
+    /// once would be a mix nothing plays.
+    pub fn monitor_publisher(&self) -> Arc<ArcSwapOption<MixerHandle>> {
+        Arc::clone(&self.monitor)
     }
 }
 
