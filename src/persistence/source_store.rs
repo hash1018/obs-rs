@@ -5,10 +5,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, MonitorMode,
-    RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source,
-    SourceId, SourceKind, SourceSettings, Stroke, Transform, WindowCaptureSettings,
-    WindowCaptureTarget,
+    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings,
+    RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
+    SourceSettings, Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -108,7 +107,7 @@ impl SourceStore {
                 media_file_settings.muted,
                 media_file_settings.duration_us,
                 media_file_settings.paused,
-                media_file_settings.monitor,
+                media_file_settings.monitored,
                 image_source_settings.path,
                 image_source_settings.width,
                 image_source_settings.height,
@@ -223,13 +222,7 @@ impl SourceStore {
                             .and_then(|micros| u64::try_from(micros).ok())
                             .map(std::time::Duration::from_micros),
                         paused: row.get(45)?,
-                        // An unknown mode falls back to `Off` rather than
-                        // failing the row: a file this build can otherwise
-                        // read completely is not worth losing over one
-                        // setting, and `Off` neither plays anything
-                        // unexpected nor drops it from the recording.
-                        monitor: MonitorMode::from_storage_name(&row.get::<_, String>(46)?)
-                            .unwrap_or_default(),
+                        monitored: row.get(46)?,
                     }),
                     SourceKind::Image => SourceSettings::Image(ImageSourceSettings {
                         path: PathBuf::from(row.get::<_, String>(47)?),
@@ -711,17 +704,12 @@ impl SourceStore {
         set_media_column(transaction, scene_item_id, "muted", muted)
     }
 
-    pub(crate) fn set_media_monitor(
+    pub(crate) fn set_media_monitored(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
-        monitor: MonitorMode,
+        monitored: bool,
     ) -> PersistenceResult<()> {
-        set_media_column(
-            transaction,
-            scene_item_id,
-            "monitor",
-            monitor.storage_name(),
-        )
+        set_media_column(transaction, scene_item_id, "monitored", monitored)
     }
 
     /// How much of the Source this item leaves out, in the Source's own
@@ -1231,7 +1219,7 @@ mod tests {
                         duration: Some(std::time::Duration::from_secs(42)),
                         paused: false,
                         muted: false,
-                        monitor: MonitorMode::Off,
+                        monitored: false,
                     },
                 )
             })
@@ -1246,18 +1234,16 @@ mod tests {
         assert!(stored.has_audio);
         assert_eq!(stored.gain_db, -3.0);
         assert_eq!(stored.duration, Some(std::time::Duration::from_secs(42)));
-        assert_eq!(stored.monitor, MonitorMode::Off);
+        assert!(!stored.monitored);
 
         database
-            .transaction(|transaction| {
-                SourceStore::set_media_monitor(transaction, item_id, MonitorMode::MonitorAndOutput)
-            })
+            .transaction(|transaction| SourceStore::set_media_monitored(transaction, item_id, true))
             .unwrap();
 
         let SourceSettings::MediaFile(stored) = settings_of(&database, scene_id) else {
             panic!("a media file Source must read back as one");
         };
-        assert_eq!(stored.monitor, MonitorMode::MonitorAndOutput);
+        assert!(stored.monitored);
         // ...and the rest of the row is where it was, which is the half a
         // shifted column would break silently.
         assert_eq!(stored.path, PathBuf::from("/tmp/clip.mp4"));

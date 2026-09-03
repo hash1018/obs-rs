@@ -1,6 +1,6 @@
 use crate::domain::{
     AudioSourceId, Crop, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
-    MonitorMode, RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
+    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
     WindowCaptureSettings,
 };
 
@@ -28,9 +28,8 @@ pub enum AudioCommand {
     SetMuted(AudioSourceId, bool),
     /// Which endpoint to listen to, or `None` to follow the system default.
     SetDevice(AudioSourceId, Option<String>),
-    /// Whether this source is played back, and whether it still reaches the
-    /// recording.
-    SetMonitor(AudioSourceId, MonitorMode),
+    /// Whether this source is played back to the person running obs-rs.
+    SetMonitored(AudioSourceId, bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,9 +87,8 @@ pub enum SourceCommand {
     SetMediaGain(SceneItemId, f32),
     /// Whether a media file Source's sound is muted.
     SetMediaMuted(SceneItemId, bool),
-    /// Whether this file is played back, and whether it still reaches the
-    /// recording.
-    SetMediaMonitor(SceneItemId, MonitorMode),
+    /// Whether this file is played back to the person running obs-rs.
+    SetMediaMonitored(SceneItemId, bool),
     /// Whether a media file Source is stopped where it is.
     ///
     /// Stored rather than kept in the engine because it must survive the

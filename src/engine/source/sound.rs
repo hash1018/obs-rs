@@ -15,15 +15,15 @@
 //! through rather than what arrived at it: pulling one down empties its
 //! meter, and so does muting.
 //!
-//! # The two mixes come and go while it plays
+//! # The monitor branch comes and goes while it plays
 //!
-//! Only the meter is a fixed branch. Which mixes a Source is in follows its
-//! [`MonitorMode`](crate::domain::MonitorMode), and that can be changed with
-//! a click while a clip is halfway through — so the `Tee` is dynamic and
-//! [`SoundRouting`] puts the two on and takes them off, rather than the
-//! Source being reopened the way a device channel is. A device channel can
-//! afford the reopen; a file would restart from the beginning, which is a
-//! much larger thing to do to somebody who asked to hear it.
+//! The meter and the recording's mix are fixed; the monitor's is not.
+//! Whether a Source is monitored can be changed with a click while a clip is
+//! halfway through, so the `Tee` is dynamic and [`SoundRouting`] puts that
+//! one branch on and takes it off — rather than the Source being reopened
+//! the way a device channel is. A device channel can afford the reopen; a
+//! file would restart from the beginning, which is a much larger thing to do
+//! to somebody who only asked to hear it.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -36,7 +36,6 @@ use media_pp::elements::{
 use media_pp::ffmpeg;
 use media_pp::graph::BranchId;
 
-use crate::engine::audio::Wiring;
 use crate::engine::backend::BackendError;
 use crate::engine::source::MediaMeters;
 
@@ -69,6 +68,8 @@ pub(in crate::engine) struct Sound {
     fader: AudioVolume,
     /// What the Audio Mixer dock moves, and what it reads.
     pub(in crate::engine) volume: AudioVolumeHandle,
+    /// The mixer input this Source's sound is summed into for the recording.
+    mix: Box<dyn Sink>,
     /// The `AppSink` that measures the level.
     meter: Box<dyn Sink>,
     /// Set for a live sender, whose timeline can restart under it — see
@@ -112,76 +113,55 @@ fn monitor_name(name: &str) -> String {
     format!("{}-monitor", mixer_name(name))
 }
 
-/// Which mixes a running Source's sound is in, and the `Tee` that decides it.
+/// Whether a running Source's sound is in the monitor mix, and the `Tee` that
+/// decides it.
 ///
-/// Held by the engine loop rather than by the pipeline, because the answer
-/// is the project's and can change without the Source restarting.
+/// Held by the engine loop rather than by the pipeline, because the answer is
+/// the project's and can change without the Source restarting.
 pub(in crate::engine) struct SoundRouting {
     tee: TeeHandle,
-    /// The base name both registrations are derived from.
+    /// The base name the monitor registration is derived from.
     name: String,
-    wiring: Wiring,
-    record: Option<BranchId>,
-    monitor: Option<BranchId>,
+    monitored: bool,
+    branch: Option<BranchId>,
 }
 
 impl SoundRouting {
-    /// Brings the branches in line with `wanted`.
+    /// Puts the monitor branch on or takes it off.
     ///
-    /// Each side is answered on its own and recorded on its own, so a
-    /// failure on one leaves the other where it got to rather than leaving
-    /// this lying about both.
-    pub(in crate::engine) fn apply(
-        &mut self,
-        wanted: Wiring,
-        record: Option<&MixerHandle>,
-        monitor: Option<&MixerHandle>,
-    ) {
-        if self.wiring == wanted {
+    /// The recording's branch is not here at all: it is on the `Tee` from the
+    /// moment it is built and stays there, because a Source is recorded
+    /// whether or not it is being listened to.
+    pub(in crate::engine) fn apply(&mut self, monitored: bool, monitor: Option<&MixerHandle>) {
+        if self.monitored == monitored {
             return;
         }
-        if wanted.to_mix != self.wiring.to_mix {
-            let name = mixer_name(&self.name);
-            self.wiring.to_mix =
-                self.set_branch(wanted.to_mix, record, &name, |routing| &mut routing.record);
-        }
-        if wanted.to_monitor != self.wiring.to_monitor {
-            let name = monitor_name(&self.name);
-            self.wiring.to_monitor =
-                self.set_branch(wanted.to_monitor, monitor, &name, |routing| {
-                    &mut routing.monitor
-                });
-        }
+        let name = monitor_name(&self.name);
+        self.monitored = match monitored {
+            false => {
+                if let Some(branch) = self.branch.take() {
+                    // Detached first, then deregistered: the other way round
+                    // leaves a branch pushing into a mixer input that has
+                    // been taken back.
+                    if let Err(error) = self.tee.detach(branch) {
+                        eprintln!("could not take {name} off the monitor mix: {error}");
+                    }
+                    if let Some(monitor) = monitor {
+                        monitor.remove_source(&name);
+                    }
+                }
+                false
+            }
+            true => self.attach_monitor(monitor, &name),
+        };
     }
 
-    /// Puts one mix's branch on or takes it off, and answers where that
-    /// left it.
-    fn set_branch(
-        &mut self,
-        wanted: bool,
-        mixer: Option<&MixerHandle>,
-        name: &str,
-        slot: impl Fn(&mut Self) -> &mut Option<BranchId>,
-    ) -> bool {
-        if !wanted {
-            if let Some(branch) = slot(self).take() {
-                // Detached first, then deregistered: the other way round
-                // leaves a branch pushing into a mixer input that has been
-                // taken back.
-                if let Err(error) = self.tee.detach(branch) {
-                    eprintln!("could not take {name} off its mix: {error}");
-                }
-                if let Some(mixer) = mixer {
-                    mixer.remove_source(name);
-                }
-            }
-            return false;
-        }
-        let Some(mixer) = mixer else {
+    fn attach_monitor(&mut self, monitor: Option<&MixerHandle>, name: &str) -> bool {
+        let Some(monitor) = monitor else {
             return false;
         };
-        let Some(input) = mixer.add_source(name) else {
-            eprintln!("could not register {name} with its mix: the mixer is gone");
+        let Some(input) = monitor.add_source(name) else {
+            eprintln!("could not register {name} with the monitor mix: it is gone");
             return false;
         };
         let attached = self
@@ -192,12 +172,12 @@ impl SoundRouting {
             .and_then(|branch| self.tee.attach(branch).map_err(|error| error.to_string()));
         match attached {
             Ok(branch) => {
-                *slot(self) = Some(branch);
+                self.branch = Some(branch);
                 true
             }
             Err(error) => {
-                eprintln!("could not put {name} on its mix: {error}");
-                mixer.remove_source(name);
+                eprintln!("could not put {name} on the monitor mix: {error}");
+                monitor.remove_source(name);
                 false
             }
         }
@@ -214,11 +194,7 @@ pub(in crate::engine) fn build(
     muted: bool,
     meters: &Arc<MediaMeters>,
 ) -> Result<Option<Sound>, BackendError> {
-    // The mixer is not registered with here — [`SoundRouting`] does that, and
-    // takes it back again — but it is still what says this machine has audio
-    // at all. Without one there is nothing to build a sound branch for, and
-    // the picture is worth showing anyway.
-    let (Some(track), Some(_)) = (track, mixer) else {
+    let (Some(track), Some(mixer)) = (track, mixer) else {
         return Ok(None);
     };
     let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
@@ -243,12 +219,16 @@ pub(in crate::engine) fn build(
         }
     });
 
+    let mix = mixer
+        .add_source(mixer_name(name))
+        .ok_or("the audio mixer is gone")?;
     Ok(Some(Sound {
         index: track.index,
         time_base: track.time_base,
         decoder,
         fader,
         volume,
+        mix,
         meter: Box::new(meter),
         discontinuity_limit: None,
     }))
@@ -266,11 +246,13 @@ pub(in crate::engine) fn attach<S: SourceElement>(
     name: &str,
 ) -> media_pp::error::Result<SoundRouting> {
     let meter = context.branch().to(sound.meter)?;
-    // Dynamic, and with only the meter on it to begin with: which mixes this
-    // sound is in is settled by the engine loop once the Source is open, and
-    // changes again whenever the answer does — see [`SoundRouting`].
+    let mix = context.branch().to(sound.mix)?;
+    // Dynamic although both of these are permanent, so that the monitor's
+    // branch can be put on and taken off while the Source plays — see
+    // [`SoundRouting`].
     let (tee_branch, tee) = TeeBuilder::new("audio-tee", context.clone())
         .branch(meter)
+        .branch(mix)
         .build_dynamic()?;
     let faded = context
         .branch()
@@ -286,13 +268,10 @@ pub(in crate::engine) fn attach<S: SourceElement>(
     Ok(SoundRouting {
         tee,
         name: name.to_owned(),
-        // Nothing yet. The first reconcile after this puts on whatever the
-        // project asks for, which is also what puts it back after a change.
-        wiring: Wiring {
-            to_mix: false,
-            to_monitor: false,
-        },
-        record: None,
-        monitor: None,
+        // Not yet. The first reconcile after this puts the branch on if the
+        // project asks for it, which is also what puts it back after a
+        // change.
+        monitored: false,
+        branch: None,
     })
 }

@@ -993,7 +993,7 @@ fn add_file(scene_id: SceneId, picked: PickedFile) -> SourceCommand {
                 // the user, so a file that arrived already asking to be
                 // played back would still be silent — and would say it was
                 // not.
-                monitor: crate::domain::MonitorMode::Off,
+                monitored: false,
             },
         },
         PickedFile::Image { path, size } => SourceCommand::AddImage {

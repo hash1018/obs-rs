@@ -735,7 +735,7 @@ mod tests {
                 muted: false,
                 duration,
                 paused: false,
-                monitor: crate::domain::MonitorMode::Off,
+                monitored: false,
             }),
             source_size: [1920.0, 1080.0],
             visible: true,

@@ -141,7 +141,9 @@ fn handle_audio_command(
         AudioCommand::SetDevice(id, device) => {
             AudioStore::set_device(transaction, id, device.as_deref())
         }
-        AudioCommand::SetMonitor(id, monitor) => AudioStore::set_monitor(transaction, id, monitor),
+        AudioCommand::SetMonitored(id, monitored) => {
+            AudioStore::set_monitored(transaction, id, monitored)
+        }
     })
 }
 
@@ -200,8 +202,8 @@ fn handle_source_command(
         SourceCommand::SetMediaGain(scene_item_id, gain_db) => {
             SourceStore::set_media_gain_db(transaction, scene_item_id, gain_db)
         }
-        SourceCommand::SetMediaMonitor(scene_item_id, monitor) => {
-            SourceStore::set_media_monitor(transaction, scene_item_id, monitor)
+        SourceCommand::SetMediaMonitored(scene_item_id, monitored) => {
+            SourceStore::set_media_monitored(transaction, scene_item_id, monitored)
         }
         SourceCommand::SetMediaMuted(scene_item_id, muted) => {
             SourceStore::set_media_muted(transaction, scene_item_id, muted)
@@ -358,7 +360,7 @@ fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot
             device: source.device,
             gain_db: source.gain_db,
             muted: source.muted,
-            monitor: source.monitor,
+            monitored: source.monitored,
             peak_db: None,
             running: true,
         })
@@ -768,7 +770,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
-                    monitor: crate::domain::MonitorMode::Off,
+                    monitored: false,
                 },
             },
         )
@@ -814,7 +816,7 @@ mod tests {
                         muted: false,
                         duration: None,
                         paused: false,
-                        monitor: crate::domain::MonitorMode::Off,
+                        monitored: false,
                     },
                 },
             )
@@ -858,7 +860,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
-                    monitor: crate::domain::MonitorMode::Off,
+                    monitored: false,
                 },
             },
         )
@@ -907,7 +909,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
-                    monitor: crate::domain::MonitorMode::Off,
+                    monitored: false,
                 },
             },
         )
@@ -956,7 +958,7 @@ mod tests {
                     muted: false,
                     duration: Some(std::time::Duration::from_millis(40_037)),
                     paused: false,
-                    monitor: crate::domain::MonitorMode::Off,
+                    monitored: false,
                 },
             },
         )
@@ -1004,7 +1006,7 @@ mod tests {
                     muted: false,
                     duration: None,
                     paused: false,
-                    monitor: crate::domain::MonitorMode::Off,
+                    monitored: false,
                 },
             },
         )

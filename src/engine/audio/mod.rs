@@ -70,7 +70,7 @@ use media_pp::{
 };
 
 use crate::capture::AudioDeviceTarget;
-use crate::domain::{AudioSourceId, MonitorMode};
+use crate::domain::AudioSourceId;
 use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
 use super::backend::BackendError;
@@ -108,41 +108,19 @@ fn monitor_registration(name: &str) -> String {
     format!("{name}-monitor")
 }
 
-/// Which mixes one source is fed into.
+/// Whether a source's sound is put into the monitor mix as well as the
+/// recording's.
 ///
-/// Derived from [`MonitorMode`] rather than being it, because the mode is
-/// what the user asked for and this is what the machine can actually do
-/// about it — see [`Wiring::for_mode`].
+/// It is always in the recording's, which is what makes this one question
+/// rather than two — see [`crate::domain::AudioSource::monitored`]. All this
+/// adds is the other half of the answer: asking to be monitored where there
+/// is nothing to play through is not monitoring, and a source in that state
+/// must still reach the recording rather than falling between the two.
 ///
 /// Shared with the Sources that carry their own sound, so a media file and a
-/// microphone answer the same question the same way — including the part
-/// that matters most, which is what happens when there is nowhere to play.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine) struct Wiring {
-    /// Into the mix a recording is written from.
-    pub(in crate::engine) to_mix: bool,
-    /// Into the mix that is played back.
-    pub(in crate::engine) to_monitor: bool,
-}
-
-impl Wiring {
-    pub(in crate::engine) fn for_mode(mode: MonitorMode, monitoring: bool) -> Self {
-        if !monitoring {
-            // No endpoint to play anything to. A source asking to be
-            // monitored still has to reach the recording, or picking a mode
-            // while no monitoring device is set would quietly drop it from
-            // the file — a setting in one dialog silencing a channel in
-            // another, with nothing on screen to connect the two.
-            return Self {
-                to_mix: true,
-                to_monitor: false,
-            };
-        }
-        Self {
-            to_mix: mode.reaches_output(),
-            to_monitor: mode.is_monitored(),
-        }
-    }
+/// microphone answer it the same way.
+pub(in crate::engine) fn monitors(monitored: bool, monitoring: bool) -> bool {
+    monitored && monitoring
 }
 
 /// One source that is open, in its own pipeline, and how it was opened.
@@ -158,10 +136,10 @@ struct OpenAudioSource {
     /// What this was opened with, so a snapshot naming something else is
     /// recognised as needing a reopen rather than a handle call.
     device: Option<String>,
-    /// Which mixes it was wired into, for the same reason `device` is kept:
-    /// a `Tee`'s branches are settled when it is built, so a change here is
-    /// a reopen rather than a handle call.
-    wiring: Wiring,
+    /// Whether it was wired into the monitor mix, for the same reason
+    /// `device` is kept: a `Tee`'s branches are settled when it is built, so
+    /// a change here is a reopen rather than a handle call.
+    monitored: bool,
 }
 
 /// What plays the monitor mix, and what it was built against.
@@ -196,14 +174,17 @@ pub(super) struct AudioEngine {
     /// `None` only if building it failed, which leaves the sources with
     /// nowhere to mix into and is reported once.
     mixer: Option<RunningMixer>,
-    /// The mix that is played back rather than recorded.
+    /// The mix that is played back.
     ///
-    /// A second mixer and not a second branch off the first, because the two
-    /// sums are genuinely different: `MonitorOnly` is a source in this one
-    /// and not in that one. It runs from startup like the other, whether or
-    /// not a monitoring device is set — it is cheap to sum nothing, and a
-    /// mixer built later would be one every source had to be re-registered
-    /// with.
+    /// A second mixer and not a branch off the first, because it is a
+    /// different sum: what is monitored is a *subset* of what is recorded,
+    /// and a branch off the recording's mix would play everything in it —
+    /// the desktop, and your own voice back at you. A subset needs its own
+    /// sum however small the difference.
+    ///
+    /// It runs from startup like the other, whether or not a monitoring
+    /// device is set: it is cheap to sum nothing, and a mixer built later
+    /// would be one every source had to be re-registered with.
     monitor: Option<RunningMixer>,
     /// What is playing the monitor mix, or `None` when no monitoring device
     /// is set — which is the state every installation starts in.
@@ -411,12 +392,12 @@ impl AudioEngine {
                 self.close(source.id);
                 continue;
             }
-            let wanted = Wiring::for_mode(source.monitor, self.monitor_output.is_some());
+            let wanted = monitors(source.monitored, self.monitor_output.is_some());
             match self.sources.get(&source.id) {
                 // Already open on the endpoint asked for, and feeding the
                 // mixes it should: the fader and the mute button are all that
                 // can have changed.
-                Some(open) if open.device == source.device && open.wiring == wanted => {
+                Some(open) if open.device == source.device && open.monitored == wanted => {
                     let _ = open.volume.set_gain_db(source.gain_db);
                     open.volume.set_muted(source.muted);
                 }
@@ -464,9 +445,9 @@ impl AudioEngine {
             .as_ref()
             .map(|monitor| monitor.handle.clone())
             .filter(|_| self.monitor_output.is_some());
-        let wiring = Wiring::for_mode(source.monitor, monitor.is_some());
+        let monitored = monitors(source.monitored, monitor.is_some());
 
-        match open_source(&mixer, monitor.as_ref(), &name, source, wiring) {
+        match open_source(&mixer, monitor.as_ref(), &name, source, monitored) {
             Ok((open, peak)) => {
                 self.levels.track(source.id, peak);
                 self.sources.insert(source.id, open);
@@ -560,25 +541,22 @@ fn attach_monitor_output(
     Ok(tee.attach(branch)?)
 }
 
-/// Opens one capture and wires it to the mixes `wiring` names, in a pipeline
-/// of its own.
+/// Opens one capture and wires it to the recording's mix, and to the monitor
+/// mix when `monitored`, in a pipeline of its own.
 ///
-/// Which mixes those are is settled here rather than adjusted afterwards: a
-/// `Tee`'s branches are fixed when it is built, so a source whose monitoring
-/// changed is reopened — the same cost, and for the same reason, as one whose
-/// device changed.
+/// Whether the monitor branch is there is settled here rather than adjusted
+/// afterwards: a `Tee`'s branches are fixed when it is built, so a source
+/// whose monitoring changed is reopened — the same cost, and for the same
+/// reason, as one whose device changed.
 fn open_source(
     mixer: &MixerHandle,
     monitor: Option<&MixerHandle>,
     name: &str,
     source: &AudioSourceSnapshot,
-    wiring: Wiring,
+    monitored: bool,
 ) -> Result<(OpenAudioSource, Arc<AtomicU32>), BackendError> {
-    let mixer_input = match wiring.to_mix {
-        true => Some(mixer.add_source(name).ok_or("the audio mixer is gone")?),
-        false => None,
-    };
-    let monitor_input = match (wiring.to_monitor, monitor) {
+    let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
+    let monitor_input = match (monitored, monitor) {
         (true, Some(monitor)) => Some(
             monitor
                 .add_source(monitor_registration(name))
@@ -610,10 +588,9 @@ fn open_source(
         // measures the level rather than the one before it, and monitoring
         // that goes quiet when the channel is pulled down.
         let meter_branch = context.branch().to(Box::new(meter))?;
-        let mut tee = TeeBuilder::new(tee_name, context.clone()).branch(meter_branch);
-        if let Some(mixer_input) = mixer_input {
-            tee = tee.branch(context.branch().to(mixer_input)?);
-        }
+        let mut tee = TeeBuilder::new(tee_name, context.clone())
+            .branch(meter_branch)
+            .branch(context.branch().to(mixer_input)?);
         if let Some(monitor_input) = monitor_input {
             tee = tee.branch(context.branch().to(monitor_input)?);
         }
@@ -634,7 +611,7 @@ fn open_source(
             name: name.to_owned(),
             volume: volume_handle,
             device: source.device.clone(),
-            wiring,
+            monitored,
         },
         peak,
     ))
@@ -642,56 +619,21 @@ fn open_source(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::monitors;
 
-    /// The three modes decide two independent things, and this is where they
-    /// are turned into wiring: `MonitorOnly` is the one that leaves the
-    /// recording, and it is the whole reason there are three.
+    /// The rule the two halves share: asking to be monitored where there is
+    /// nothing to play through is not monitoring.
+    ///
+    /// The failure this is here to prevent used to be worse than a silent
+    /// channel — a third state promised a source would be kept out of the
+    /// recording, and that promise was only true on a machine monitoring to
+    /// an endpoint nothing captures. There are two states now, and the
+    /// recording always takes the source.
     #[test]
-    fn each_mode_names_the_mixes_it_belongs_in() {
-        assert_eq!(
-            Wiring::for_mode(MonitorMode::Off, true),
-            Wiring {
-                to_mix: true,
-                to_monitor: false
-            }
-        );
-        assert_eq!(
-            Wiring::for_mode(MonitorMode::MonitorOnly, true),
-            Wiring {
-                to_mix: false,
-                to_monitor: true
-            }
-        );
-        assert_eq!(
-            Wiring::for_mode(MonitorMode::MonitorAndOutput, true),
-            Wiring {
-                to_mix: true,
-                to_monitor: true
-            }
-        );
-    }
-
-    /// With nowhere to play it, a source asking to be monitored is still
-    /// recorded. The failure this is here to prevent is silent and expensive:
-    /// a mode chosen in the mixer dock while no device is set in Settings,
-    /// and a channel missing from the file with nothing on screen to say
-    /// which of the two did it.
-    #[test]
-    fn a_mode_that_cannot_be_played_still_reaches_the_recording() {
-        for mode in [
-            MonitorMode::Off,
-            MonitorMode::MonitorOnly,
-            MonitorMode::MonitorAndOutput,
-        ] {
-            assert_eq!(
-                Wiring::for_mode(mode, false),
-                Wiring {
-                    to_mix: true,
-                    to_monitor: false
-                },
-                "{mode:?} with no monitoring device"
-            );
-        }
+    fn nothing_is_monitored_where_there_is_nowhere_to_play() {
+        assert!(monitors(true, true));
+        assert!(!monitors(true, false));
+        assert!(!monitors(false, true));
+        assert!(!monitors(false, false));
     }
 }

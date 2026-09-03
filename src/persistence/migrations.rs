@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -384,6 +384,35 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 15;",
         )?;
     }
+    if current_version < 16 {
+        // Three states became one flag, on both tables that had them.
+        //
+        // "Heard" and "recorded" are two questions everywhere except here.
+        // obs-rs monitors by playing and captures the desktop by listening to
+        // what is played, so a source kept out of the recording and sent to
+        // the speakers comes back in through Desktop Audio — late, and having
+        // been through a speaker. The state that promised otherwise could
+        // only keep the promise on a machine monitoring to an endpoint
+        // nothing captures.
+        //
+        // Anything that was monitored at all stays monitored, which is the
+        // half that was always true.
+        transaction.execute_batch(
+            "ALTER TABLE audio_sources
+                ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0
+                CHECK (monitored IN (0, 1));
+            UPDATE audio_sources SET monitored = (monitor <> 'off');
+            ALTER TABLE audio_sources DROP COLUMN monitor;
+
+            ALTER TABLE media_file_settings
+                ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0
+                CHECK (monitored IN (0, 1));
+            UPDATE media_file_settings SET monitored = (monitor <> 'off');
+            ALTER TABLE media_file_settings DROP COLUMN monitor;
+
+            PRAGMA user_version = 16;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -446,34 +475,94 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         run(&mut connection).unwrap();
 
-        let modes: Vec<String> = connection
-            .prepare("SELECT monitor FROM audio_sources ORDER BY position")
+        let monitored: Vec<i64> = connection
+            .prepare("SELECT monitored FROM audio_sources ORDER BY position")
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        assert!(!modes.is_empty(), "the schema ships two audio sources");
-        assert!(modes.iter().all(|mode| mode == "off"), "got {modes:?}");
+        assert!(!monitored.is_empty(), "the schema ships two audio sources");
+        assert!(monitored.iter().all(|on| *on == 0), "got {monitored:?}");
     }
 
-    /// The column takes the three the domain writes and nothing else, so a
-    /// value from outside this application cannot become a mode no code has
-    /// a branch for.
+    /// The three states collapsed into one flag: anything that was heard at
+    /// all stays heard, which is the half of the promise that was always
+    /// kept. The other half — "and left out of the recording" — could only be
+    /// kept on a machine monitoring to an endpoint nothing captures.
+    ///
+    /// Built at version 15 by hand rather than run up to it, because `run`
+    /// goes all the way and every row it would leave says `off`: the mapping
+    /// this is here to check would never be exercised.
     #[test]
-    fn an_unknown_monitor_mode_is_refused_by_the_schema() {
+    fn every_monitored_state_becomes_the_flag_it_meant() {
         let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE audio_sources (
+                    id       INTEGER PRIMARY KEY,
+                    name     TEXT NOT NULL UNIQUE,
+                    kind     TEXT NOT NULL,
+                    device   TEXT,
+                    gain_db  REAL NOT NULL DEFAULT 0,
+                    muted    INTEGER NOT NULL DEFAULT 0,
+                    position INTEGER NOT NULL,
+                    monitor  TEXT NOT NULL DEFAULT 'off'
+                             CHECK (monitor IN ('off', 'only', 'both'))
+                );
+                INSERT INTO audio_sources (name, kind, position, monitor)
+                VALUES ('Off',  'input', 0, 'off'),
+                       ('Only', 'input', 1, 'only'),
+                       ('Both', 'input', 2, 'both');
+
+                CREATE TABLE media_file_settings (
+                    source_id INTEGER PRIMARY KEY,
+                    monitor   TEXT NOT NULL DEFAULT 'off'
+                              CHECK (monitor IN ('off', 'only', 'both'))
+                );
+                INSERT INTO media_file_settings (source_id, monitor)
+                VALUES (1, 'off'), (2, 'only'), (3, 'both');
+
+                PRAGMA user_version = 15;",
+            )
+            .unwrap();
+
         run(&mut connection).unwrap();
 
-        for mode in ["off", "only", "both"] {
-            connection
-                .execute("UPDATE audio_sources SET monitor = ?1", [mode])
-                .unwrap_or_else(|error| panic!("{mode} should be storable: {error}"));
-        }
+        let monitored: Vec<(String, i64)> = connection
+            .prepare("SELECT name, monitored FROM audio_sources ORDER BY position")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(
+            monitored,
+            vec![
+                ("Off".to_owned(), 0),
+                ("Only".to_owned(), 1),
+                ("Both".to_owned(), 1),
+            ]
+        );
+
+        // The same mapping on the other table that had the states, since one
+        // migration does both and either half could have been forgotten.
+        let files: Vec<i64> = connection
+            .prepare("SELECT monitored FROM media_file_settings ORDER BY source_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(files, vec![0, 1, 1]);
+
+        // And the column the states lived in is gone, so nothing can write
+        // one again by accident.
         assert!(
             connection
-                .execute("UPDATE audio_sources SET monitor = 'sometimes'", [])
+                .execute("UPDATE audio_sources SET monitor = 'both'", [])
                 .is_err()
         );
     }

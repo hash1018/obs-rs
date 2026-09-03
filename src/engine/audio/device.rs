@@ -203,7 +203,7 @@ mod tests {
             device: device.map(str::to_owned),
             gain_db: 0.0,
             muted: false,
-            monitor: crate::domain::MonitorMode::Off,
+            monitored: false,
             peak_db: None,
             running: true,
         }

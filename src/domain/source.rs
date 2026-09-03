@@ -240,13 +240,12 @@ pub struct MediaFileSettings {
     /// not two states to keep in step, and unhiding must not have to remember
     /// what the mute was before.
     pub muted: bool,
-    /// Whether this file is played back to the person running obs-rs, and
-    /// whether it still reaches the recording.
+    /// Whether this file is played back to the person running obs-rs.
     ///
-    /// The mode matters more here than on a device channel: a file's sound
-    /// exists only inside obs-rs, so with this `Off` there is no way to hear
-    /// it at all. See [`crate::domain::MonitorMode`].
-    pub monitor: crate::domain::MonitorMode,
+    /// It matters more here than on a device channel: a file's sound exists
+    /// only inside obs-rs, so with this off there is no way to hear it at
+    /// all. See [`crate::domain::AudioSource::monitored`].
+    pub monitored: bool,
 }
 
 /// A still picture placed in the Scene.

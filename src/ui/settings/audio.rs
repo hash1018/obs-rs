@@ -208,7 +208,7 @@ fn channel_key(channels: u16) -> TextKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AudioSourceId, MonitorMode};
+    use crate::domain::AudioSourceId;
     use crate::snapshots::AudioSourceSnapshot;
 
     fn device(id: &str, kind: AudioSourceKind, is_default: bool) -> AudioDeviceTarget {
@@ -229,7 +229,7 @@ mod tests {
                 device: listening_to.map(str::to_owned),
                 gain_db: 0.0,
                 muted: false,
-                monitor: MonitorMode::Off,
+                monitored: false,
                 peak_db: None,
                 running: true,
             }],

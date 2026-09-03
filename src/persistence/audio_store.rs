@@ -1,8 +1,6 @@
 use rusqlite::{Connection, Transaction, params};
 
-use crate::domain::{
-    AudioSource, AudioSourceId, AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB, MonitorMode,
-};
+use crate::domain::{AudioSource, AudioSourceId, AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB};
 
 use super::PersistenceResult;
 
@@ -16,7 +14,7 @@ impl AudioStore {
     /// open, showing what it understands.
     pub(crate) fn list(connection: &Connection) -> PersistenceResult<Vec<AudioSource>> {
         let mut statement = connection.prepare(
-            "SELECT id, name, kind, device, gain_db, muted, monitor
+            "SELECT id, name, kind, device, gain_db, muted, monitored
              FROM audio_sources
              ORDER BY position, id",
         )?;
@@ -28,14 +26,7 @@ impl AudioStore {
                 let device: Option<String> = row.get(3)?;
                 let gain_db: f32 = row.get(4)?;
                 let muted: i64 = row.get(5)?;
-                let stored_monitor: String = row.get(6)?;
-                // An unknown monitor mode falls back to `Off` rather than
-                // skipping the row: the kind decides whether a source can
-                // exist at all, but a mode this build does not know is one
-                // setting out of several on a source that is otherwise
-                // perfectly readable — and `Off` is the state that neither
-                // plays anything unexpected nor drops it from the recording.
-                let monitor = MonitorMode::from_storage_name(&stored_monitor).unwrap_or_default();
+                let monitored: i64 = row.get(6)?;
                 Ok(
                     AudioSourceKind::from_storage_name(&stored_kind).map(|kind| AudioSource {
                         id,
@@ -44,7 +35,7 @@ impl AudioStore {
                         device,
                         gain_db,
                         muted: muted != 0,
-                        monitor,
+                        monitored: monitored != 0,
                     }),
                 )
             })?
@@ -52,14 +43,14 @@ impl AudioStore {
         Ok(rows.into_iter().flatten().collect())
     }
 
-    pub(crate) fn set_monitor(
+    pub(crate) fn set_monitored(
         transaction: &Transaction<'_>,
         id: AudioSourceId,
-        monitor: MonitorMode,
+        monitored: bool,
     ) -> PersistenceResult<()> {
         transaction.execute(
-            "UPDATE audio_sources SET monitor = ?2 WHERE id = ?1",
-            params![id.0, monitor.storage_name()],
+            "UPDATE audio_sources SET monitored = ?2 WHERE id = ?1",
+            params![id.0, monitored],
         )?;
         Ok(())
     }

@@ -874,14 +874,7 @@ fn apply_command(
             true
         }
         EngineCommand::Opened(opened) => {
-            finish_open(
-                engine,
-                recording.mixer_handle(),
-                recording.monitor_handle(),
-                open,
-                scene,
-                *opened,
-            );
+            finish_open(engine, recording.monitor_handle(), open, scene, *opened);
             true
         }
         EngineCommand::ReopenSource(item_id) => {
@@ -1271,7 +1264,6 @@ fn request_open(
 /// nothing else is holding it.
 fn finish_open(
     engine: &Engine<'_>,
-    mixer: Option<&media_pp::elements::MixerHandle>,
     monitor: Option<media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &SourcesSnapshot,
@@ -1303,10 +1295,9 @@ fn finish_open(
             (scene.items.len() - index) as i32,
         ));
         refresh_pushed(source, item);
-        // Here as well as in `reconcile`, so a Source's sound reaches a mix
-        // from its first buffer rather than from the next pass: a `Tee` with
-        // nothing but a meter on it drops what it is given.
-        refresh_media_file(source, item, mixer, monitor.as_ref());
+        // Here as well as in `reconcile`, so a Source that is monitored is
+        // audible from its first buffer rather than from the next pass.
+        refresh_media_file(source, item, monitor.as_ref());
     }
     open.insert(id, state);
 }
@@ -1603,7 +1594,7 @@ fn reconcile(
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
                 refresh_pushed(source, item);
-                refresh_media_file(source, item, mixer, monitor.as_ref());
+                refresh_media_file(source, item, monitor.as_ref());
             }
             Some(SourceState::Failed | SourceState::Disconnected | SourceState::Ended) => {}
             // Already on its way, and asking again would only open a second

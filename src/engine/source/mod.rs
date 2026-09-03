@@ -161,28 +161,24 @@ pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendEr
 pub(in crate::engine) fn refresh_media_file(
     source: &mut OpenSource,
     item: &SceneItemSnapshot,
-    record: Option<&media_pp::elements::MixerHandle>,
     monitor: Option<&media_pp::elements::MixerHandle>,
 ) {
-    use crate::domain::{MonitorMode, SourceSettings};
+    use crate::domain::SourceSettings;
 
     let Some(media) = &mut source.media_file else {
         return;
     };
 
-    // Which mixes this Source's sound is in, asked of every Source that has
-    // one rather than of media files alone. A live stream has no monitor
-    // setting yet, and answering `Off` for it is what keeps its sound in the
-    // recording — the branch is put on here, so a Source this skipped would
-    // be one whose audio reached nothing.
+    // Whether this Source's sound is played back, asked of every Source that
+    // has one rather than of media files alone. A live stream has no such
+    // setting yet and answers `false`, which is where it has always been.
     if let Some(routing) = &mut media.sound {
-        let mode = match &item.settings {
-            SourceSettings::MediaFile(settings) => settings.monitor,
-            _ => MonitorMode::Off,
+        let monitored = match &item.settings {
+            SourceSettings::MediaFile(settings) => settings.monitored,
+            _ => false,
         };
         routing.apply(
-            crate::engine::audio::Wiring::for_mode(mode, monitor.is_some()),
-            record,
+            crate::engine::audio::monitors(monitored, monitor.is_some()),
             monitor,
         );
     }

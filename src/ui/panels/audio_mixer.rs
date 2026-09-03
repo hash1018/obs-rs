@@ -46,13 +46,13 @@ struct Channel<'a> {
     /// Set for a device channel. A media file has no endpoint to choose, so
     /// its name is a label rather than a picker.
     device: Option<Device<'a>>,
-    /// Whether this channel is played back, and whether it still reaches the
-    /// recording — `None` for a channel there is no point monitoring.
+    /// Whether this channel is played back — `None` for a channel there is
+    /// no point monitoring.
     ///
     /// Which today means the desktop: an output is captured by listening to
     /// what is already being played on it, so it is audible before obs-rs
     /// touches it. See [`AudioSourceKind::can_be_monitored`].
-    monitor: Option<crate::domain::MonitorMode>,
+    monitored: Option<bool>,
 }
 
 /// What a device channel picks from, and what it is picking for.
@@ -99,7 +99,7 @@ fn channels<'a>(
                 kind: source.kind,
                 id: source.device.as_deref(),
             }),
-            monitor: source.kind.can_be_monitored().then_some(source.monitor),
+            monitored: source.kind.can_be_monitored().then_some(source.monitored),
         })
         .collect();
 
@@ -129,7 +129,7 @@ fn channels<'a>(
             // Always, and this is the channel the control was really wanted
             // for: a file's sound exists nowhere but inside obs-rs, so with
             // this off there is no way at all to hear what you have added.
-            monitor: Some(settings.monitor),
+            monitored: Some(settings.monitored),
         })
     }));
     channels
@@ -163,24 +163,11 @@ fn mute_command(id: ChannelId, muted: bool) -> UiAction {
     }
 }
 
-/// What one press of the monitor button asks for.
-///
-/// A cycle rather than three controls, because a channel is a narrow column
-/// and the three states are ordered: nothing, heard, heard and kept.
-fn next_monitor(mode: crate::domain::MonitorMode) -> crate::domain::MonitorMode {
-    use crate::domain::MonitorMode;
-    match mode {
-        MonitorMode::Off => MonitorMode::MonitorOnly,
-        MonitorMode::MonitorOnly => MonitorMode::MonitorAndOutput,
-        MonitorMode::MonitorAndOutput => MonitorMode::Off,
-    }
-}
-
-fn monitor_command(id: ChannelId, monitor: crate::domain::MonitorMode) -> UiAction {
+fn monitor_command(id: ChannelId, monitored: bool) -> UiAction {
     match id {
-        ChannelId::Device(id) => audio_action(AudioCommand::SetMonitor(id, monitor)),
+        ChannelId::Device(id) => audio_action(AudioCommand::SetMonitored(id, monitored)),
         ChannelId::SceneItem(id) => UiAction::Project(ProjectCommand::Source(
-            crate::project::SourceCommand::SetMediaMonitor(id, monitor),
+            crate::project::SourceCommand::SetMediaMonitored(id, monitored),
         )),
     }
 }
@@ -618,7 +605,11 @@ fn show_buttons(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let buttons = if channel.monitor.is_some() { 2.0 } else { 1.0 };
+    let buttons = if channel.monitored.is_some() {
+        2.0
+    } else {
+        1.0
+    };
     let width = buttons * BUTTON_WIDTH + (buttons - 1.0) * BUTTON_GAP;
     let left = rect.center().x - width / 2.0;
     let button = |index: f32| {
@@ -682,43 +673,32 @@ fn show_monitor(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    use crate::domain::MonitorMode;
-
-    let Some(mode) = channel.monitor else {
+    let Some(monitored) = channel.monitored else {
         return;
     };
     let response = ui
         .add_enabled_ui(monitoring, |ui| {
-            let button = egui::Button::new("").selected(mode != MonitorMode::Off);
+            let button = egui::Button::new("").selected(monitored);
             let response = ui.put(rect, button);
-            paint_headphones(ui, &response, mode);
+            paint_headphones(ui, &response);
             response
         })
         .inner;
     let response = if monitoring {
-        response.on_hover_text(i18n.text(match mode {
-            MonitorMode::Off => TextKey::AudioMonitorOff,
-            MonitorMode::MonitorOnly => TextKey::AudioMonitorOnly,
-            MonitorMode::MonitorAndOutput => TextKey::AudioMonitorBoth,
+        response.on_hover_text(i18n.text(match monitored {
+            false => TextKey::AudioMonitorOff,
+            true => TextKey::AudioMonitorOn,
         }))
     } else {
         response.on_disabled_hover_text(i18n.text(TextKey::AudioMonitorUnavailable))
     };
     if response.clicked() {
-        actions.push(monitor_command(channel.id, next_monitor(mode)));
+        actions.push(monitor_command(channel.id, !monitored));
     }
 }
 
-fn paint_headphones(ui: &egui::Ui, response: &egui::Response, mode: crate::domain::MonitorMode) {
-    use crate::domain::MonitorMode;
-
-    // `MonitorOnly` takes the warning colour because it is the one state that
-    // takes something away: the channel is audible here and absent from the
-    // file. The other two both reach the recording.
-    let stroke = match mode {
-        MonitorMode::MonitorOnly => egui::Stroke::new(1.5, ui.visuals().warn_fg_color),
-        _ => ui.style().interact(response).fg_stroke,
-    };
+fn paint_headphones(ui: &egui::Ui, response: &egui::Response) {
+    let stroke = ui.style().interact(response).fg_stroke;
     let center = response.rect.center();
     let painter = ui.painter();
 
