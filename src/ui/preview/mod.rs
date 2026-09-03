@@ -756,14 +756,7 @@ fn paint_editor_overlay(
     let rect = edited_canvas_rect(item, editor, viewport);
     let painter = ui.painter().with_clip_rect(workspace);
     paint_cropped_away(&painter, ui.visuals(), item, editor, viewport);
-    paint_alignment_guides(
-        &painter,
-        ui.visuals(),
-        item,
-        editor,
-        viewport,
-        snapshot.canvas,
-    );
+    paint_alignment_guides(&painter, item, editor, viewport, snapshot.canvas);
     paint_outline(&painter, rect, editor.effective_crop(item.id, item.crop));
     gizmo::paint_handles(&painter, EDITOR_MARK, rect);
 }
@@ -877,6 +870,38 @@ const LABEL_MARGIN: f32 = 5.0;
 /// Scene.
 const LABEL_SIZE: f32 = 15.0;
 
+/// What the numbers are written in.
+///
+/// Fixed, like [`EDITOR_MARK`] and for the same reason: the digits sit on
+/// the Scene, and the Scene is whatever is being captured rather than
+/// anything the theme has a say in. Taking the theme's own text colour
+/// wrote them in near-black under a light theme, over captures the rest of
+/// this overlay assumes are dark.
+const LABEL_MARK: egui::Color32 = egui::Color32::WHITE;
+
+/// Drawn behind the numbers so that white digits survive a white window.
+///
+/// White on the Scene is legible until the Scene is a browser, a document
+/// or a code editor on a light background, at which point the label is not
+/// dim — it is gone, and a reading that disappears exactly where somebody
+/// is working is worse than one that was never offered.
+///
+/// The other answer is a plate behind them, which this deliberately is not:
+/// a filled box covers the picture the number is being read against, and
+/// the number is a distance to an edge of that picture. An outline costs
+/// the width of a stroke and hides nothing.
+const LABEL_HALO: egui::Color32 = egui::Color32::BLACK;
+
+/// How far out the halo's copies sit, in screen pixels.
+const HALO_REACH: f32 = 1.0;
+
+/// How many copies make the halo.
+///
+/// Eight, spread evenly, so no corner is left open. Four — up, down, left,
+/// right — leaves the diagonals bare, and a digit is mostly curves, whose
+/// edges face the corners as often as the sides.
+const HALO_COPIES: u32 = 8;
+
 /// What a cropped edge is drawn with — see [`paint_outline`].
 ///
 /// A second colour because it answers a second question. The outline says
@@ -922,7 +947,6 @@ const CROP_GAP: f32 = 9.0;
 /// it had before.
 fn paint_alignment_guides(
     painter: &egui::Painter,
-    visuals: &egui::Visuals,
     item: &SceneItemSnapshot,
     editor: &SceneEditorState,
     viewport: ViewportTransform,
@@ -950,6 +974,9 @@ fn paint_alignment_guides(
         ),
     ];
     for (gap, (from, to)) in edge_gaps(rect, canvas).into_iter().zip(ends) {
+        let Some(gap) = guide_label(gap) else {
+            continue;
+        };
         let from = viewport.canvas_to_screen(from);
         let to = viewport.canvas_to_screen(to);
         painter.line_segment([from, to], stroke);
@@ -967,14 +994,36 @@ fn paint_alignment_guides(
                 egui::Align2::CENTER_BOTTOM,
             )
         };
-        painter.text(
-            at,
-            align,
-            format!("{} px", gap.round() as i32),
+        let galley = painter.layout_no_wrap(
+            format!("{gap} px"),
             egui::FontId::proportional(LABEL_SIZE),
-            visuals.strong_text_color(),
+            egui::Color32::PLACEHOLDER,
         );
+        let at = align.anchor_size(at, galley.size()).min;
+        for step in 0..HALO_COPIES {
+            let angle = std::f32::consts::TAU * step as f32 / HALO_COPIES as f32;
+            let offset = egui::Vec2::angled(angle) * HALO_REACH;
+            painter.galley(at + offset, galley.clone(), LABEL_HALO);
+        }
+        painter.galley(at, galley, LABEL_MARK);
     }
+}
+
+/// What a guide prints for `gap`, or `None` for an edge with nothing to
+/// measure.
+///
+/// A flush edge is the one case where the number says less than the picture
+/// already does: the outline and the Canvas edge lie along each other, and
+/// "0 px" beside a line of no length only repeats it. A Source filling the
+/// Canvas is flush on all four, which is where a Scene usually starts and
+/// where this was worst — four figures, none of them an answer to anything.
+///
+/// Rounded before the test, because the label is rounded too: a gap of two
+/// tenths of a pixel reads "0 px" like any other, and dropping the number
+/// while still drawing its guide would be the worse half of both.
+fn guide_label(gap: f32) -> Option<i32> {
+    let gap = gap.round() as i32;
+    (gap != 0).then_some(gap)
 }
 
 /// The gap from each Canvas edge to `rect` — top, left, right, bottom.
@@ -1325,6 +1374,22 @@ mod tests {
 
         assert_eq!(left, -40.0);
         assert_eq!(right, 1760.0, "still measured from the far edge");
+    }
+
+    /// Flush edges are left unlabelled, and a Source filling the Canvas is
+    /// flush on all four. What hangs off the Canvas still reports, because
+    /// how far past it went is the one thing the picture cannot say.
+    #[test]
+    fn an_edge_that_would_read_zero_is_not_labelled() {
+        assert_eq!(guide_label(0.0), None);
+        assert_eq!(guide_label(0.4), None, "this one would have printed 0 px");
+        assert_eq!(guide_label(-0.4), None);
+        assert_eq!(guide_label(1.0), Some(1));
+        assert_eq!(
+            guide_label(-370.0),
+            Some(-370),
+            "past the edge still counts"
+        );
     }
 
     /// A stripe crossing the area has both ends on its border, at 45
