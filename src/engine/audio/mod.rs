@@ -338,9 +338,9 @@ impl AudioEngine {
     ///
     /// `None` while no monitoring endpoint is set as well as when the mixer
     /// never started: a handle to a mix nothing is playing would let a
-    /// Source register with it and hear nothing, and
-    /// [`Wiring::for_mode`] reads exactly this to decide that a source
-    /// asking to be monitored must still be recorded.
+    /// Source register with it and hear nothing. A Source asking to be
+    /// monitored with nowhere to play is still recorded, which is what the
+    /// caller decides from exactly this answer.
     pub(super) fn monitor_access(&self) -> Option<MixerHandle> {
         self.monitor_output.as_ref()?;
         self.monitor.as_ref().map(|mixer| mixer.handle.clone())

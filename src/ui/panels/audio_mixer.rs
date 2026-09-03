@@ -656,11 +656,11 @@ fn show_mute(
 
 /// Headphones, lit when this channel is played back.
 ///
-/// Three states in one button, cycled by clicking — see [`next_monitor`].
-/// Which of them it is in is carried by the button's own selected background
-/// and by the icon's colour, and named in full on hover: the same division
-/// the status bar's recording clock makes, so no state rests on a colour
-/// alone.
+/// On or off, switched by clicking: everything monitored is recorded, so
+/// what this decides is your ears rather than the file. Which it is in is
+/// carried by the button's own selected background and by the icon's colour,
+/// and named in full on hover: the same division the status bar's recording
+/// clock makes, so no state rests on a colour alone.
 ///
 /// Disabled until a monitoring endpoint has been chosen, because until then
 /// there is nowhere for it to play. The hover says so and where to set it,
