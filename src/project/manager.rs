@@ -141,6 +141,7 @@ fn handle_audio_command(
         AudioCommand::SetDevice(id, device) => {
             AudioStore::set_device(transaction, id, device.as_deref())
         }
+        AudioCommand::SetMonitor(id, monitor) => AudioStore::set_monitor(transaction, id, monitor),
     })
 }
 
@@ -354,6 +355,7 @@ fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot
             device: source.device,
             gain_db: source.gain_db,
             muted: source.muted,
+            monitor: source.monitor,
             peak_db: None,
             running: true,
         })

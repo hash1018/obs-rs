@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -348,6 +348,26 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 13;",
         )?;
     }
+
+    if current_version < 14 {
+        // Whether a source is played back to the person running obs-rs, and
+        // whether it still reaches the recording.
+        //
+        // One column rather than two flags, because the two are not
+        // independent in the way a pair of booleans would suggest: there is
+        // no fourth state. Not monitored and not recorded is a source that
+        // does nothing, which is what deleting it is for.
+        //
+        // Every existing row gets `off`, which is what they have been doing
+        // all along — nothing here was ever played back.
+        transaction.execute_batch(
+            "ALTER TABLE audio_sources
+                ADD COLUMN monitor TEXT NOT NULL DEFAULT 'off'
+                CHECK (monitor IN ('off', 'only', 'both'));
+
+            PRAGMA user_version = 14;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -399,6 +419,47 @@ mod tests {
         assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(scene_name, "Existing Scene");
         assert!(source_tables_exist);
+    }
+
+    /// Sources that existed before monitoring did have never been played
+    /// back, and `off` is the mode that says so. Anything else would start
+    /// somebody's microphone talking into their own speakers on the first
+    /// launch after an update.
+    #[test]
+    fn audio_sources_that_predate_monitoring_come_back_not_monitored() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run(&mut connection).unwrap();
+
+        let modes: Vec<String> = connection
+            .prepare("SELECT monitor FROM audio_sources ORDER BY position")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(!modes.is_empty(), "the schema ships two audio sources");
+        assert!(modes.iter().all(|mode| mode == "off"), "got {modes:?}");
+    }
+
+    /// The column takes the three the domain writes and nothing else, so a
+    /// value from outside this application cannot become a mode no code has
+    /// a branch for.
+    #[test]
+    fn an_unknown_monitor_mode_is_refused_by_the_schema() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run(&mut connection).unwrap();
+
+        for mode in ["off", "only", "both"] {
+            connection
+                .execute("UPDATE audio_sources SET monitor = ?1", [mode])
+                .unwrap_or_else(|error| panic!("{mode} should be storable: {error}"));
+        }
+        assert!(
+            connection
+                .execute("UPDATE audio_sources SET monitor = 'sometimes'", [])
+                .is_err()
+        );
     }
 
     #[test]

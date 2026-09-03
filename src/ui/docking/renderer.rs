@@ -49,6 +49,9 @@ struct DockContent<'a> {
     editor: &'a mut SceneEditorState,
     snapshots: &'a Snapshots,
     audio_devices: &'a [AudioDeviceTarget],
+    /// Whether a monitoring endpoint has been chosen, which is what decides
+    /// whether the mixer's monitor buttons can do anything at all.
+    monitoring: bool,
     i18n: &'a LocalizationManager,
     actions: &'a mut Vec<UiAction>,
 }
@@ -78,6 +81,7 @@ pub(super) fn show(
         editor,
         snapshots: resources.snapshots,
         audio_devices: resources.audio_devices,
+        monitoring: resources.settings.audio.monitor_device.is_some(),
         i18n: resources.i18n,
         actions,
     };
@@ -281,6 +285,7 @@ fn show_panel(
                 &content.snapshots.sources,
                 content.snapshots.status.source_status.as_deref(),
                 content.audio_devices,
+                content.monitoring,
                 content.i18n,
                 content.actions,
             );

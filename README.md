@@ -54,6 +54,11 @@ bottom.](docs/screenshot.png)
   reports a channel that clipped. The Scene's own media files get a channel
   each — fader, mute and meter alike — so what a clip is playing can be set
   against everything else.
+- **Monitoring.** Listen to a channel while you work, on an endpoint of its
+  own so that what you hear cannot be captured back. Each channel is off,
+  heard, or heard and recorded — three states because whether you want a
+  source in the file and whether you want it in your headphones are separate
+  questions.
 - **Properties.** Selecting a source describes it in a dock of its own —
   where it sits, how large it is, and what it is actually capturing. A Color
   source's colour is edited there.

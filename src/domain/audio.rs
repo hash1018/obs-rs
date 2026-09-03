@@ -31,6 +31,60 @@ impl AudioSourceKind {
     }
 }
 
+/// Whether a source is played back to the person running obs-rs, and whether
+/// it still reaches the recording.
+///
+/// Two questions rather than one, which is why this is not a checkbox: what
+/// you want to hear and what you want recorded are independent. Your own
+/// microphone is the clearest case — you want it recorded and you very much
+/// do not want to hear it, because a voice coming back even a few tens of
+/// milliseconds late makes speaking difficult.
+///
+/// The same three states OBS has, for the same reasons.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MonitorMode {
+    /// Recorded, not played back. What every source starts as.
+    #[default]
+    Off,
+    /// Played back, and left out of the recording — a clip being cued up, or
+    /// a call you need to hear but have no right to record.
+    MonitorOnly,
+    /// Both. What a media file playing to an audience usually wants.
+    MonitorAndOutput,
+}
+
+impl MonitorMode {
+    /// Whether the monitor mix takes this source.
+    pub fn is_monitored(self) -> bool {
+        matches!(self, Self::MonitorOnly | Self::MonitorAndOutput)
+    }
+
+    /// Whether the recording takes this source.
+    ///
+    /// `MonitorOnly` is the one that answers `false`, and it is the whole
+    /// reason this is three states and not two.
+    pub fn reaches_output(self) -> bool {
+        matches!(self, Self::Off | Self::MonitorAndOutput)
+    }
+
+    pub(crate) fn storage_name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::MonitorOnly => "only",
+            Self::MonitorAndOutput => "both",
+        }
+    }
+
+    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "off" => Some(Self::Off),
+            "only" => Some(Self::MonitorOnly),
+            "both" => Some(Self::MonitorAndOutput),
+            _ => None,
+        }
+    }
+}
+
 /// An audio source as the project holds it.
 #[derive(Debug, Clone)]
 pub struct AudioSource {
@@ -47,6 +101,13 @@ pub struct AudioSource {
     /// `AudioVolume::set_gain_db` takes.
     pub gain_db: f32,
     pub muted: bool,
+    /// Whether this is played back, and whether it still reaches the
+    /// recording — see [`MonitorMode`].
+    ///
+    /// Stored per source rather than as one switch for the mixer, because the
+    /// answer differs source by source: a microphone wants `Off` while the
+    /// media file beside it wants `MonitorAndOutput`.
+    pub monitor: MonitorMode,
 }
 
 /// The quietest a fader goes before it means silence.

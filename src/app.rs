@@ -117,6 +117,15 @@ impl ObsApp {
         })
         .inspect_err(|error| eprintln!("could not start audio: {error}"))
         .ok();
+        // The stored endpoint has to be sent as well as the format, which
+        // `spawn` takes. Without this monitoring only came on after the
+        // Settings dialog was opened and changed — the setting was read at
+        // startup and nothing acted on it.
+        if let Some(audio) = &audio
+            && settings.audio.monitor_device.is_some()
+        {
+            audio.set_monitor_device(settings.audio.monitor_device.clone());
+        }
         let mixer = audio.as_ref().and_then(AudioManager::mixer);
 
         Self {
@@ -266,11 +275,19 @@ impl ObsApp {
         // The mixer's own format, which takes immediately — so it is refused
         // while a recording runs, the same as the frame rate and for the same
         // reason: the running file's audio encoder was opened for the old one.
-        if settings.audio != self.settings.audio
+        if settings.audio.mix_differs_from(&self.settings.audio)
             && self.snapshots.status.recording_elapsed.is_none()
             && let Some(audio) = &self.audio
         {
             audio.set_mix_format(mix_format(&settings));
+        }
+        // Not held back by a running recording, unlike the format above.
+        // What the person at the keyboard is listening to is theirs to change
+        // while they work, and it reaches no encoder.
+        if settings.audio.monitor_device != self.settings.audio.monitor_device
+            && let Some(audio) = &self.audio
+        {
+            audio.set_monitor_device(settings.audio.monitor_device.clone());
         }
         self.settings = settings;
         if let Err(error) = self.settings_store.save(&self.settings) {

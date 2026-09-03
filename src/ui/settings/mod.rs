@@ -168,15 +168,20 @@ const PAGE_LIST_WIDTH: f32 = 120.0;
 /// which is what makes the list feel like tabs rather than navigation. The
 /// height is the Recording page's five rows plus the note that appears above
 /// them while a recording is running.
-const PAGE_WIDTH: f32 = 380.0;
+pub(super) const PAGE_WIDTH: f32 = 380.0;
 const PAGE_HEIGHT: f32 = 210.0;
 
+// Five pages' worth of what the dialog needs to draw, and a struct holding
+// exactly them would be this signature with a name on it.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::ui) fn show(
     ctx: &egui::Context,
     state: &mut SettingsDialogState,
     recording: bool,
     encoders: &[crate::settings::RecordingEncoder],
     audio_codecs: &[crate::settings::RecordingAudioCodec],
+    audio_devices: &[crate::capture::AudioDeviceTarget],
+    audio: &crate::snapshots::AudioSnapshot,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -241,7 +246,14 @@ pub(in crate::ui) fn show(
                                     video::show(ui, &mut state.draft, recording, i18n);
                                 }
                                 SettingsPage::Audio => {
-                                    audio::show(ui, &mut state.draft, recording, i18n);
+                                    audio::show(
+                                        ui,
+                                        &mut state.draft,
+                                        recording,
+                                        audio_devices,
+                                        audio,
+                                        i18n,
+                                    );
                                 }
                                 SettingsPage::Hotkeys => {
                                     let outcome = hotkeys::show(

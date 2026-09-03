@@ -40,6 +40,8 @@ enum AudioCommand {
     DevicesChanged,
     /// What the mix should be summed into from now on.
     MixFormat(MixFormat),
+    /// Which endpoint monitoring plays to, or `None` for none.
+    MonitorDevice(Option<String>),
     /// Ends the worker's loop.
     ///
     /// Every sender dropping cannot do it: the endpoint watch owns a sender
@@ -96,6 +98,9 @@ impl AudioManager {
             let watch_commands = commands.clone();
             move || {
                 let mut engine = AudioEngine::new(format);
+                // The worker's own copy, because the monitoring branch is
+                // built against it and a device change arrives without one.
+                let mut mix_format = format;
                 let _ = ready.send(engine.mixer_access());
                 let mut known_devices = crate::capture::audio_devices();
                 published_devices.store(Some(Arc::new(known_devices.clone())));
@@ -138,7 +143,20 @@ impl AudioManager {
                             }
                             AudioCommand::DevicesChanged => devices_changed = true,
                             AudioCommand::MixFormat(format) => {
+                                mix_format = format;
                                 engine.set_mix_format(format);
+                                // The monitor branch is rebuilt at the new
+                                // rate, and can fail to be — which changes
+                                // what wiring every source should have.
+                                project_changed = true;
+                            }
+                            AudioCommand::MonitorDevice(device) => {
+                                engine.set_monitor_device(device.as_deref(), mix_format);
+                                // Whether there is anywhere to monitor to
+                                // decides how every source is wired, so this
+                                // is a reason to reconcile even though the
+                                // project did not move.
+                                project_changed = true;
                             }
                             AudioCommand::Shutdown => ending = true,
                         }
@@ -238,6 +256,13 @@ impl AudioManager {
     pub fn set_mix_format(&self, format: MixFormat) {
         if let Some(commands) = &self.commands {
             let _ = commands.send(AudioCommand::MixFormat(format));
+        }
+    }
+
+    /// Points monitoring at an endpoint, or turns it off with `None`.
+    pub fn set_monitor_device(&self, device: Option<String>) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(AudioCommand::MonitorDevice(device));
         }
     }
 

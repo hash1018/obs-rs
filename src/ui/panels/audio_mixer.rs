@@ -46,6 +46,15 @@ struct Channel<'a> {
     /// Set for a device channel. A media file has no endpoint to choose, so
     /// its name is a label rather than a picker.
     device: Option<Device<'a>>,
+    /// Whether this channel is played back, and whether it still reaches the
+    /// recording — `None` for a channel that cannot be monitored.
+    ///
+    /// A media file's is `None` today. Its audio is registered with the mixer
+    /// from the video thread, by the Source that decodes it, so giving it a
+    /// monitor mix of its own is a second piece of wiring rather than a
+    /// second field — and a control that did nothing would be worse than a
+    /// control that is not there.
+    monitor: Option<crate::domain::MonitorMode>,
 }
 
 /// What a device channel picks from, and what it is picking for.
@@ -92,6 +101,7 @@ fn channels<'a>(
                 kind: source.kind,
                 id: source.device.as_deref(),
             }),
+            monitor: Some(source.monitor),
         })
         .collect();
 
@@ -118,6 +128,7 @@ fn channels<'a>(
             // was still going.
             peak_db: item.peak_db.filter(|_| !settings.paused),
             device: None,
+            monitor: None,
         })
     }));
     channels
@@ -151,6 +162,19 @@ fn mute_command(id: ChannelId, muted: bool) -> UiAction {
     }
 }
 
+/// What one press of the monitor button asks for.
+///
+/// A cycle rather than three controls, because a channel is a narrow column
+/// and the three states are ordered: nothing, heard, heard and kept.
+fn next_monitor(mode: crate::domain::MonitorMode) -> crate::domain::MonitorMode {
+    use crate::domain::MonitorMode;
+    match mode {
+        MonitorMode::Off => MonitorMode::MonitorOnly,
+        MonitorMode::MonitorOnly => MonitorMode::MonitorAndOutput,
+        MonitorMode::MonitorAndOutput => MonitorMode::Off,
+    }
+}
+
 use super::super::UiAction;
 use super::elide;
 use super::toolbar;
@@ -178,6 +202,14 @@ const COLUMN_GAP: f32 = 4.0;
 const MIN_CHANNEL_HEIGHT: f32 = 96.0;
 const MUTE_HEIGHT: f32 = 22.0;
 
+/// How much of a column's button strip the monitor button takes, and the gap
+/// between the two.
+///
+/// Narrow, because it is the second of the two: mute is what a hand reaches
+/// for in the middle of a take, and monitoring is set once and left.
+const MONITOR_WIDTH: f32 = 34.0;
+const BUTTON_GAP: f32 = 4.0;
+
 /// Every label on the scale, in decibels. Every 12 rather than the 6 a large
 /// mixer uses: this dock is drawn at whatever height it is given, and half as
 /// many marks stay legible when that is not much.
@@ -195,12 +227,17 @@ const CLIP_DB: f32 = -9.0;
 /// earlier.
 const CLIP_HOLD_SECONDS: f64 = 2.0;
 
+// A dock's `show` takes what it draws, and this one draws two kinds of
+// channel out of two snapshots. Bundling them into a struct would be a name
+// for "the arguments of this function" rather than for anything.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     snapshot: &AudioSnapshot,
     sources: &SourcesSnapshot,
     status: Option<&std::collections::HashMap<crate::domain::SceneItemId, SourceStatus>>,
     devices: &[AudioDeviceTarget],
+    monitoring: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -247,10 +284,18 @@ pub(in crate::ui) fn show(
         ui.add_space(toolbar::BOTTOM_GAP);
     });
 
-    show_mute_strip(ui, &channels, scrolled.state.offset.x, i18n, actions);
+    show_button_strip(
+        ui,
+        &channels,
+        scrolled.state.offset.x,
+        monitoring,
+        i18n,
+        actions,
+    );
 }
 
-/// The mute buttons, in a strip below the channels rather than inside them.
+/// The mute and monitor buttons, in a strip below the channels rather than
+/// inside them.
 ///
 /// Outside the scrolling half so they stay reachable however short the dock
 /// is, which is what the Scenes and Sources docks already do with their own
@@ -261,10 +306,11 @@ pub(in crate::ui) fn show(
 /// offset and puts every button where its column is, which is also why the
 /// two agree on [`COLUMN_GAP`] instead of taking whatever spacing their own
 /// `Ui` happened to have.
-fn show_mute_strip(
+fn show_button_strip(
     ui: &mut egui::Ui,
     channels: &[Channel<'_>],
     offset_x: f32,
+    monitoring: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -282,7 +328,21 @@ fn show_mute_strip(
             if rect.right() < origin.left() || rect.left() > origin.right() {
                 continue;
             }
-            show_mute(ui, rect, channel, i18n, actions);
+            // The split is the same in every column, including one with
+            // nothing to put in the right half. Buttons that line up across
+            // columns are worth more than the width a channel with no
+            // monitor button could reclaim — and a mute button that is wider
+            // in some columns than others reads as a difference that means
+            // something.
+            let (mute, monitor) = rect.split_left_right_at_x(rect.right() - MONITOR_WIDTH);
+            show_mute(
+                ui,
+                mute.with_max_x(mute.right() - BUTTON_GAP),
+                channel,
+                i18n,
+                actions,
+            );
+            show_monitor(ui, monitor, channel, monitoring, i18n, actions);
         }
     });
 }
@@ -569,6 +629,97 @@ fn show_mute(
     paint_speaker(ui, &response, channel.muted);
     if response.on_hover_text(i18n.text(label)).clicked() {
         actions.push(mute_command(channel.id, !channel.muted));
+    }
+}
+
+/// Headphones, lit when this channel is played back.
+///
+/// Three states in one button, cycled by clicking — see [`next_monitor`].
+/// Which of them it is in is carried by the button's own selected background
+/// and by the icon's colour, and named in full on hover: the same division
+/// the status bar's recording clock makes, so no state rests on a colour
+/// alone.
+///
+/// Disabled until a monitoring endpoint has been chosen, because until then
+/// there is nowhere for it to play. The hover says so and where to set it,
+/// which is the only place the two settings are connected on screen.
+fn show_monitor(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    channel: &Channel<'_>,
+    monitoring: bool,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::domain::MonitorMode;
+
+    let (Some(mode), ChannelId::Device(id)) = (channel.monitor, channel.id) else {
+        return;
+    };
+    let response = ui
+        .add_enabled_ui(monitoring, |ui| {
+            let button = egui::Button::new("").selected(mode != MonitorMode::Off);
+            let response = ui.put(rect, button);
+            paint_headphones(ui, &response, mode);
+            response
+        })
+        .inner;
+    let response = if monitoring {
+        response.on_hover_text(i18n.text(match mode {
+            MonitorMode::Off => TextKey::AudioMonitorOff,
+            MonitorMode::MonitorOnly => TextKey::AudioMonitorOnly,
+            MonitorMode::MonitorAndOutput => TextKey::AudioMonitorBoth,
+        }))
+    } else {
+        response.on_disabled_hover_text(i18n.text(TextKey::AudioMonitorUnavailable))
+    };
+    if response.clicked() {
+        actions.push(audio_action(AudioCommand::SetMonitor(
+            id,
+            next_monitor(mode),
+        )));
+    }
+}
+
+fn paint_headphones(ui: &egui::Ui, response: &egui::Response, mode: crate::domain::MonitorMode) {
+    use crate::domain::MonitorMode;
+
+    // `MonitorOnly` takes the warning colour because it is the one state that
+    // takes something away: the channel is audible here and absent from the
+    // file. The other two both reach the recording.
+    let stroke = match mode {
+        MonitorMode::MonitorOnly => egui::Stroke::new(1.5, ui.visuals().warn_fg_color),
+        _ => ui.style().interact(response).fg_stroke,
+    };
+    let center = response.rect.center();
+    let painter = ui.painter();
+
+    // The headband, as four short chords rather than an arc: a real curve at
+    // this size reads as a smudge, which is the same reason the speaker's
+    // waves are drawn as strokes.
+    let band = [
+        egui::pos2(center.x - 6.0, center.y + 1.0),
+        egui::pos2(center.x - 6.0, center.y - 3.0),
+        egui::pos2(center.x - 2.5, center.y - 6.0),
+        egui::pos2(center.x + 2.5, center.y - 6.0),
+        egui::pos2(center.x + 6.0, center.y - 3.0),
+        egui::pos2(center.x + 6.0, center.y + 1.0),
+    ];
+    for pair in band.windows(2) {
+        painter.line_segment([pair[0], pair[1]], stroke);
+    }
+
+    // The earcups, filled so the icon has weight at the size it is drawn.
+    for side in [-1.0, 1.0] {
+        let x = center.x + side * 6.0;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x - 1.8, center.y),
+                egui::pos2(x + 1.8, center.y + 5.0),
+            ),
+            1.5,
+            stroke.color,
+        );
     }
 }
 

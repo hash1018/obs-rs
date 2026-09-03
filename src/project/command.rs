@@ -1,6 +1,6 @@
 use crate::domain::{
     AudioSourceId, Crop, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
-    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
+    MonitorMode, RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
     WindowCaptureSettings,
 };
 
@@ -28,6 +28,9 @@ pub enum AudioCommand {
     SetMuted(AudioSourceId, bool),
     /// Which endpoint to listen to, or `None` to follow the system default.
     SetDevice(AudioSourceId, Option<String>),
+    /// Whether this source is played back, and whether it still reaches the
+    /// recording.
+    SetMonitor(AudioSourceId, MonitorMode),
 }
 
 #[derive(Debug, Clone, PartialEq)]

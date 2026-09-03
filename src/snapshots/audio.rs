@@ -1,4 +1,4 @@
-use crate::domain::{AudioSourceId, AudioSourceKind};
+use crate::domain::{AudioSourceId, AudioSourceKind, MonitorMode};
 
 /// What the audio mixer dock draws.
 ///
@@ -19,6 +19,9 @@ pub struct AudioSourceSnapshot {
     pub device: Option<String>,
     pub gain_db: f32,
     pub muted: bool,
+    /// Whether this source is played back, and whether it still reaches the
+    /// recording — see [`MonitorMode`].
+    pub monitor: MonitorMode,
     /// The loudest sample seen since the last update, in decibels relative to
     /// full scale, or `None` when nothing is measuring yet.
     ///

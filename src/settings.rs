@@ -83,7 +83,7 @@ pub struct WindowGeometry {
 /// Its own group rather than part of [`RecordingSettings`], because it is not
 /// a recording setting: the mixer runs whether or not anything is recording,
 /// and the level meters are reading its output either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioSettings {
     /// Hertz. 48 kHz is what both platforms' devices are overwhelmingly
@@ -91,6 +91,16 @@ pub struct AudioSettings {
     pub sample_rate: u32,
     /// 1 for mono, 2 for stereo.
     pub channels: u16,
+    /// Which playback endpoint monitoring is heard through, or `None` for
+    /// none — which is what every installation starts as, and is not the same
+    /// as the system default.
+    ///
+    /// Deliberately not defaulting to the default output. That endpoint is
+    /// usually the one Desktop Audio is captured from, and playing the mix
+    /// back into it feeds the loopback its own output: a howl that grows with
+    /// every pass. Somebody has to say where monitoring goes, and headphones
+    /// are the answer that cannot do this.
+    pub monitor_device: Option<String>,
 }
 
 impl Default for AudioSettings {
@@ -98,7 +108,21 @@ impl Default for AudioSettings {
         Self {
             sample_rate: DEFAULT_SAMPLE_RATE,
             channels: DEFAULT_CHANNELS,
+            monitor_device: None,
         }
+    }
+}
+
+impl AudioSettings {
+    /// Whether the two settings that decide what the mixer sums into differ.
+    ///
+    /// Asked separately from `!=` because the monitoring endpoint lives in
+    /// this group without belonging to that question: changing the mix format
+    /// reopens the encoder a recording is being written with and so is
+    /// refused while one runs, and changing what you are listening to has
+    /// nothing to do with the file.
+    pub fn mix_differs_from(&self, other: &Self) -> bool {
+        self.sample_rate != other.sample_rate || self.channels != other.channels
     }
 }
 

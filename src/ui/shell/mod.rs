@@ -95,6 +95,8 @@ pub fn show(
         resources.snapshots.status.recording_elapsed.is_some(),
         &resources.snapshots.status.encoders,
         &resources.snapshots.status.audio_codecs,
+        resources.audio_devices,
+        &resources.snapshots.audio,
         resources.i18n,
         actions,
     );

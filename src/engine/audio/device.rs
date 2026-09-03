@@ -98,6 +98,72 @@ pub(super) fn open_capture(
     Err("no audio capture is written for this platform yet".into())
 }
 
+/// Opens the endpoint monitoring is played to, and reports the format it
+/// wants its audio in.
+///
+/// Named exactly, with no fall back to a default — which is the one thing
+/// this does differently from [`open_capture`], and deliberately. The default
+/// output is usually the endpoint Desktop Audio is already listening to, so
+/// falling back to it would build exactly the loop that choosing a monitoring
+/// device separately exists to avoid. A monitoring device that has been
+/// unplugged therefore stops monitoring, which is quiet and obvious, instead
+/// of starting a howl.
+#[cfg(target_os = "windows")]
+pub(super) fn open_renderer(
+    name: &str,
+    device: &str,
+) -> Result<
+    (
+        media_pp::elements::WasapiRenderer,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
+    use media_pp::elements::{WasapiRenderer, WasapiRendererOptions};
+
+    let device = WasapiRenderer::list_devices()?
+        .into_iter()
+        .find(|candidate| candidate.id == device)
+        .ok_or("the monitoring device is not there any more")?;
+    Ok(WasapiRenderer::open(
+        name,
+        WasapiRendererOptions { device },
+    )?)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn open_renderer(
+    name: &str,
+    device: &str,
+) -> Result<
+    (
+        media_pp::elements::PipeWireAudioRenderer,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
+    use media_pp::elements::{PipeWireAudioRenderer, PipeWireAudioRendererOptions};
+
+    // By node name rather than id, the same as a capture's stored endpoint
+    // and for the same reason: an id is valid only while its node is.
+    let device = PipeWireAudioRenderer::list_devices()?
+        .into_iter()
+        .find(|candidate| candidate.name == device)
+        .ok_or("the monitoring device is not there any more")?;
+    Ok(PipeWireAudioRenderer::open(
+        name,
+        PipeWireAudioRendererOptions { device },
+    )?)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub(super) fn open_renderer(
+    _name: &str,
+    _device: &str,
+) -> Result<(media_pp::elements::AppSink, media_pp::elements::AudioFormat), BackendError> {
+    Err("no audio playback is written for this platform yet".into())
+}
+
 /// The stored endpoint if it is still there, otherwise the system default for
 /// this kind.
 ///
@@ -137,6 +203,7 @@ mod tests {
             device: device.map(str::to_owned),
             gain_db: 0.0,
             muted: false,
+            monitor: crate::domain::MonitorMode::Off,
             peak_db: None,
             running: true,
         }
