@@ -5,9 +5,12 @@ An OBS-style scene compositor and screen recorder, written in Rust on top of
 composites it on the GPU, and records it — with an annotation layer you can
 draw on while it runs.
 
-![The obs-rs window: the Scenes, Sources and Controls docks on the left, the
-Preview in the middle with a Drawing selected and its pen toolbar under it, and
-the Audio Mixer along the bottom.](docs/screenshot.png)
+![The obs-rs window: the Scenes, Sources and Properties docks down the left;
+the Preview in the middle, where a still picture, a selected video — outlined
+in red, its cropped left edge marked in green, and the distance to each canvas
+edge written beside it — and a second video in the corner are composited
+together; and the Audio Mixer and Controls along the
+bottom.](docs/screenshot.png)
 
 ## What it does
 
@@ -33,6 +36,12 @@ the Audio Mixer along the bottom.](docs/screenshot.png)
   list says when one has finished — and play starts it again. It can be
   paused and scrubbed from the Properties dock, and seeking a paused clip
   moves the picture without starting it again.
+- **Network stream.** An RTSP session in a Scene — an IP camera, usually —
+  decoded on the GPU like a media file, with a channel in the mixer for its
+  sound. A camera that stops answering is not an error: the stream is put
+  back and tried again on its own, at an interval you choose, or left alone
+  entirely if you turn that off. TCP or UDP, because no one transport gets
+  through every network.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an
@@ -68,6 +77,16 @@ for the day is still in the Scene tomorrow.
 
 Drag a source in the Preview to move it and its handles to resize it. Sources
 higher in the list are drawn in front of lower ones.
+
+The Preview marks what it is showing you. The selected source is outlined in
+red, with the distance from each of its four edges to the edge of the canvas
+written alongside — the numbers for placing something exactly, centred or
+flush, instead of doing that arithmetic by eye. An edge that a crop cut is
+drawn in a green dashed line instead, so a cropped source does not read as
+merely a smaller one. Whatever hangs outside the canvas is hatched, being in
+the Scene but not in the recording. And the source under the pointer is
+outlined thinly in blue, which is the only way to tell what a click would take
+where one source covers another.
 
 Double-click a source's name in the dock to change it, the same way a Scene's
 name is changed. The name belongs to the source rather than to the Scene, so
@@ -124,7 +143,6 @@ you try it:
   YouTube yet. Recording is the whole of it.
 - **Seven source kinds.** Display Capture, Window Capture, Media File,
   Network Stream, Image, Drawing and Color. Cameras are not there.
-
 - **No filters or transitions.** Switching Scenes is a cut.
 
 ## Contributing
