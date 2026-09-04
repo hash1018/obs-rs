@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # So the archive can be built and downloaded without cutting a tag, which
+  # is how this workflow gets tested.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        shell: pwsh
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Select Rust toolchain
+        shell: pwsh
+        run: rustup default stable
+
+      # The same pinned FFmpeg the CI workflow builds against, which is what
+      # makes the licence statement in THIRD-PARTY.md true of this archive:
+      # vcpkg's default port plus openh264, and no GPL components.
+      - name: Set up FFmpeg
+        uses: ./.github/actions/setup-ffmpeg
+
+      - name: Cache downloaded crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release --locked
+
+      # Everything in the FFmpeg tree's `bin`, not the seven libraries the
+      # executable names: avcodec pulls in openh264, zlib and whatever else
+      # the port's dependencies installed, and those are loaded by name at run
+      # time exactly as the av* ones are. Copying the directory is both
+      # simpler and correct as the port's dependency set changes.
+      #
+      # `share/*/copyright` is vcpkg's per-port licence file, so this collects
+      # the terms of precisely what is being shipped rather than a list
+      # maintained by hand — see THIRD-PARTY.md on why it is done this way.
+      - name: Stage the archive
+        shell: pwsh
+        run: |
+          $stage = "dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-windows"
+          New-Item -ItemType Directory -Force -Path "$stage/licenses" | Out-Null
+          Copy-Item target/release/obs-rs.exe $stage
+          Copy-Item "$env:FFMPEG_DIR/bin/*.dll" $stage
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY.md, README.md $stage
+          Get-ChildItem "$env:FFMPEG_DIR/share" -Filter copyright -Recurse |
+            ForEach-Object { Copy-Item $_.FullName "$stage/licenses/$($_.Directory.Name).txt" }
+          Get-ChildItem $stage -Recurse -File | Select-Object FullName, Length
+
+      - name: Check the archive is complete
+        shell: pwsh
+        run: |
+          $stage = "dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-windows"
+          if (-not (Get-ChildItem "$stage/avcodec-*.dll")) { throw "no FFmpeg libraries in the archive" }
+          if (-not (Get-ChildItem "$stage/licenses/*.txt")) { throw "no bundled licences in the archive" }
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          $stage = "dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-windows"
+          Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-rs-x86_64-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # What this archive can and cannot promise, stated here because neither is
+  # obvious from the files in it:
+  #
+  # - It needs an NVIDIA GPU. The Linux backend composites on CUDA and there
+  #   is no fallback, so this does not start on an AMD or Intel machine. The
+  #   driver is enough; there is no CUDA toolkit in the archive and none is
+  #   wanted.
+  # - It is bound to the glibc it was built against — this runner's, and
+  #   nothing older. A distribution older than the runner needs a build from
+  #   source.
+  # - Nothing here has run it. A hosted runner has no GPU and no display, so
+  #   the checks below confirm the archive is complete and say nothing about
+  #   whether it works. That still has to happen on a real machine.
+  linux:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpipewire-0.3-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libgl1-mesa-dev
+
+      - name: Set up FFmpeg
+        uses: ./.github/actions/setup-ffmpeg
+
+      - name: Cache downloaded crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # `$ORIGIN/lib` is what makes the archive self-contained: the loader
+      # resolves FFmpeg next to the executable rather than from wherever the
+      # machine happens to have a copy, or from the `LD_LIBRARY_PATH` a
+      # launcher script would otherwise have to set. Single-quoted so
+      # `$ORIGIN` reaches the linker as those eight characters — bash would
+      # otherwise expand it to nothing and the rpath would be `/lib`.
+      - name: Build
+        run: cargo build --release --locked
+        env:
+          RUSTFLAGS: '-C link-arg=-Wl,-rpath,$ORIGIN/lib'
+
+      # `cp -a` rather than a copy: the tree is `libavcodec.so ->
+      # libavcodec.so.62 -> libavcodec.so.62.x.y`, and the executable asks
+      # for the middle one. Dereferencing would put three copies of every
+      # library in the archive under names that no longer point at each
+      # other.
+      - name: Stage the archive
+        run: |
+          set -euo pipefail
+          stage="dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-linux"
+          mkdir -p "$stage/lib" "$stage/licenses"
+          cp target/release/obs-rs "$stage"
+          cp -a "$FFMPEG_DIR"/lib/*.so* "$stage/lib"
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md README.md "$stage"
+          find "$FFMPEG_DIR/share" -name copyright -print0 |
+            while IFS= read -r -d '' file; do
+              cp "$file" "$stage/licenses/$(basename "$(dirname "$file")").txt"
+            done
+          ls -l "$stage" "$stage/lib" "$stage/licenses"
+
+      - name: Check the archive is complete
+        run: |
+          set -euo pipefail
+          stage="dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-linux"
+          compgen -G "$stage/lib/libavcodec.so*" > /dev/null \
+            || { echo "no FFmpeg libraries in the archive" >&2; exit 1; }
+          compgen -G "$stage/licenses/*.txt" > /dev/null \
+            || { echo "no bundled licences in the archive" >&2; exit 1; }
+          # Every shared object the executable asks for has to be resolvable
+          # from inside the archive. `ldd` reports what the loader would find
+          # with the rpath baked in above, so an FFmpeg library that failed to
+          # get copied shows up here rather than on somebody's machine.
+          missing=$(ldd "$stage/obs-rs" | grep "not found" || true)
+          if [ -n "$missing" ]; then
+            echo "unresolved libraries:" >&2
+            echo "$missing" >&2
+            exit 1
+          fi
+
+      # tar rather than zip: it keeps the executable bit and the library
+      # symlinks, both of which a zip would flatten.
+      - name: Pack
+        run: |
+          set -euo pipefail
+          stage="dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-linux"
+          tar -czf "$stage.tar.gz" -C dist "$(basename "$stage")"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-rs-x86_64-linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # One job publishes, after both have built. Letting each platform attach its
+  # own archive would have them racing: two concurrent jobs that each find no
+  # release for this tag can each create one, and the tag ends up with two
+  # drafts holding one archive apiece.
+  #
+  # A `workflow_dispatch` run stops before this. It builds both archives and
+  # leaves them as artifacts, publishing nothing — which is how the workflow
+  # gets tried without cutting a tag.
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [windows, linux]
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Collect the archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List what will be attached
+        run: ls -l dist
+
+      # A draft: a first release is worth reading before it is public, and
+      # the notes are generated from commit subjects that were not written to
+      # be release notes.
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: true
+          generate_release_notes: true
