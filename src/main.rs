@@ -62,6 +62,17 @@ fn main() -> eframe::Result {
         viewport: place_window(
             egui::ViewportBuilder::default()
                 .with_title("obs-rs")
+                // What a Wayland compositor matches this window to its
+                // desktop entry by, and the only way it can find an icon
+                // for it: the protocol has no call for a client to set
+                // one, so `with_icon` above is X11's answer and this is
+                // Wayland's. Set explicitly because nothing sets it
+                // otherwise — `run_native`'s name goes to the storage
+                // directory, and `egui-winit` names the surface only when
+                // this field is `Some`, so leaving it out is a window with
+                // no `app_id` at all and a task bar showing the fallback
+                // icon beside the right name.
+                .with_app_id("obs-rs")
                 .with_icon(window_icon())
                 .with_min_inner_size([480.0, 320.0]),
             settings.workspace.window,

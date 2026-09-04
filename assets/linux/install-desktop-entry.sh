@@ -73,8 +73,10 @@ mkdir -p "$DESKTOP_DIR" "$ICON_DIR"
 cp "$HERE/obs-rs.png" "$ICON_FILE"
 
 # `StartupWMClass` is what an X11 task bar matches a window to this entry by;
-# Wayland uses the `app_id`, which eframe takes from the application name and
-# is the same string. Both are `obs-rs`, so one entry serves both.
+# Wayland matches the surface's `app_id`. The application sets that itself —
+# see `with_app_id` in `main.rs`, which it has to do explicitly, since nothing
+# derives it from the application's name. Both strings are `obs-rs`, so one
+# entry serves both.
 cat > "$DESKTOP_FILE" <<DESKTOP
 [Desktop Entry]
 Type=Application
