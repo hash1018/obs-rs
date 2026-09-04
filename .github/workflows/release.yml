@@ -70,6 +70,25 @@ jobs:
           Copy-Item target/release/obs-rs.exe $stage
           Copy-Item "$env:FFMPEG_DIR/bin/*.dll" $stage
           Copy-Item LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY.md, README.md $stage
+
+          # Both the executable and the vcpkg FFmpeg build link the dynamic
+          # Visual C++ runtime, and a stock Windows does not have it — an
+          # archive without these opens a "VCRUNTIME140.dll was not found"
+          # box instead of the application. Microsoft's redistributable
+          # licence covers shipping them inside the application's own
+          # directory, which is where these land; see THIRD-PARTY.md.
+          #
+          # The whole `Microsoft.VC*.CRT` folder rather than a list of file
+          # names: it is a couple of megabytes, it is exactly the set
+          # Microsoft redistributes together, and picking from it by hand is
+          # how an archive ends up missing `vcruntime140_1.dll`.
+          $crt = Get-ChildItem "C:/Program Files/Microsoft Visual Studio/*/*/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory |
+            Sort-Object { [version]$_.Parent.Parent.Name } |
+            Select-Object -Last 1
+          if (-not $crt) { throw "no Visual C++ redistributable found on the runner" }
+          Write-Host "runtime from $($crt.FullName)"
+          Copy-Item "$($crt.FullName)/*.dll" $stage
+
           Get-ChildItem "$env:FFMPEG_DIR/share" -Filter copyright -Recurse |
             ForEach-Object { Copy-Item $_.FullName "$stage/licenses/$($_.Directory.Name).txt" }
           Get-ChildItem $stage -Recurse -File | Select-Object FullName, Length
@@ -80,6 +99,9 @@ jobs:
           $stage = "dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-windows"
           if (-not (Get-ChildItem "$stage/avcodec-*.dll")) { throw "no FFmpeg libraries in the archive" }
           if (-not (Get-ChildItem "$stage/licenses/*.txt")) { throw "no bundled licences in the archive" }
+          # The one file whose absence is invisible until somebody without the
+          # redistributable installed tries to start it.
+          if (-not (Test-Path "$stage/vcruntime140.dll")) { throw "no Visual C++ runtime in the archive" }
 
       - name: Pack
         shell: pwsh

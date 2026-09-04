@@ -131,6 +131,36 @@ Settings has four pages: General, Video (output resolution and frame rate),
 Audio (sample rate and channels), and Recording (where files go, format,
 encoder, bit rates, splitting).
 
+## Getting it
+
+A release carries one archive per platform. Unpack it and run what is inside;
+there is no installer, and nothing is written outside the folder you unpack it
+into except the settings and project files under your own user directory.
+
+FFmpeg travels with the archive, so it does not have to be installed. What
+does have to be there:
+
+**Windows**
+
+- Nothing else. The Visual C++ runtime the executable needs is in the archive
+  beside it.
+- The executable is not code-signed, so SmartScreen will offer to protect you
+  from it the first time. *More info → Run anyway*.
+
+**Linux**
+
+- **An NVIDIA driver.** Not for speed — for anything: see the note under
+  *Building*. `libcuda.so.1` comes from the driver and is deliberately not in
+  the archive.
+- **PipeWire.** `libpipewire-0.3.so.0` is a client for a system service, so a
+  bundled copy would only be a version to disagree with the one running.
+  Every current desktop distribution has it.
+- A glibc no older than the one the archive was built against, which is the
+  current Ubuntu LTS. An older distribution needs a build from source.
+
+Run `./obs-rs` from the unpacked directory. It finds its own copy of FFmpeg
+beside it and needs no `LD_LIBRARY_PATH`.
+
 ## Building
 
 ```bash

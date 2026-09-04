@@ -52,6 +52,18 @@ it bundles, under `licenses/`, rather than a copy committed here — the terms
 that apply are the ones distributed with those exact binaries, and a
 hand-maintained second copy could fall out of step with them.
 
+## The Visual C++ runtime
+
+The Windows archive carries `vcruntime140.dll`, `msvcp140.dll` and the rest of
+Microsoft's VC++ runtime, because both the executable and the FFmpeg
+libraries are built against it and it is not part of a stock Windows install.
+
+Microsoft's redistributable licence permits shipping these files inside an
+application's own directory, which is what this does — they sit beside
+`obs-rs.exe` and are used by nothing else. The alternative would be telling
+every user to install the redistributable first, which is a worse first
+minute for no gain to anybody.
+
 ## Rust dependencies
 
 Everything else obs-rs uses is a Rust crate compiled into the executable, and
