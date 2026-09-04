@@ -168,6 +168,14 @@ does have to be there:
 Run `./obs-rs` from the unpacked directory. It finds its own copy of FFmpeg
 beside it and needs no `LD_LIBRARY_PATH`.
 
+For a name and an icon in the launcher, run `./install-desktop-entry.sh`. It
+writes a desktop entry and an icon under `~/.local/share` and needs no root.
+On Wayland this is the only way the window gets an icon at all — the protocol
+has no call for a client to set its own, so the compositor looks for an
+installed entry instead. Moving the folder afterwards breaks the entry, since
+it records where the executable is; run the script again, or
+`--uninstall` to remove it.
+
 ## Building
 
 ```bash

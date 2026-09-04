@@ -210,6 +210,13 @@ jobs:
           cp target/release/obs-rs "$stage"
           cp -a "$FFMPEG_DIR"/lib/*.so* "$stage/lib"
           cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md README.md "$stage"
+          # The icon and the script that registers it with the desktop. Only
+          # this side needs them: Wayland has no way for a client to set its
+          # own window icon, so a compositor matches the surface's `app_id`
+          # against an installed desktop entry instead, and a portable archive
+          # installs none. Windows takes its icon from the executable.
+          cp assets/obs-rs.png "$stage"
+          install -m 755 assets/linux/install-desktop-entry.sh "$stage"
           find "$FFMPEG_DIR/share" -name copyright -print0 |
             while IFS= read -r -d '' file; do
               cp "$file" "$stage/licenses/$(basename "$(dirname "$file")").txt"
@@ -224,6 +231,14 @@ jobs:
             || { echo "no FFmpeg libraries in the archive" >&2; exit 1; }
           compgen -G "$stage/licenses/*.txt" > /dev/null \
             || { echo "no bundled licences in the archive" >&2; exit 1; }
+          # The installer refuses to run without these two beside it, and a
+          # `.sh` that lost its executable bit is a file nobody can start.
+          [ -x "$stage/install-desktop-entry.sh" ] \
+            || { echo "the desktop installer is missing or not executable" >&2; exit 1; }
+          [ -f "$stage/obs-rs.png" ] \
+            || { echo "no icon for the desktop entry in the archive" >&2; exit 1; }
+          sh -n "$stage/install-desktop-entry.sh" \
+            || { echo "the desktop installer does not parse" >&2; exit 1; }
           # Every shared object the executable asks for has to be resolvable
           # from inside the archive, except the one that deliberately is not:
           # `libcuda.so.1` belongs to the user's NVIDIA driver and shipping a

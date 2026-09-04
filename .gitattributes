@@ -1,0 +1,5 @@
+# Shell scripts are LF whatever the checkout does otherwise. A `.sh` with CRLF
+# line endings does not run on Linux — the interpreter on the shebang line ends
+# up with a carriage return attached to it — and this repository is developed on
+# Windows, where `core.autocrlf` would hand out exactly that.
+*.sh text eol=lf
