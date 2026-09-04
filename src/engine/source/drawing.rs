@@ -186,6 +186,9 @@ fn opened(
 ) -> OpenSource {
     OpenSource {
         media_file: None,
+        // Its size is its own rather than something a device answered
+        // with, so there is nothing to correct.
+        negotiated_size: None,
         source,
         layer,
         name,

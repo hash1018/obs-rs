@@ -1,7 +1,7 @@
 use crate::domain::{
     AudioSourceId, Crop, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
-    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform, VideoCaptureMode,
-    VideoCaptureSettings, WindowCaptureSettings,
+    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, Stroke, Transform,
+    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +107,10 @@ pub enum SourceCommand {
     /// pixels — see [`crate::domain::Crop`]. Recorded once when the gesture
     /// ends, like a Transform, and for the same reason.
     SetCrop(SceneItemId, Crop),
+    /// What the Source turned out to be, sent by the engine once it has
+    /// opened one — never by the UI. The stored size is a hint taken when the
+    /// item was added, and this is what corrects it.
+    SetSourceSize(SceneItemId, SourceKind, [u32; 2]),
     SetMediaLooping(SceneItemId, bool),
     /// How a live stream's session carries its video.
     ///

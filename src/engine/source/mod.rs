@@ -67,6 +67,19 @@ pub(in crate::engine) struct OpenSource {
     /// The token the portal handed back, when it differs from the one it was
     /// given. `None` means the stored token is still current.
     pub(in crate::engine) refreshed_token: Option<Option<String>>,
+    /// The picture size this Source actually opened at, for the kinds that
+    /// negotiate one — a camera's mode, a capture's stream, a file's frames.
+    ///
+    /// Written back to the project when it differs from what was stored, for
+    /// the same reason a refreshed token is: what the item believes decides
+    /// what the editor lets you do to it. A crop is clamped against the
+    /// stored size, so a stale one lets a crop point past the frame — and a
+    /// layer with nothing left to draw is simply not drawn, which is a
+    /// picture that vanishes with nothing said.
+    ///
+    /// `None` for a Source whose size is its own — a Color, a Drawing — and
+    /// for one that could not read it.
+    pub(in crate::engine) negotiated_size: Option<[u32; 2]>,
     /// Whether the Source is in the Scene being shown. One whose item left the
     /// Scene stays open but stops running, so coming back is a resume rather
     /// than another portal round trip.

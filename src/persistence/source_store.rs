@@ -660,6 +660,23 @@ impl SourceStore {
         )
     }
 
+    /// Records what a Source turned out to be, once it has opened.
+    ///
+    /// The size every capture stores is a hint taken when the Source was
+    /// added, and a hint can be wrong by the next run: a camera opens at the
+    /// mode it has rather than the one it listed, a window is a different
+    /// size than it was, a file was replaced. What the item believes decides
+    /// what the editor lets you do to it — a crop is clamped against this —
+    /// so a stale one is not merely cosmetic.
+    pub(crate) fn set_negotiated_size(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        kind: SourceKind,
+        size: [u32; 2],
+    ) -> PersistenceResult<()> {
+        set_negotiated_size(transaction, scene_item_id, kind, size)
+    }
+
     /// How long to wait before connecting again, or `None` to wait to be
     /// asked. Stored as absence rather than as zero — see the migration.
     pub(crate) fn set_rtsp_reconnect(
@@ -1117,6 +1134,40 @@ fn swap_with_neighbour(
 
 /// One column of the media file settings behind a SceneItem's Source.
 ///
+/// Records the picture size a Source turned out to have.
+///
+/// Every kind that negotiates one keeps it in its own settings table, under
+/// the same two column names — so which table to write is the only thing that
+/// varies, and it comes from the kind rather than from anything outside.
+///
+/// A kind whose size is its own is left alone rather than refused: nothing
+/// asks this of a Color Source, and answering an unexpected one with an error
+/// would turn a harmless call into a failed transaction.
+fn set_negotiated_size(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    kind: SourceKind,
+    size: [u32; 2],
+) -> PersistenceResult<()> {
+    let table = match kind {
+        SourceKind::DisplayCapture => "display_capture_settings",
+        SourceKind::WindowCapture => "window_capture_settings",
+        SourceKind::VideoCapture => "video_capture_settings",
+        SourceKind::MediaFile => "media_file_settings",
+        SourceKind::Rtsp => "rtsp_source_settings",
+        SourceKind::Image | SourceKind::Color | SourceKind::Drawing => return Ok(()),
+    };
+    transaction.execute(
+        &format!(
+            "UPDATE {table}
+                SET width = ?1, height = ?2
+              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?3)"
+        ),
+        params![size[0], size[1], scene_item_id.0],
+    )?;
+    Ok(())
+}
+
 /// The column name is a literal from the three callers above and never comes
 /// from outside, which is what makes formatting it into the statement safe —
 /// a bound parameter cannot name a column.
@@ -1456,6 +1507,74 @@ mod tests {
         // shifted column would break silently.
         assert_eq!(stored.path, PathBuf::from("/tmp/clip.mp4"));
         assert!(stored.has_audio);
+    }
+
+    /// What a Source turned out to be, written where the picker's hint was
+    /// wrong — which is the case this exists for: a camera stored as its
+    /// best mode and opened at another one leaves the item believing in a
+    /// size the frames do not have, and a crop clamped against it points
+    /// past the picture.
+    #[test]
+    fn a_negotiated_size_replaces_the_hint_it_was_added_with() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_video_capture(
+                    transaction,
+                    scene_id,
+                    &crate::domain::VideoCaptureSettings {
+                        device: "/dev/video0".to_owned(),
+                        device_name: "Camera".to_owned(),
+                        mode: None,
+                        size_hint: Some([1280, 720]),
+                    },
+                )
+            })
+            .unwrap();
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_negotiated_size(
+                    transaction,
+                    item_id,
+                    SourceKind::VideoCapture,
+                    [640, 480],
+                )
+            })
+            .unwrap();
+
+        let SourceSettings::VideoCapture(stored) = settings_of(&database, scene_id) else {
+            panic!("a camera Source must read back as one");
+        };
+        assert_eq!(stored.size_hint, Some([640, 480]));
+        assert_eq!(
+            stored.mode, None,
+            "correcting the size must not decide the mode as a side effect"
+        );
+    }
+
+    /// A Source whose size is its own has no hint to correct, and asking is
+    /// not a mistake worth failing a transaction over — the engine asks the
+    /// same way for every kind it opens.
+    #[test]
+    fn a_source_that_carries_its_own_size_is_left_alone() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| SourceStore::add_color(transaction, scene_id))
+            .unwrap();
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_negotiated_size(transaction, item_id, SourceKind::Color, [64, 64])
+            })
+            .expect("asking about a Color Source is not an error");
+
+        let SourceSettings::Color(stored) = settings_of(&database, scene_id) else {
+            panic!("a Color Source must read back as one");
+        };
+        assert_ne!(stored.size, [64.0, 64.0], "its own size is not a hint");
     }
 
     /// The three things a stream stores that nothing else does, through the

@@ -76,6 +76,12 @@ Video Capture is a camera. It is the shortest pipeline here — `MfCaptureSource
 
 The conversion is the element's on both platforms, which is what makes the two pipelines the same shape. Media Foundation does it in the driver stack; V4L2 does not convert at all, so `V4l2CaptureSource` decodes and converts itself — a USB camera speaks YUYV at low resolutions and Motion JPEG at high ones, and 720p is commonly offered *only* compressed. One geometry there is not one mode: the same size can be offered by two pixel formats, so the format that carries the chosen mode is named when the device is opened rather than left to the demuxer, which would otherwise pick one that does not have the size and be answered with a different one.
 
+### A hint the Source corrects
+
+Every capture stores the picture size it had when it was added, and every one of those is a hint rather than a fact: a camera opens at the mode it has rather than the one it listed, a window is a different size than it was last run, a file was replaced on disk. The item stands in at that size until something says otherwise, which is what lets it be selected and dragged before a frame ever arrives.
+
+So a Source that negotiates a size reports it, and the engine writes it back when it differs from what was stored — the same path a refreshed portal token takes, and for the same reason. What the item believes is not cosmetic: a crop is clamped against it, so a size larger than the real frame lets a crop point past the picture, and a layer with nothing left to draw is simply not drawn. That is a Source that vanishes part way through a crop drag with nothing logged, which is how the arrangement was found to be missing.
+
 A camera states its own modes, and which one to ask for is stored per Source and picked in the Properties dock. "Automatic" means the camera's own first offered mode, which is its stated preference. Reading the list means opening the device, so it is read once per session when the list is first opened rather than each frame. A mode carries a size, so choosing one moves the item's size hint with it — otherwise a 640x480 picture would be drawn stretched into the rectangle a 1280x720 one had.
 
 Nothing in obs-rs opens a camera's *microphone*: a webcam that has one appears in the Audio Mixer as an ordinary input device, because that is what both platforms make it.

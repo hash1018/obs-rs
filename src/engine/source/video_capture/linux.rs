@@ -60,6 +60,7 @@ pub(in crate::engine) fn open(
 
     Ok(Some(OpenSource {
         media_file: None,
+        negotiated_size: Some([format.width, format.height]),
         source: RunningSource(pipeline),
         layer,
         name,

@@ -230,6 +230,20 @@ fn attach_video(
     Ok(())
 }
 
+/// The picture size the decoder was built for, which is what this Source
+/// actually produces — see `OpenSource::negotiated_size`.
+fn decoded_size(params: &ffmpeg::codec::Parameters) -> Option<[u32; 2]> {
+    let video = ffmpeg::codec::context::Context::from_parameters(params.clone())
+        .ok()?
+        .decoder()
+        .video()
+        .ok()?;
+    match (video.width(), video.height()) {
+        (0, _) | (_, 0) => None,
+        size => Some([size.0, size.1]),
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -250,6 +264,9 @@ pub(in crate::engine) fn open(
     };
     let chosen = choose(&source, &streams, mixer)?;
 
+    // Read before the parameters are moved into the decoder, which is
+    // also the only place they describe a picture rather than a stream.
+    let size = decoded_size(&chosen.video_params);
     let video_decoder = D3d11Decoder::new(
         format!("{name}-video-decoder"),
         chosen.video_params,
@@ -291,6 +308,7 @@ pub(in crate::engine) fn open(
         showing: true,
         running: true,
         pushed: None,
+        negotiated_size: size,
         media_file: Some(MediaFile {
             looping: None,
             volume,
@@ -324,6 +342,9 @@ pub(in crate::engine) fn open(
     // NVDEC hands out NV12 in CUDA memory, which is one of the two the
     // compositor draws from — so there is no `CudaConverter` here, unlike the
     // Sources that upload BGRA of their own.
+    // Read before the parameters are moved into the decoder, which is
+    // also the only place they describe a picture rather than a stream.
+    let size = decoded_size(&chosen.video_params);
     let video_decoder = CudaDecoder::new(
         format!("{name}-video-decoder"),
         chosen.video_params,
@@ -363,6 +384,7 @@ pub(in crate::engine) fn open(
         showing: true,
         running: true,
         pushed: None,
+        negotiated_size: size,
         media_file: Some(MediaFile {
             looping: None,
             volume,

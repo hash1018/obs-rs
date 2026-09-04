@@ -405,6 +405,25 @@ impl SourceSettings {
     /// stands in at Canvas size rather than having no size at all: an item
     /// with no rectangle cannot be selected, moved, or resized, and the editor
     /// has to work before any frame exists.
+    /// The size that was *stored* for this Source, as opposed to the one
+    /// [`SourceSettings::source_size`] falls back to.
+    ///
+    /// `None` where none was ever read — a capture added while its target was
+    /// not there — and for the kinds that carry their own size rather than a
+    /// hint. What this answers is "does the project already know", which is a
+    /// different question from "what shape is the item".
+    pub fn size_hint(&self) -> Option<[u32; 2]> {
+        match self {
+            Self::DisplayCapture(settings) => settings.size_hint,
+            Self::WindowCapture(settings) => settings.size_hint,
+            Self::VideoCapture(settings) => settings.size_hint,
+            Self::MediaFile(settings) => settings.size_hint,
+            Self::Rtsp(settings) => settings.size_hint,
+            Self::Image(settings) => settings.size_hint,
+            Self::Color(_) | Self::Drawing(_) => None,
+        }
+    }
+
     pub fn source_size(&self, canvas: SceneCanvas) -> [f32; 2] {
         match self {
             Self::Color(settings) => settings.size,

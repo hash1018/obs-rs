@@ -203,6 +203,9 @@ fn handle_source_command(
         SourceCommand::SetCrop(scene_item_id, crop) => {
             SourceStore::set_crop(transaction, scene_item_id, crop)
         }
+        SourceCommand::SetSourceSize(scene_item_id, kind, size) => {
+            SourceStore::set_negotiated_size(transaction, scene_item_id, kind, size)
+        }
         SourceCommand::SetMediaLooping(scene_item_id, looping) => {
             SourceStore::set_media_looping(transaction, scene_item_id, looping)
         }

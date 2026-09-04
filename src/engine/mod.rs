@@ -1319,6 +1319,22 @@ fn state_of(
         // pass rather than reported.
         Ok(None) => SourceState::Missing(Instant::now()),
         Ok(Some(source)) => {
+            // What the Source turned out to be, where that is not what the
+            // item was told when it was added. The editor clamps a crop
+            // against this, so a stale size is not cosmetic: a crop past the
+            // real frame leaves the layer with nothing to draw, and a layer
+            // with nothing to draw is simply not drawn.
+            // Against what the project stored rather than against the item's
+            // shape: an item with no stored size stands in at Canvas size,
+            // and a capture that happens to *be* Canvas size would then never
+            // record what it is.
+            if let (Some(project), Some(size)) = (project, source.negotiated_size)
+                && item.settings.size_hint() != Some(size)
+            {
+                project.dispatch(ProjectCommand::Source(SourceCommand::SetSourceSize(
+                    item.id, item.kind, size,
+                )));
+            }
             // The portal may hand back a different token than the one it was
             // given. Keeping the old one would mean prompting on every launch,
             // which is the thing persisting it was for.
