@@ -6,8 +6,9 @@
 //! its backend cannot start, which is no reason to lose the microphone.
 
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 
@@ -18,6 +19,14 @@ use crate::domain::AudioSourceId;
 use crate::snapshots::AudioSnapshot;
 
 use super::{AudioEngine, Levels};
+
+/// How often the worker looks at what it has open when nothing has woken it.
+///
+/// The same second the video engine gives its own Sources, and for the same
+/// question — see [`AudioEngine::close_ended`]. Nothing else needs a tick:
+/// every other reason to act arrives as a command or an endpoint
+/// notification.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// What reaches the audio thread.
 ///
@@ -129,7 +138,17 @@ impl AudioManager {
                 // Ends when the manager says so — see `AudioCommand::Shutdown`.
                 // Dropping the engine on the way out stops every capture and
                 // the mixer, and dropping the watch stops the notifications.
-                while let Ok(first) = command_rx.recv() {
+                loop {
+                    // Timed rather than blocking, for the one thing no
+                    // command reports: a capture that stopped by itself. See
+                    // `AudioEngine::close_ended` for which failures reach
+                    // here and which arrive as a notification instead.
+                    let woken = match command_rx.recv_timeout(HEALTH_INTERVAL) {
+                        Ok(command) => Some(command),
+                        Err(RecvTimeoutError::Timeout) => None,
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    };
+                    let ticked = woken.is_none();
                     // Coalesced before anything is acted on. Windows raises
                     // several notifications for one plug, and a fader being
                     // dragged sends a snapshot per frame; both collapse to
@@ -138,7 +157,7 @@ impl AudioManager {
                     let mut project_changed = false;
                     let mut ending = false;
                     let mut gains: Vec<(AudioSourceId, f32)> = Vec::new();
-                    for command in std::iter::once(first).chain(command_rx.try_iter()) {
+                    for command in woken.into_iter().chain(command_rx.try_iter()) {
                         match command {
                             AudioCommand::Project(snapshot) => {
                                 project = Some(*snapshot);
@@ -180,6 +199,18 @@ impl AudioManager {
                     if ending {
                         break;
                     }
+                    // Before the device list is refreshed below, so a source
+                    // this closes is reopened in the same pass where its
+                    // endpoint is still there — and left closed where it is
+                    // not.
+                    if engine.close_ended() {
+                        // Asked rather than assumed: a capture ending by
+                        // itself is evidence the endpoint picture may have
+                        // moved without this thread being told, which is the
+                        // whole reason the check exists.
+                        devices_changed = true;
+                        project_changed = true;
+                    }
                     if devices_changed {
                         known_devices = crate::capture::audio_devices();
                         published_devices.store(Some(Arc::new(known_devices.clone())));
@@ -194,6 +225,11 @@ impl AudioManager {
                         && let Some(project) = &project
                     {
                         engine.apply(project, &known_devices);
+                    }
+                    // A bare health tick that found everything running has no
+                    // counters to republish and no reason to wake the UI.
+                    if ticked && !project_changed && !devices_changed && gains.is_empty() {
+                        continue;
                     }
                     // After any apply, not before: a project that arrived in
                     // the same batch carries the gain from before the drag,

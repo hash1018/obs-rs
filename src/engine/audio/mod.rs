@@ -127,7 +127,11 @@ pub(in crate::engine) fn monitors(monitored: bool, monitoring: bool) -> bool {
 struct OpenAudioSource {
     /// This source's capture, tee and fader. Dropping it stops that one
     /// capture and nothing else.
-    _pipeline: Arc<Pipeline>,
+    ///
+    /// Read as well as held: [`AudioEngine::close_ended`] asks whether it is
+    /// still running, which is the only thing that notices a capture that
+    /// stopped without an endpoint notification behind it.
+    pipeline: Arc<Pipeline>,
     /// What it is registered with the mixer as, which is how it is
     /// deregistered again. The monitor mix knows it by
     /// [`monitor_registration`] of this.
@@ -406,6 +410,41 @@ impl AudioEngine {
         }
     }
 
+    /// Closes every source whose capture has stopped by itself, and says
+    /// whether it closed any.
+    ///
+    /// This is not the unplugged-microphone case. That raises a WASAPI
+    /// endpoint notification, which wakes the worker and reaches `apply`,
+    /// where `device_available` answers no and the channel is closed. What
+    /// this is for is a capture that ends with no endpoint change behind it —
+    /// a driver reset, the audio service restarting,
+    /// `AUDCLNT_E_DEVICE_INVALIDATED` for a reason the endpoint list does not
+    /// show. Nothing asked, so nothing noticed.
+    ///
+    /// The symptom is worth stating because it is the reason this is here at
+    /// all: the source stays in the map, so the dock keeps drawing its
+    /// channel, and the meter holds the last peak it read forever. For a
+    /// microphone that was quiet when its capture died, that is
+    /// indistinguishable from a working one — and in a recording it is a
+    /// track silently lost until somebody plays the file back.
+    ///
+    /// The video engine has asked this of its own Sources all along (see
+    /// `notice_dropped_streams`); this is the audio half of the same
+    /// question.
+    pub(super) fn close_ended(&mut self) -> bool {
+        let ended: Vec<(AudioSourceId, String)> = self
+            .sources
+            .iter()
+            .filter(|(_, open)| !open.pipeline.is_running())
+            .map(|(id, open)| (*id, open.name.clone()))
+            .collect();
+        for (id, name) in &ended {
+            eprintln!("the capture behind {name} stopped on its own");
+            self.close(*id);
+        }
+        !ended.is_empty()
+    }
+
     /// Stops one source and takes its mixer registration back, leaving the
     /// project's own entry alone — this is about what is running, not about
     /// what the user asked for.
@@ -607,7 +646,7 @@ fn open_source(
 
     Ok((
         OpenAudioSource {
-            _pipeline: pipeline,
+            pipeline,
             name: name.to_owned(),
             volume: volume_handle,
             device: source.device.clone(),
@@ -619,7 +658,125 @@ fn open_source(
 
 #[cfg(test)]
 mod tests {
-    use super::monitors;
+    use super::*;
+
+    /// A pipeline standing in for one source's capture, so the engine can be
+    /// asked about a capture that stopped without opening a real device.
+    ///
+    /// `TestAudioSource` because it needs no endpoint and no file: what is
+    /// under test is whether the engine looks, not what it was looking at.
+    fn capture(name: &str, stopped: bool) -> Arc<Pipeline> {
+        use media_pp::elements::{AppSink, TestAudioOptions, TestAudioSource};
+
+        let source = TestAudioSource::new(name, TestAudioOptions::default());
+        let sink = AppSink::new(format!("{name}-sink"), |_| Ok(()));
+        let pipeline = Pipeline::new(name, source, move |source, context| {
+            let branch = context.branch().to(Box::new(sink))?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("a synthetic source wires to an AppSink");
+        pipeline.run().expect("the pipeline starts");
+        if stopped {
+            pipeline.stop();
+            // `stop` asks; the source thread is what answers. Bounded rather
+            // than assumed, so a slow machine fails the wait instead of the
+            // assertion it would otherwise reach early.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while pipeline.is_running() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(!pipeline.is_running(), "the stopped pipeline must end");
+        }
+        pipeline
+    }
+
+    /// One entry in the engine's map, built directly: `open_source` opens a
+    /// real endpoint, and this test is about what happens after one dies.
+    fn open(name: &str, pipeline: Arc<Pipeline>) -> OpenAudioSource {
+        let (_volume, handle) = AudioVolume::new(format!("{name}-volume"));
+        OpenAudioSource {
+            pipeline,
+            name: name.to_owned(),
+            volume: handle,
+            device: None,
+            monitored: false,
+        }
+    }
+
+    /// An engine with no mixer behind it, which every path here tolerates —
+    /// `close` removes registrations from whichever mixes exist.
+    fn engine(sources: Vec<(AudioSourceId, OpenAudioSource)>) -> AudioEngine {
+        let mut levels = Levels::default();
+        for (id, _) in &sources {
+            levels.track(*id, Arc::new(AtomicU32::new(0)));
+        }
+        AudioEngine {
+            mixer: None,
+            monitor: None,
+            monitor_output: None,
+            sources: sources.into_iter().collect(),
+            levels,
+        }
+    }
+
+    /// The failure this exists to prevent: a capture that stopped by itself
+    /// used to stay in the map, so the dock kept drawing its channel and the
+    /// meter held its last peak forever. A quiet microphone that died looked
+    /// exactly like a quiet microphone that worked.
+    #[test]
+    fn a_capture_that_stopped_on_its_own_loses_its_channel() {
+        let dead = AudioSourceId(1);
+        let mut engine = engine(vec![(dead, open("audio-1", capture("audio-1", true)))]);
+
+        assert!(engine.close_ended(), "the stopped capture must be noticed");
+        assert!(
+            !engine.sources.contains_key(&dead),
+            "and closed, so the dock stops drawing a channel nothing feeds"
+        );
+        assert!(
+            !engine.levels.is_running(dead),
+            "its meter must be forgotten rather than frozen at the last peak"
+        );
+    }
+
+    /// The other half, and the one that would break the microphone if it were
+    /// wrong: a running capture must be left alone. Closing one every tick
+    /// would reopen the endpoint once a second forever.
+    #[test]
+    fn a_running_capture_is_left_where_it_is() {
+        let live = AudioSourceId(2);
+        let mut engine = engine(vec![(live, open("audio-2", capture("audio-2", false)))]);
+
+        assert!(
+            !engine.close_ended(),
+            "nothing has stopped, so nothing is closed"
+        );
+        assert!(engine.sources.contains_key(&live));
+        assert!(
+            engine.levels.is_running(live),
+            "and its meter keeps being reported"
+        );
+    }
+
+    /// One capture dying must not cost the others theirs — the same rule
+    /// `reopen` follows when an endpoint refuses to open.
+    #[test]
+    fn one_dead_capture_does_not_take_the_others_with_it() {
+        let dead = AudioSourceId(3);
+        let live = AudioSourceId(4);
+        let mut engine = engine(vec![
+            (dead, open("audio-3", capture("audio-3", true))),
+            (live, open("audio-4", capture("audio-4", false))),
+        ]);
+
+        assert!(engine.close_ended());
+        assert!(!engine.sources.contains_key(&dead));
+        assert!(
+            engine.sources.contains_key(&live),
+            "the surviving capture keeps its channel"
+        );
+    }
 
     /// The rule the two halves share: asking to be monitored where there is
     /// nothing to play through is not monitoring.
@@ -631,6 +788,8 @@ mod tests {
     /// recording always takes the source.
     #[test]
     fn nothing_is_monitored_where_there_is_nowhere_to_play() {
+        use super::monitors;
+
         assert!(monitors(true, true));
         assert!(!monitors(true, false));
         assert!(!monitors(false, true));
