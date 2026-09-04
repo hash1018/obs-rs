@@ -29,7 +29,12 @@
  *
  * # Two details that would be quiet bugs
  *
- * The SONAME is set to `libcuda.so.1` where this is built, so a binary linked
+ * This is built as `libcuda.so.1` with a `libcuda.so` symlink beside it,
+ * because the linker and the loader ask for different names: `-lcuda` wants
+ * the second, and the binary it produces records the first. Building only one
+ * of them gets a binary that links and then will not start.
+ *
+ * The SONAME is set to `libcuda.so.1`, so a binary linked
  * against it records a dependency on what a real driver installs rather than
  * on the `libcuda.so` that only appears with a development package. Getting
  * that wrong produces a release binary that runs nowhere.

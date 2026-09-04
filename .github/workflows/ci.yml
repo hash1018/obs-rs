@@ -128,12 +128,23 @@ jobs:
       # Before anything is compiled, because `RUSTFLAGS` above points at it and
       # a missing `-L` directory is not an error — the failure would come much
       # later, as the `-lcuda` this exists to satisfy.
-      - name: Build a libcuda to link against
+      # Two names for one file, because the linker and the loader ask for
+      # different ones. `-lcuda` wants `libcuda.so`; the binary it produces
+      # records the SONAME, `libcuda.so.1`, and that is what the loader looks
+      # for when the test binary starts. Building only the first got a binary
+      # that linked and then died with "libcuda.so.1: cannot open shared
+      # object file".
+      - name: Build a libcuda to link and to load
         run: |
           set -euo pipefail
           mkdir -p target/cuda-stub
           cc -shared -fPIC -Wl,-soname,libcuda.so.1 \
-            -o target/cuda-stub/libcuda.so .github/cuda/libcuda-stub.c
+            -o target/cuda-stub/libcuda.so.1 .github/cuda/libcuda-stub.c
+          ln -sf libcuda.so.1 target/cuda-stub/libcuda.so
+          # Appended rather than assigned: `setup-ffmpeg` put FFmpeg's own
+          # directory here in an earlier step, and dropping that would trade
+          # this failure for the same one about libavcodec.
+          echo "LD_LIBRARY_PATH=$PWD/target/cuda-stub:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Check formatting
         run: cargo fmt --all -- --check

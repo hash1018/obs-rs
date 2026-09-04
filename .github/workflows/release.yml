@@ -181,12 +181,18 @@ jobs:
       # Before anything is compiled, because `RUSTFLAGS` above points at it and
       # a missing `-L` directory is not an error — the failure would come much
       # later, as the `-lcuda` this exists to satisfy.
+      # Only `libcuda.so` is needed to link, but it is built under its SONAME
+      # with a symlink beside it so both jobs produce the same thing. Nothing
+      # puts this on `LD_LIBRARY_PATH`: the archive has to find the user's
+      # real driver, and a stub reachable at run time here would only hide a
+      # mistake.
       - name: Build a libcuda to link against
         run: |
           set -euo pipefail
           mkdir -p target/cuda-stub
           cc -shared -fPIC -Wl,-soname,libcuda.so.1 \
-            -o target/cuda-stub/libcuda.so .github/cuda/libcuda-stub.c
+            -o target/cuda-stub/libcuda.so.1 .github/cuda/libcuda-stub.c
+          ln -sf libcuda.so.1 target/cuda-stub/libcuda.so
 
       - name: Build
         run: cargo build --release --locked
