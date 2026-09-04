@@ -62,6 +62,7 @@ fn main() -> eframe::Result {
         viewport: place_window(
             egui::ViewportBuilder::default()
                 .with_title("obs-rs")
+                .with_icon(window_icon())
                 .with_min_inner_size([480.0, 320.0]),
             settings.workspace.window,
         ),
@@ -76,6 +77,29 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(ObsApp::new(cc, store, settings)))),
     )
+}
+
+/// The icon the window and the task bar show.
+///
+/// Separate from the one `build.rs` stamps onto the executable, and not
+/// redundant with it: an application that sets a window icon overrides what
+/// the `.exe` carries, so leaving this out on Windows means the resource is
+/// there and a default is shown anyway. On Linux there is no executable
+/// resource to fall back to at all.
+///
+/// A failure here is not worth refusing to start over — the window opens with
+/// whatever the toolkit defaults to, which is what it did before there was an
+/// icon.
+fn window_icon() -> egui::IconData {
+    const PNG: &[u8] = include_bytes!("../assets/obs-rs.png");
+
+    match eframe::icon_data::from_png_bytes(PNG) {
+        Ok(icon) => icon,
+        Err(error) => {
+            eprintln!("could not read the window icon: {error}");
+            egui::IconData::default()
+        }
+    }
 }
 
 /// The window's own default size, used until the application has closed once.

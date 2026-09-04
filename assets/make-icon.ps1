@@ -91,4 +91,12 @@ foreach ($s in 256, 64, 48, 32, 24, 16) {
 }
 $sg.Dispose()
 $sheet.Save($args[1], [System.Drawing.Imaging.ImageFormat]::Png)
+# The window icon, which is a separate thing from the executable resource: an
+# application that sets its own window icon overrides what the .exe carries on
+# Windows, and on Linux there is no executable resource at all. Read at startup
+# by `eframe::icon_data::from_png_bytes`.
+if ($args.Count -ge 3) {
+    (New-Master 256).Save($args[2], [System.Drawing.Imaging.ImageFormat]::Png)
+}
+
 "wrote $($args[0]) ($((Get-Item $args[0]).Length) bytes)"
