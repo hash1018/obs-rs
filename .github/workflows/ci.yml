@@ -32,11 +32,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install Rust
+      # One command per step: GitHub's pwsh wrapper exits with the *last*
+      # command's `$LASTEXITCODE` and a failing native command does not stop
+      # the script, so a multi-command step swallows every failure but the
+      # final one. This cost media-pp a rustdoc error that reached a release.
+      - name: Install Rust toolchain
         shell: pwsh
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+
+      - name: Select Rust toolchain
+        shell: pwsh
+        run: rustup default stable
 
       - name: Set up FFmpeg
         uses: ./.github/actions/setup-ffmpeg
