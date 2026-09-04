@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A superseded pull-request run is wasted work; a superseded push to main
+  # would leave that commit unverified.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Nothing here reuses a build directory across runs, so incremental
+  # compilation only buys extra artifacts to write.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # One job per platform rather than a matrix: the two differ in their system
+  # dependencies, in which backend they compile (D3D11 against CUDA), and in
+  # nothing else worth parameterising. A matrix would spend its `if:`s saying
+  # so.
+  windows:
+    runs-on: windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Set up FFmpeg
+        uses: ./.github/actions/setup-ffmpeg
+
+      # Downloaded crate sources only, not `target`: the build directory for
+      # this dependency graph runs to several gigabytes of small files, and
+      # saving and restoring that on Windows costs more than recompiling it.
+      # A stale entry here is only a slower build, never a wrong one, so this
+      # one does take a prefix fallback.
+      - name: Cache downloaded crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      # The test binary links FFmpeg dynamically and finds its DLLs on PATH,
+      # which `setup-ffmpeg` put there — see that action on why.
+      - name: Test
+        run: cargo test
+
+  linux:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      # PipeWire is what desktop capture and audio go through. The rest is
+      # what eframe's windowing needs to build; most of it is loaded through
+      # `dlopen` at run time, but the headers have to be here to compile
+      # against.
+      #
+      # No CUDA toolkit, even though this compiles the CUDA backend: the
+      # driver ships both the library and the PTX compiler, and media-pp's
+      # CUDA elements only move `AVFrame`s around. Nothing here runs it —
+      # a hosted runner has no NVIDIA GPU — so this job proves the Linux
+      # build compiles and its tests pass, not that compositing works.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libpipewire-0.3-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libgl1-mesa-dev
+
+      - name: Set up FFmpeg
+        uses: ./.github/actions/setup-ffmpeg
+
+      - name: Cache downloaded crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test

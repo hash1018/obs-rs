@@ -1,0 +1,188 @@
+name: Set up FFmpeg
+description: >
+  Exports FFMPEG_DIR pointing at a pinned FFmpeg 8.0 development tree, built
+  from vcpkg on a miss and restored from the Actions cache on a hit.
+
+  A copy of the same action in `hash1018/media-pp`, deliberately, rather than
+  a reference to it. What FFmpeg this repository builds against decides what a
+  release archive bundles and therefore what its licence obligations are, and
+  that is not something another repository's CI should be able to change
+  underneath a release. Kept in step by hand when it needs to be.
+
+inputs:
+  vcpkg-ref:
+    description: >
+      The microsoft/vcpkg tag to build the FFmpeg port from.
+
+      ffmpeg-next 8.1 supports FFmpeg through 8.0, and the rolling vcpkg
+      installation on hosted runners has moved past that. This tag's ffmpeg
+      port is 8.0.1, the same version this crate is developed against.
+      Upstream prebuilt binaries are no longer an escape hatch either: BtbN
+      prunes its autobuilds and now ships only the 8.1 and 9.0 lines, so this
+      immutable git tag is the one reproducible source of a matching FFmpeg.
+    required: false
+    default: "2026.01.16"
+  vcpkg-features:
+    description: >
+      Comma-separated vcpkg features to add to the default `ffmpeg` port
+      install (e.g. "openh264").
+
+      `openh264` is what obs-rs encodes H.264 with where no hardware encoder
+      is available, so a build without it has no software fallback. It is also
+      what keeps the bundled FFmpeg non-GPL: x264 is the obvious alternative
+      and it is GPL, which would change the terms a release archive is
+      distributed under. See `THIRD-PARTY.md`.
+
+      Additive to vcpkg's default feature set, not a replacement for it — the
+      defaults are already free of GPL components.
+    required: false
+    default: "openh264"
+
+runs:
+  using: composite
+  steps:
+    # Building FFmpeg from source costs tens of minutes on a hosted runner.
+    # What it produces depends only on the ref above, which is immutable, so
+    # the installed tree is cached under exactly that ref.
+    #
+    # No `restore-keys`: a prefix fallback would hand back a tree built from a
+    # different ref, which is the one outcome the pin exists to prevent. A miss
+    # must rebuild rather than approximate.
+    #
+    # A cache is readable from the ref that wrote it and from the default
+    # branch, and nowhere else, and it is evicted after seven days without a
+    # hit. What keeps this one alive and reachable is therefore the CI workflow
+    # running on every push and pull request; the tag-triggered docs build
+    # restores what those runs wrote rather than maintaining its own.
+    # Both platforms use a dynamic triplet (x64-windows, x64-linux-dynamic):
+    # linux's own default triplet (x64-linux) links statically, which would
+    # trade the DLL-search problem below for chasing every transitive static
+    # dependency (x264, opus, ...) FFmpeg's port pulls in.
+    #
+    # Split into restore + save (rather than the combined `actions/cache`
+    # with `save-always`) because `save-always` never actually saved past a
+    # later failed step and is now deprecated for exactly that reason. The
+    # save step below sits inside this action's own steps, before control
+    # returns to the caller, so it still runs even when the caller's later
+    # lint/test steps fail.
+    - name: Restore cached FFmpeg development libraries
+      id: ffmpeg
+      uses: actions/cache/restore@v4
+      with:
+        path: .vcpkg/installed
+        key: vcpkg-ffmpeg-${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}-${{ inputs.vcpkg-ref }}-${{ inputs.vcpkg-features }}
+
+    - name: Check out compatible vcpkg
+      if: steps.ffmpeg.outputs.cache-hit != 'true'
+      uses: actions/checkout@v6
+      with:
+        repository: microsoft/vcpkg
+        ref: ${{ inputs.vcpkg-ref }}
+        path: .vcpkg
+
+    # vcpkg builds its ports from source on a miss; these are what its own
+    # Linux CI installs first for exactly that.
+    - name: Install vcpkg build dependencies
+      if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential curl zip unzip tar pkg-config \
+          ninja-build nasm autoconf automake libtool python3
+
+    # The exit-code checks stop this step at the command that actually broke.
+    # A native failure does not raise a PowerShell error, so without them the
+    # script runs on and the step reports whichever command exited last.
+    - name: Install FFmpeg development libraries (Windows)
+      if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        & "$env:GITHUB_WORKSPACE\.vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+        if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed ($LASTEXITCODE)" }
+        & "$env:GITHUB_WORKSPACE\.vcpkg\vcpkg.exe" install "ffmpeg[${{ inputs.vcpkg-features }}]:x64-windows"
+        if ($LASTEXITCODE -ne 0) { throw "vcpkg install ffmpeg failed ($LASTEXITCODE)" }
+        # Nothing here links the debug variant, and it is about half of what
+        # would otherwise be cached and restored on every later run.
+        $debug = "$env:GITHUB_WORKSPACE\.vcpkg\installed\x64-windows\debug"
+        Remove-Item $debug -Recurse -Force -ErrorAction SilentlyContinue
+
+    - name: Install FFmpeg development libraries (Linux)
+      if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        "$GITHUB_WORKSPACE/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        "$GITHUB_WORKSPACE/.vcpkg/vcpkg" install "ffmpeg[${{ inputs.vcpkg-features }}]:x64-linux-dynamic"
+        rm -rf "$GITHUB_WORKSPACE/.vcpkg/installed/x64-linux-dynamic/debug"
+
+    # Export `FFMPEG_DIR`, not `VCPKG_ROOT`: `ffmpeg-sys-next` reads it before
+    # it attempts any vcpkg or pkg-config discovery, so the pinned tree becomes
+    # the only FFmpeg the build can reach. Exporting `VCPKG_ROOT` alone left the
+    # discovery order in play, and the first run of the docs workflow generated
+    # bindings from FFmpeg 8.1 headers found elsewhere on the runner: `AVCodec`
+    # had lost `pix_fmts`/`sample_fmts`/`ch_layouts` and `AV_CODEC_ID_V410` was
+    # gone, which `ffmpeg-next` 8.1 uses unguarded.
+    #
+    # Runs on both paths, so a restored cache is checked as strictly as a fresh
+    # build: a truncated or wrong-version tree fails here rather than halfway
+    # through generating bindings from it.
+    - name: Export FFMPEG_DIR (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $prefix = "$env:GITHUB_WORKSPACE\.vcpkg\installed\x64-windows"
+        if (-not (Test-Path "$prefix\include\libavcodec\avcodec.h")) {
+          throw "no FFmpeg headers under $prefix"
+        }
+        if (-not (Get-ChildItem "$prefix\lib\*avcodec*.lib" -ErrorAction SilentlyContinue)) {
+          throw "no FFmpeg import libraries under $prefix"
+        }
+        # Recorded so a future header mismatch is diagnosable from the log.
+        Get-ChildItem "$prefix\include\libavcodec\version*.h" |
+          Select-String -Pattern '#define\s+LIBAVCODEC_VERSION_(MAJOR|MINOR)\s'
+        "FFMPEG_DIR=$prefix" >> $env:GITHUB_ENV
+
+        # The x64-windows triplet links FFmpeg dynamically: a test binary
+        # resolves its avcodec/avutil/etc. DLLs from PATH at run time, not
+        # from the import libraries used to link it. Without this, compiling
+        # and linting still succeed but every test binary fails to start with
+        # STATUS_DLL_NOT_FOUND.
+        "$prefix\bin" >> $env:GITHUB_PATH
+
+    - name: Export FFMPEG_DIR (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        prefix="$GITHUB_WORKSPACE/.vcpkg/installed/x64-linux-dynamic"
+        if [ ! -f "$prefix/include/libavcodec/avcodec.h" ]; then
+          echo "no FFmpeg headers under $prefix" >&2
+          exit 1
+        fi
+        if ! compgen -G "$prefix/lib/libavcodec.so*" > /dev/null; then
+          echo "no FFmpeg shared libraries under $prefix" >&2
+          exit 1
+        fi
+        # Recorded so a future header mismatch is diagnosable from the log.
+        grep -E '#define\s+LIBAVCODEC_VERSION_(MAJOR|MINOR)\s' \
+          "$prefix"/include/libavcodec/version*.h
+        echo "FFMPEG_DIR=$prefix" >> "$GITHUB_ENV"
+
+        # x64-linux-dynamic links FFmpeg as .so: a test binary resolves those
+        # at run time through the loader's search path, not through the
+        # import-time link. `PATH` is for executables only on Linux, so this
+        # is `LD_LIBRARY_PATH`, the direct counterpart of the Windows PATH
+        # fix above (same STATUS_DLL_NOT_FOUND-shaped failure otherwise).
+        echo "LD_LIBRARY_PATH=$prefix/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+    # Only reached on a miss, after Export FFMPEG_DIR validated the tree, so
+    # this never caches a truncated or wrong-version build. Runs before this
+    # action returns control to the caller, so a later lint/test failure in
+    # the calling job cannot prevent the save the way it did under the
+    # deprecated `save-always` input.
+    - name: Save FFmpeg development libraries to cache
+      if: steps.ffmpeg.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .vcpkg/installed
+        key: vcpkg-ffmpeg-${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}-${{ inputs.vcpkg-ref }}-${{ inputs.vcpkg-features }}
