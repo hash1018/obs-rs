@@ -109,6 +109,18 @@ jobs:
   #   whether it works. That still has to happen on a real machine.
   linux:
     runs-on: ubuntu-26.04
+    # `$ORIGIN/lib` is what makes the archive self-contained: the loader
+    # resolves FFmpeg next to the executable rather than from wherever the
+    # machine happens to have a copy, or from the `LD_LIBRARY_PATH` a launcher
+    # script would otherwise have to set. It survives as those eight
+    # characters because this is a value rather than a shell command, so
+    # nothing expands it before the linker sees it.
+    #
+    # The `-L` is the CUDA stub built below. Job-level rather than on the step
+    # that links, because `RUSTFLAGS` is part of the build fingerprint and
+    # changing it partway through would rebuild everything.
+    env:
+      RUSTFLAGS: -C link-arg=-Wl,-rpath,$ORIGIN/lib -L ${{ github.workspace }}/target/cuda-stub
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -144,16 +156,18 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
-      # `$ORIGIN/lib` is what makes the archive self-contained: the loader
-      # resolves FFmpeg next to the executable rather than from wherever the
-      # machine happens to have a copy, or from the `LD_LIBRARY_PATH` a
-      # launcher script would otherwise have to set. Single-quoted so
-      # `$ORIGIN` reaches the linker as those eight characters — bash would
-      # otherwise expand it to nothing and the rpath would be `/lib`.
+      # Before anything is compiled, because `RUSTFLAGS` above points at it and
+      # a missing `-L` directory is not an error — the failure would come much
+      # later, as the `-lcuda` this exists to satisfy.
+      - name: Build a libcuda to link against
+        run: |
+          set -euo pipefail
+          mkdir -p target/cuda-stub
+          cc -shared -fPIC -Wl,-soname,libcuda.so.1 \
+            -o target/cuda-stub/libcuda.so .github/cuda/libcuda-stub.c
+
       - name: Build
         run: cargo build --release --locked
-        env:
-          RUSTFLAGS: '-C link-arg=-Wl,-rpath,$ORIGIN/lib'
 
       # `cp -a` rather than a copy: the tree is `libavcodec.so ->
       # libavcodec.so.62 -> libavcodec.so.62.x.y`, and the executable asks
@@ -183,10 +197,13 @@ jobs:
           compgen -G "$stage/licenses/*.txt" > /dev/null \
             || { echo "no bundled licences in the archive" >&2; exit 1; }
           # Every shared object the executable asks for has to be resolvable
-          # from inside the archive. `ldd` reports what the loader would find
-          # with the rpath baked in above, so an FFmpeg library that failed to
-          # get copied shows up here rather than on somebody's machine.
-          missing=$(ldd "$stage/obs-rs" | grep "not found" || true)
+          # from inside the archive, except the one that deliberately is not:
+          # `libcuda.so.1` belongs to the user's NVIDIA driver and shipping a
+          # copy would be both wrong and useless. It is expected to be missing
+          # here, where there is no driver; everything else missing is a
+          # library that failed to get copied, and would fail on somebody's
+          # machine instead of in this log.
+          missing=$(ldd "$stage/obs-rs" | grep "not found" | grep -v libcuda || true)
           if [ -n "$missing" ]; then
             echo "unresolved libraries:" >&2
             echo "$missing" >&2

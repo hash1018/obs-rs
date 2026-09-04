@@ -75,6 +75,11 @@ jobs:
 
   linux:
     runs-on: ubuntu-26.04
+    # Job-level rather than on the step that links: `RUSTFLAGS` is part of the
+    # build fingerprint, so setting it for `cargo test` alone would make it
+    # rebuild everything `cargo clippy` had just built.
+    env:
+      RUSTFLAGS: -L ${{ github.workspace }}/target/cuda-stub
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -120,11 +125,23 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      # Before anything is compiled, because `RUSTFLAGS` above points at it and
+      # a missing `-L` directory is not an error — the failure would come much
+      # later, as the `-lcuda` this exists to satisfy.
+      - name: Build a libcuda to link against
+        run: |
+          set -euo pipefail
+          mkdir -p target/cuda-stub
+          cc -shared -fPIC -Wl,-soname,libcuda.so.1 \
+            -o target/cuda-stub/libcuda.so .github/cuda/libcuda-stub.c
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
+      # The first step that links anything. `clippy` above type-checks and
+      # never links, which is why it passed on a tree that could not build.
       - name: Test
         run: cargo test
