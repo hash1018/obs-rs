@@ -138,9 +138,13 @@ cargo run --release
 ```
 
 Beyond the Rust toolchain you need FFmpeg 8.0 or newer development headers.
-On Linux, desktop capture also needs PipeWire development files, and the CUDA
-path needs an NVIDIA driver at run time — no CUDA toolkit, since the driver
-ships both the library and the PTX compiler.
+On Linux, desktop capture also needs PipeWire development files.
+
+**Linux needs an NVIDIA GPU.** Not for a faster path — for the only one. The
+Linux backend composites on CUDA and there is no fallback, so obs-rs will not
+start on an AMD or Intel machine. The driver alone is enough; no CUDA toolkit,
+since it ships both the library and the PTX compiler. Windows uses D3D11 and
+has no such requirement.
 
 ## Where it is up to
 
@@ -159,3 +163,13 @@ you try it:
 is put together — the Preview's terminology, the engine's threading and
 pipeline, how recordings are wired, and how localization works.
 [`AGENTS.md`](AGENTS.md) is the working guide for changing it.
+
+## License
+
+Licensed under either the [Apache License, Version 2.0](LICENSE-APACHE) or the
+[MIT License](LICENSE-MIT), at your option.
+
+A released binary bundles FFmpeg's shared libraries, which are LGPL-2.1 and
+are built without GPL components. What that means, and where their source is,
+is in [`THIRD-PARTY.md`](THIRD-PARTY.md). Building from source links against
+whatever FFmpeg your machine has, and none of it applies.
