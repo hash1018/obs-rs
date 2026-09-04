@@ -42,6 +42,11 @@ pub(in crate::engine) struct SharedCapture {
     /// only chance to. It is what lets the compositor's rate change without
     /// this capture being closed and reopened underneath it.
     frame_rate: FrameRateHandle,
+    /// What the duplication actually opened at. Kept here rather than read
+    /// per item because the capture is shared: every item drawing this
+    /// display is drawing the same picture, so they all correct their stored
+    /// hint against one answer.
+    size: [u32; 2],
     /// How many branches belong to a SceneItem in the Scene being shown. The
     /// capture runs while this is above zero and pauses when it reaches it —
     /// the shared form of "a Source whose item left the Scene stops running".
@@ -66,7 +71,7 @@ impl CaptureRegistry {
         device: &ID3D11Device,
         fps: u32,
         sink: Box<dyn Sink>,
-    ) -> Result<BranchId, BackendError> {
+    ) -> Result<(BranchId, [u32; 2]), BackendError> {
         let mut open = self.lock();
         if !open.contains_key(monitor) {
             let capture = open_capture(monitor, device, fps)?;
@@ -86,7 +91,7 @@ impl CaptureRegistry {
             .to(sink)?;
         let id = capture.tee.attach(branch)?;
         capture.showing += 1;
-        Ok(id)
+        Ok((id, capture.size))
     }
 
     /// Removes one item's branch, and the capture itself once the last branch
@@ -196,6 +201,7 @@ fn open_capture(
         pipeline,
         tee,
         frame_rate,
+        size: [format.width, format.height],
         // Counted by whoever attaches the first branch.
         showing: 0,
     })
@@ -229,7 +235,7 @@ pub(in crate::engine) fn open(
     // The capture is shared, so what this item gets is a branch of it. Its
     // own compositor input is still its own: position, size and z-order stay
     // per item even when the pixels behind two of them are the same.
-    let branch = captures.attach(monitor, device, fps, sink)?;
+    let (branch, size) = captures.attach(monitor, device, fps, sink)?;
 
     Ok(OpenSource {
         media_file: None,
@@ -241,6 +247,10 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
+        // The display layout can change between runs, so the size a picker
+        // reported when the item was added is a hint rather than a fact —
+        // this is what duplication actually opened.
+        negotiated_size: Some(size),
         showing: true,
         running: true,
         pushed: None,

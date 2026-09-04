@@ -67,6 +67,10 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
+        // What the camera negotiated, which is not always the mode that was
+        // asked for — see `start`, where a stored mode the device no longer
+        // offers falls back to its own.
+        negotiated_size: Some([format.width, format.height]),
         showing: true,
         running: true,
         pushed: None,

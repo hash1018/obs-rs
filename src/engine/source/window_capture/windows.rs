@@ -66,6 +66,12 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
+        // `None` rather than a guess: Windows Graphics Capture settles the
+        // frame size once the capture is running and `WgcCaptureSource`
+        // reports none, so there is nothing here to correct the stored hint
+        // with. The Linux half has one because the portal negotiates its
+        // stream up front.
+        negotiated_size: None,
         showing: true,
         running: true,
         pushed: None,
