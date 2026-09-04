@@ -161,7 +161,11 @@ pub fn video_capture_devices() -> Vec<VideoCaptureTarget> {
     {
         windows::video_capture_devices()
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::video_capture_devices()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         Vec::new()
     }
@@ -181,7 +185,11 @@ pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode>
     {
         windows::video_capture_modes(device)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::video_capture_modes(device)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = device;
         Vec::new()

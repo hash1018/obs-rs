@@ -239,6 +239,43 @@ fn property_u32(connection: &RustConnection, window: Window, property: Atom) -> 
         .unwrap_or_default()
 }
 
+/// Every camera V4L2 currently offers — see
+/// [`crate::capture::video_capture_devices`].
+pub fn video_capture_devices() -> Vec<crate::capture::VideoCaptureTarget> {
+    match media_pp::elements::V4l2CaptureSource::list_devices() {
+        Ok(devices) => devices
+            .into_iter()
+            .map(|device| crate::capture::VideoCaptureTarget {
+                id: device.id,
+                name: device.name,
+            })
+            .collect(),
+        Err(error) => {
+            eprintln!("could not list cameras: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Every mode one camera offers — see
+/// [`crate::capture::video_capture_modes`].
+///
+/// A camera that is not attached answers with an error here, and that is an
+/// ordinary state rather than something to report: the picker draws an empty
+/// list, which is what "nothing to choose from" looks like either way.
+pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode> {
+    media_pp::elements::V4l2CaptureSource::list_formats(device)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|format| crate::domain::VideoCaptureMode {
+            width: format.width,
+            height: format.height,
+            framerate_numerator: format.framerate.numerator().max(0) as u32,
+            framerate_denominator: format.framerate.denominator().max(1) as u32,
+        })
+        .collect()
+}
+
 /// The name of the executable behind a window, for the picker to show
 /// beside its title.
 fn process_name(pid: u32) -> Option<String> {

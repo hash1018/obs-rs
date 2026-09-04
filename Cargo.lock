@@ -1894,6 +1894,7 @@ dependencies = [
  "ffmpeg-next",
  "ffmpeg-sys-next",
  "futures-util",
+ "libc",
  "pipewire",
  "pollster 1.0.1",
  "thiserror 2.0.20",

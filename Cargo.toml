@@ -91,6 +91,7 @@ features = [
     "pipewire-screen-capture",
     "pipewire-audio-capture",
     "pipewire-audio-renderer",
+    "v4l2-capture",
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.media-pp]

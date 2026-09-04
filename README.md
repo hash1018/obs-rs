@@ -150,9 +150,7 @@ you try it:
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
 - **Eight source kinds.** Display Capture, Window Capture, Video Capture,
-  Media File, Network Stream, Image, Drawing and Color. Video Capture is
-  Windows-only so far: it goes through Media Foundation, and the Linux half
-  would be V4L2.
+  Media File, Network Stream, Image, Drawing and Color.
 - **No filters or transitions.** Switching Scenes is a cut.
 
 ## Contributing

@@ -72,11 +72,13 @@ Network Stream pulls a live RTSP session — an IP camera, most often — and is
 
 Window Capture is composited on Windows and written for Linux, where it narrows the same portal source to windows rather than monitors. It is the one source whose target is expected to come and go — see "A window that is not there" below.
 
-Video Capture is a camera, on Windows only so far. It is the shortest pipeline here — `MfCaptureSource ─ Queue ─ D3d11Upload ─ compositor input` — because Media Foundation converts to NV12 on the way out whatever the device natively speaks, and `D3d11Upload` takes NV12 directly. The `Queue` is the thread boundary, two frames deep: a camera has no timeline to replay, so anything deeper would be latency rather than smoothing. There is no `Pacer` for the same reason.
+Video Capture is a camera. It is the shortest pipeline here — `MfCaptureSource ─ Queue ─ D3d11Upload ─ compositor input` on Windows, `V4l2CaptureSource ─ Queue ─ CudaUpload ─ compositor input` on Linux — because both capture elements hand over NV12 in system memory whatever the device natively speaks, and both uploads take NV12 directly. The `Queue` is the thread boundary, two frames deep: a camera has no timeline to replay, so anything deeper would be latency rather than smoothing. There is no `Pacer` for the same reason.
+
+The conversion is the element's on both platforms, which is what makes the two pipelines the same shape. Media Foundation does it in the driver stack; V4L2 does not convert at all, so `V4l2CaptureSource` decodes and converts itself — a USB camera speaks YUYV at low resolutions and Motion JPEG at high ones, and 720p is commonly offered *only* compressed. One geometry there is not one mode: the same size can be offered by two pixel formats, so the format that carries the chosen mode is named when the device is opened rather than left to the demuxer, which would otherwise pick one that does not have the size and be answered with a different one.
 
 A camera states its own modes, and which one to ask for is stored per Source and picked in the Properties dock. "Automatic" means the camera's own first offered mode, which is its stated preference. Reading the list means opening the device, so it is read once per session when the list is first opened rather than each frame. A mode carries a size, so choosing one moves the item's size hint with it — otherwise a 640x480 picture would be drawn stretched into the rectangle a 1280x720 one had.
 
-Nothing in obs-rs opens a camera's *microphone*: a webcam that has one appears in the Audio Mixer as an ordinary input device, because that is what Windows makes it.
+Nothing in obs-rs opens a camera's *microphone*: a webcam that has one appears in the Audio Mixer as an ordinary input device, because that is what both platforms make it.
 
 ## Media File
 

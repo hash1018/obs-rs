@@ -10,7 +10,7 @@
 //!
 //! One that goes away *while* it is running ends its pipeline, which
 //! `notice_dropped_streams` turns back into `Missing` for the same reason it
-//! does for a stream: `MfCaptureSource` does not reconnect, and a pipeline is
+//! does for a stream: neither capture element reconnects, and a pipeline is
 //! one-shot, so coming back means building a new one.
 //!
 //! [`SourceState::Missing`]: crate::engine::SourceState
@@ -18,12 +18,14 @@
 //! # Shape
 //!
 //! ```text
-//! MfCaptureSource ─ Queue ─ D3d11Upload ─ compositor input
+//! MfCaptureSource   ─ Queue ─ D3d11Upload ─ compositor input   (Windows)
+//! V4l2CaptureSource ─ Queue ─ CudaUpload  ─ compositor input   (Linux)
 //! ```
 //!
 //! The camera hands over NV12 in system memory — Media Foundation's own
-//! converter puts it there, whatever the device natively speaks — and
-//! `D3d11Upload` takes NV12 directly, so nothing converts between them on the
+//! converter puts it there on Windows, and `V4l2CaptureSource` decodes and
+//! converts on Linux, since V4L2 hands over whatever the device speaks — and
+//! both uploads take NV12 directly, so nothing converts between them on the
 //! CPU. The `Queue` is the thread boundary: the upload is a copy into a
 //! staging texture, and doing it on the reader's own thread would make every
 //! slow copy a frame the camera dropped.
@@ -32,8 +34,12 @@
 //! timeline; it delivers when it has a picture, and the compositor draws
 //! whatever the layer last received at its own rate.
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(target_os = "linux")]
+pub(in crate::engine) use linux::open;
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use windows::open;
