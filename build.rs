@@ -5,14 +5,31 @@
 //! is what a first release looked like, and the first thing anybody noticed
 //! about it.
 //!
-//! Nothing here runs anywhere else. `CARGO_CFG_TARGET_OS` rather than
-//! `cfg!(target_os)`: this file is compiled for the *host*, so the `cfg!`
-//! would answer for the machine doing the building rather than the machine
-//! being built for.
+//! # Two gates, not one, and they are asking different questions
+//!
+//! `#[cfg(windows)]` is about the machine doing the building. A build script
+//! is compiled for the *host*, and `winresource` is a
+//! `[target.'cfg(target_os = "windows")'.build-dependencies]` entry, which
+//! Cargo resolves against the host too — so on Linux the crate is simply not
+//! there and naming it at all fails to compile. An early `return` does not
+//! help: the path still has to resolve.
+//!
+//! `CARGO_CFG_TARGET_OS` is about the machine being built *for*, and it is
+//! what makes a Windows host cross-compiling to Linux skip this rather than
+//! attach Windows resources to an ELF binary.
+//!
+//! The first version of this file had only the second, which reads correctly
+//! and broke the Linux build.
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/obs-rs.ico");
 
+    #[cfg(windows)]
+    stamp_windows_resources();
+}
+
+#[cfg(windows)]
+fn stamp_windows_resources() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
