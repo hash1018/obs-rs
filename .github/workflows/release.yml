@@ -266,6 +266,10 @@ jobs:
     needs: [windows, linux]
     runs-on: ubuntu-26.04
     steps:
+      # For `docs/release-notes/`, which is where the body below comes from.
+      - name: Check out repository
+        uses: actions/checkout@v6
+
       - name: Collect the archives
         uses: actions/download-artifact@v4
         with:
@@ -275,12 +279,19 @@ jobs:
       - name: List what will be attached
         run: ls -l dist
 
-      # A draft: a first release is worth reading before it is public, and
-      # the notes are generated from commit subjects that were not written to
-      # be release notes.
+      # A draft: a first release is worth reading before it is public.
+      #
+      # The body is written in the repository rather than generated from
+      # commit subjects. This repository has no earlier tag, so "since the
+      # last release" would be all 207 of them — and commit messages written
+      # for a reader of the history are not release notes anyway.
+      #
+      # Naming the file after the tag means a release cannot be cut without
+      # someone having written its notes: a missing file fails this step.
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: docs/release-notes/${{ github.ref_name }}.md
           draft: true
-          generate_release_notes: true
+          fail_on_unmatched_files: true

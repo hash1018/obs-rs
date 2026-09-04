@@ -23,6 +23,13 @@ bottom.](docs/screenshot.png)
   desktop never passes through system memory on its way to the recording.
   A captured window that is closed is not an error: the source waits where it
   is and picks the window up again when it comes back.
+- **Video capture.** A webcam in a Scene, on both platforms — Media
+  Foundation on Windows, Video4Linux2 on Linux. The camera states which
+  picture sizes and rates it offers and the Properties dock lists them, or
+  leave it on Automatic and take whichever the camera puts first. A camera
+  that is unplugged is not an error: the source waits and opens it again when
+  it comes back, as long as it goes into the same port — the device path a
+  camera is stored by contains the one it was plugged into.
 - **Drawing.** A source you draw on rather than one that captures something:
   pen, highlighter and eraser, with undo and clear. It is a real layer, so
   what you draw is in the recording, not just on your screen.
