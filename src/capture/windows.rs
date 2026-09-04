@@ -33,7 +33,7 @@ use windows::Win32::{
 };
 use windows::core as windows_core;
 
-use media_pp::elements::{WasapiCaptureSource, WasapiDeviceKind};
+use media_pp::elements::{MfCaptureSource, MfDevice, WasapiCaptureSource, WasapiDeviceKind};
 
 use crate::domain::AudioSourceKind;
 
@@ -303,6 +303,50 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
                 WasapiDeviceKind::Capture => AudioSourceKind::Input,
             },
             is_default: device.is_default,
+        })
+        .collect()
+}
+
+/// Every camera Media Foundation currently offers — see
+/// [`crate::capture::video_capture_devices`].
+pub fn video_capture_devices() -> Vec<crate::capture::VideoCaptureTarget> {
+    match MfCaptureSource::list_devices() {
+        Ok(devices) => devices
+            .into_iter()
+            .map(|device| crate::capture::VideoCaptureTarget {
+                id: device.id,
+                name: device.name,
+            })
+            .collect(),
+        Err(error) => {
+            eprintln!("could not list cameras: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Every mode one camera offers — see
+/// [`crate::capture::video_capture_modes`].
+///
+/// A camera that is not attached or is already held answers with an error
+/// here, and that is an ordinary state rather than something to report: the
+/// picker draws an empty list, which is what "nothing to choose from" looks
+/// like either way.
+pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode> {
+    let device = MfDevice {
+        id: device.to_owned(),
+        // Never read: `list_formats` resolves the symbolic link and nothing
+        // else.
+        name: String::new(),
+    };
+    MfCaptureSource::list_formats(&device)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|format| crate::domain::VideoCaptureMode {
+            width: format.width,
+            height: format.height,
+            framerate_numerator: format.framerate.numerator().max(0) as u32,
+            framerate_denominator: format.framerate.denominator().max(1) as u32,
         })
         .collect()
 }

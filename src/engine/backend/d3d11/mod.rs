@@ -31,7 +31,7 @@ use windows::Win32::Graphics::{
 use crate::domain::SourceKind;
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::{self, OpenSource, unsupported_kind};
+use crate::engine::source::{self, OpenSource};
 
 use super::{BACKGROUND, BackendError};
 
@@ -284,6 +284,9 @@ impl Backend {
             SourceKind::Rtsp => {
                 source::rtsp::open(&self.device, &self.compositor, mixer, item, layer)
             }
+            SourceKind::VideoCapture => {
+                source::video_capture::open(&self.device, &self.compositor, item, layer)
+            }
             SourceKind::Image => source::image::open(&self.device, &self.compositor, item, layer),
             SourceKind::Color => {
                 source::color::open(&self.device, &self.compositor, item, layer).map(Some)
@@ -291,7 +294,6 @@ impl Backend {
             SourceKind::Drawing => {
                 source::drawing::open(&self.device, &self.compositor, item, layer).map(Some)
             }
-            _ => Err(unsupported_kind(item)),
         }
     }
 }

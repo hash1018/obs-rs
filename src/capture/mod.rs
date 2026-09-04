@@ -139,6 +139,55 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
     }
 }
 
+/// One camera the machine has, as a picker shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoCaptureTarget {
+    /// The device's symbolic link, which is what a Source stores.
+    pub id: String,
+    /// The name to show. Already trimmed by `media-pp`, because USB
+    /// descriptors are fixed-width fields and cameras pad their names out.
+    pub name: String,
+}
+
+/// Every camera currently attached.
+///
+/// Read through `media-pp` for the reason [`audio_devices`] is: it already
+/// enumerates video capture devices for its own capture source, and this is a
+/// static call that shows nothing and needs no pipeline. Unlike the screen
+/// half there is no portal and no picker to defer to — a camera is a device,
+/// and every platform lists its devices.
+pub fn video_capture_devices() -> Vec<VideoCaptureTarget> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::video_capture_devices()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+/// Every picture shape one camera offers, best first.
+///
+/// Opening the device is the only way to ask, so this lights the camera's
+/// indicator for as long as the call takes. It is therefore made when a
+/// picker needs the list and not on every frame.
+///
+/// Empty where the camera is not attached, is held by another application, or
+/// this platform has no camera backend — all of which a picker draws the same
+/// way, as nothing to choose from.
+pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::video_capture_modes(device)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = device;
+        Vec::new()
+    }
+}
+
 /// What a media file turns out to hold, as far as a new Source needs to know.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MediaFileStreams {

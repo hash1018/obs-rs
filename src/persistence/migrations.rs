@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -411,6 +411,36 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             ALTER TABLE media_file_settings DROP COLUMN monitor;
 
             PRAGMA user_version = 16;",
+        )?;
+    }
+    if current_version < 17 {
+        // A camera: the device by the only identity that survives a restart,
+        // the name it had when it was picked, and the mode to ask it for.
+        //
+        // The name is stored beside the link rather than resolved, so a
+        // camera that is unplugged is still shown as itself instead of as a
+        // device path — the same reason a window capture stores the process
+        // and title it was picked by.
+        //
+        // The mode is four nullable columns rather than one string: it is a
+        // size and a fraction, both of which are compared against what the
+        // device offers, and a rate is genuinely `30000/1001` on some
+        // cameras. All four absent means "whichever the camera offers
+        // first", which is a real choice and not a missing value.
+        transaction.execute_batch(
+            "CREATE TABLE video_capture_settings (
+                source_id             INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                device                TEXT NOT NULL,
+                device_name           TEXT NOT NULL,
+                mode_width            INTEGER,
+                mode_height           INTEGER,
+                mode_rate_numerator   INTEGER,
+                mode_rate_denominator INTEGER,
+                width                 INTEGER,
+                height                INTEGER
+            );
+
+            PRAGMA user_version = 17;",
         )?;
     }
     transaction.commit()?;

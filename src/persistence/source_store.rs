@@ -7,7 +7,8 @@ use crate::domain::{
     ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
     ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings,
     RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
-    SourceSettings, Stroke, Transform, WindowCaptureSettings, WindowCaptureTarget,
+    SourceSettings, Stroke, Transform, VideoCaptureMode, VideoCaptureSettings,
+    WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::PersistenceResult;
@@ -118,7 +119,15 @@ impl SourceStore {
                 rtsp_source_settings.height,
                 rtsp_source_settings.has_audio,
                 rtsp_source_settings.gain_db,
-                rtsp_source_settings.muted
+                rtsp_source_settings.muted,
+                video_capture_settings.device,
+                video_capture_settings.device_name,
+                video_capture_settings.mode_width,
+                video_capture_settings.mode_height,
+                video_capture_settings.mode_rate_numerator,
+                video_capture_settings.mode_rate_denominator,
+                video_capture_settings.width,
+                video_capture_settings.height
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -135,6 +144,8 @@ impl SourceStore {
                 ON image_source_settings.source_id = sources.id
              LEFT JOIN rtsp_source_settings
                 ON rtsp_source_settings.source_id = sources.id
+             LEFT JOIN video_capture_settings
+                ON video_capture_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -253,7 +264,34 @@ impl SourceStore {
                         gain_db: row.get(56)?,
                         muted: row.get(57)?,
                     }),
-                    _ => SourceSettings::None,
+                    SourceKind::VideoCapture => {
+                        SourceSettings::VideoCapture(VideoCaptureSettings {
+                            device: row.get(58)?,
+                            device_name: row.get(59)?,
+                            // All four together or none: a half-stated mode
+                            // is not one the camera could be asked for, and
+                            // taking its first offered mode is what the
+                            // absence already means.
+                            mode: match (row.get(60)?, row.get(61)?, row.get(62)?, row.get(63)?) {
+                                (
+                                    Some(width),
+                                    Some(height),
+                                    Some(framerate_numerator),
+                                    Some(framerate_denominator),
+                                ) => Some(VideoCaptureMode {
+                                    width,
+                                    height,
+                                    framerate_numerator,
+                                    framerate_denominator,
+                                }),
+                                _ => None,
+                            },
+                            size_hint: match (row.get(64)?, row.get(65)?) {
+                                (Some(width), Some(height)) => Some([width, height]),
+                                _ => None,
+                            },
+                        })
+                    }
                 };
                 let source_id = SourceId(row.get(1)?);
                 Ok((
@@ -637,6 +675,80 @@ impl SourceStore {
                 .and_then(|wait| i64::try_from(wait.as_secs()).ok())
                 .filter(|seconds| *seconds > 0),
         )
+    }
+
+    /// Adds a camera Source, named after the device.
+    ///
+    /// The device's own name rather than the kind's: a machine with two
+    /// cameras is exactly where a list of "Video Capture" and "Video Capture
+    /// 2" says nothing, and the name is already stored for the dock to show
+    /// while the camera is unplugged.
+    pub(crate) fn add_video_capture(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        settings: &VideoCaptureSettings,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, &settings.device_name)?;
+        let source_id = create(transaction, &name, SourceKind::VideoCapture)?;
+        let [width, height] = settings
+            .size_hint
+            .map_or([None, None], |[width, height]| [Some(width), Some(height)]);
+        transaction.execute(
+            "INSERT INTO video_capture_settings
+                (source_id, device, device_name, mode_width, mode_height,
+                 mode_rate_numerator, mode_rate_denominator, width, height)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                source_id.0,
+                settings.device,
+                settings.device_name,
+                settings.mode.map(|mode| mode.width),
+                settings.mode.map(|mode| mode.height),
+                settings.mode.map(|mode| mode.framerate_numerator),
+                settings.mode.map(|mode| mode.framerate_denominator),
+                width,
+                height
+            ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+    }
+
+    /// Which mode to ask the camera for, or `None` to take its first.
+    ///
+    /// Takes effect by reopening the Source: a mode is negotiated when the
+    /// device is opened, and there is nothing to change about a capture that
+    /// is already running.
+    ///
+    /// The size hint moves with it, because a mode *is* a size: leaving the
+    /// old one behind would draw a 640x480 picture stretched into the
+    /// rectangle a 1280x720 one had. Going back to automatic keeps whatever
+    /// is stored — the camera's own first mode is what was measured when it
+    /// was added, which is exactly what automatic asks for again.
+    pub(crate) fn set_video_capture_mode(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        mode: Option<VideoCaptureMode>,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE video_capture_settings
+                SET mode_width = ?2,
+                    mode_height = ?3,
+                    mode_rate_numerator = ?4,
+                    mode_rate_denominator = ?5,
+                    width = COALESCE(?2, width),
+                    height = COALESCE(?3, height)
+              WHERE source_id = (
+                SELECT source_id FROM scene_items WHERE id = ?1
+              )",
+            params![
+                scene_item_id.0,
+                mode.map(|mode| mode.width),
+                mode.map(|mode| mode.height),
+                mode.map(|mode| mode.framerate_numerator),
+                mode.map(|mode| mode.framerate_denominator)
+            ],
+        )?;
+        Ok(())
     }
 
     /// Adds an image Source, named after the file — see
@@ -1155,6 +1267,102 @@ mod tests {
             .into_iter()
             .map(|(_, source)| source.name)
             .collect()
+    }
+
+    /// A camera is stored by the link that outlives a restart, and shown by
+    /// the name it was picked with — so both have to come back, and the name
+    /// has to be what the Source was named after.
+    #[test]
+    fn a_camera_comes_back_by_its_link_and_the_name_it_was_picked_with() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let settings = VideoCaptureSettings {
+            device: r"\\?\usb#vid_4c4a&pid_4a55&mi_00".to_owned(),
+            device_name: "HCAM01L".to_owned(),
+            mode: Some(VideoCaptureMode {
+                width: 1280,
+                height: 720,
+                framerate_numerator: 30,
+                framerate_denominator: 1,
+            }),
+            size_hint: Some([1280, 720]),
+        };
+        database
+            .transaction(|transaction| {
+                SourceStore::add_video_capture(transaction, scene_id, &settings)
+            })
+            .unwrap();
+
+        assert_eq!(names_in_scene(&database, scene_id), vec!["HCAM01L"]);
+        assert_eq!(
+            settings_of(&database, scene_id),
+            SourceSettings::VideoCapture(settings)
+        );
+    }
+
+    /// "Whichever the camera offers first" is a choice rather than a missing
+    /// value, so it has to survive being written and read back — and setting
+    /// it has to clear all four columns rather than leave half a mode behind.
+    #[test]
+    fn a_camera_mode_can_be_set_and_given_back_to_the_camera() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_video_capture(
+                    transaction,
+                    scene_id,
+                    &VideoCaptureSettings {
+                        device: "camera".to_owned(),
+                        device_name: "A Camera".to_owned(),
+                        mode: None,
+                        size_hint: None,
+                    },
+                )
+            })
+            .unwrap();
+        let SourceSettings::VideoCapture(stored) = settings_of(&database, scene_id) else {
+            panic!("the stored source is a video capture");
+        };
+        assert_eq!(stored.mode, None, "no mode was asked for");
+
+        let chosen = VideoCaptureMode {
+            width: 640,
+            height: 480,
+            framerate_numerator: 2000000,
+            framerate_denominator: 90909,
+        };
+        database
+            .transaction(|transaction| {
+                SourceStore::set_video_capture_mode(transaction, item_id, Some(chosen))
+            })
+            .unwrap();
+        let SourceSettings::VideoCapture(stored) = settings_of(&database, scene_id) else {
+            panic!("the stored source is a video capture");
+        };
+        assert_eq!(
+            stored.mode,
+            Some(chosen),
+            "an odd frame rate is a real mode and must come back as it was stored"
+        );
+        assert_eq!(
+            stored.size_hint,
+            Some([640, 480]),
+            "a mode is a size, and the item has to be drawn at the one it names"
+        );
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_video_capture_mode(transaction, item_id, None)
+            })
+            .unwrap();
+        let SourceSettings::VideoCapture(stored) = settings_of(&database, scene_id) else {
+            panic!("the stored source is a video capture");
+        };
+        assert_eq!(
+            stored.mode, None,
+            "going back to automatic must clear the whole mode, not part of it"
+        );
     }
 
     #[test]

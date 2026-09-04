@@ -11,5 +11,6 @@ pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
 pub use source::{
     ColorSourceSettings, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
     ImageSourceSettings, MediaFileSettings, RtspSourceSettings, RtspTransport, Source, SourceId,
-    SourceKind, SourceSettings, Stroke, WindowCaptureSettings, WindowCaptureTarget,
+    SourceKind, SourceSettings, Stroke, VideoCaptureMode, VideoCaptureSettings,
+    WindowCaptureSettings, WindowCaptureTarget,
 };

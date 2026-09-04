@@ -888,14 +888,20 @@ fn apply_command(
                 source.source.stop();
                 engine.backend.remove_source(&source.name);
             }
+            // Left for the next pass rather than opened here, because what
+            // asks for a reopen is almost always a settings change and the
+            // write behind it has not reached this thread yet — it arrives as
+            // the `Scene` snapshot after this command, so opening now would
+            // reopen at exactly the settings the user just replaced. Marking
+            // it missing hands the open to `reconcile`, which runs on that
+            // snapshot; already due, so `retry_missing` still picks it up on
+            // its next tick where nothing was changed and no snapshot
+            // follows — the Sources dock's reconnect button.
             let item = &scene.items[index];
-            let layer = layer_for(
-                item,
-                item.transform,
-                item.crop,
-                (scene.items.len() - index) as i32,
-            );
-            request_open(engine, recording.mixer_handle(), open, item, layer);
+            let due = Instant::now()
+                .checked_sub(retry_after(item))
+                .unwrap_or_else(Instant::now);
+            open.insert(item_id, SourceState::Missing(due));
             true
         }
         EngineCommand::Drawing(item_id, strokes) => {
@@ -1433,7 +1439,7 @@ fn needs_asking(item: &SceneItemSnapshot) -> bool {
     }
 }
 
-/// Puts a live stream that stopped arriving back where it can be reconnected.
+/// Puts a live source that stopped arriving back where it can be reopened.
 ///
 /// `RtspSource` does not reconnect: a read that fails ends it with an error
 /// and the pipeline finishes, which — since a pipeline is one-shot — means
@@ -1449,7 +1455,7 @@ fn notice_dropped_streams(
     snapshot: &SourcesSnapshot,
 ) {
     for item in &snapshot.items {
-        if item.kind != SourceKind::Rtsp {
+        if !matches!(item.kind, SourceKind::Rtsp | SourceKind::VideoCapture) {
             continue;
         }
         let Some(SourceState::Open(source)) = open.get(&item.id) else {
@@ -1872,7 +1878,10 @@ mod tests {
             },
         );
         colour.kind = SourceKind::Color;
-        colour.settings = SourceSettings::None;
+        colour.settings = SourceSettings::Color(crate::domain::ColorSourceSettings {
+            size: [1920.0, 1080.0],
+            rgba: [0, 0, 0, 255],
+        });
         assert!(
             !needs_asking(&colour),
             "nothing but a Window Capture has a picker behind it"

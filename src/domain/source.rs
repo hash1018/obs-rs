@@ -327,16 +327,73 @@ pub struct RtspSourceSettings {
     pub muted: bool,
 }
 
+/// One picture shape a camera offers, as it is stored and shown.
+///
+/// Mirrors `media_pp::elements::MfCaptureFormat` rather than reusing it, for
+/// the reason [`RtspTransport`] is mirrored: this is written to the database
+/// and drawn by the UI, neither of which should have to know what the capture
+/// element takes. The rate is kept as the fraction the camera stated —
+/// `30000/1001` is a real mode and is not `30/1`, so rounding it here would
+/// stop it matching what the device offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoCaptureMode {
+    pub width: u32,
+    pub height: u32,
+    pub framerate_numerator: u32,
+    pub framerate_denominator: u32,
+}
+
+impl VideoCaptureMode {
+    /// Frames per second as a number to show, which is all this is for. Two
+    /// modes are compared by their stored fraction, never by this.
+    pub fn framerate(self) -> f32 {
+        if self.framerate_denominator == 0 {
+            return 0.0;
+        }
+        self.framerate_numerator as f32 / self.framerate_denominator as f32
+    }
+}
+
+/// A camera played into the Scene.
+///
+/// # Not attached is not failure
+///
+/// The device is stored as the symbolic link it was picked by and is never
+/// resolved to anything else. A camera that is unplugged, switched off, or
+/// held by another application is an ordinary state the same way a closed
+/// window is: the Source waits for it and is opened again when it comes back.
+/// The name is stored beside the link so a camera that is *not* there can
+/// still be shown as itself rather than as a device path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoCaptureSettings {
+    /// The device's symbolic link, which is the only identity that survives a
+    /// restart. Enumeration order is not one: unplugging one camera renumbers
+    /// the rest.
+    pub device: String,
+    /// The name the device had when it was picked, for the dock and the
+    /// properties panel to show while it is not attached.
+    pub device_name: String,
+    /// The mode to ask the camera for, or `None` to take whichever it offers
+    /// first. Stored rather than resolved for the same reason the link is: a
+    /// camera that is not attached right now still has a mode that was chosen
+    /// for it.
+    pub mode: Option<VideoCaptureMode>,
+    /// The negotiated picture size when the camera was added, or `None` where
+    /// none was read. A hint like a display's — the mode can be changed, and
+    /// the capture layer replaces this with what it actually opened.
+    pub size_hint: Option<[u32; 2]>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SourceSettings {
     Color(ColorSourceSettings),
     Rtsp(RtspSourceSettings),
+    VideoCapture(VideoCaptureSettings),
     Drawing(DrawingSourceSettings),
     DisplayCapture(DisplayCaptureSettings),
     WindowCapture(WindowCaptureSettings),
     MediaFile(MediaFileSettings),
     Image(ImageSourceSettings),
-    None,
 }
 
 impl SourceSettings {
@@ -372,12 +429,16 @@ impl SourceSettings {
                 .map_or([canvas.width, canvas.height], |[width, height]| {
                     [width as f32, height as f32]
                 }),
+            Self::VideoCapture(settings) => settings
+                .size_hint
+                .map_or([canvas.width, canvas.height], |[width, height]| {
+                    [width as f32, height as f32]
+                }),
             Self::Image(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {
                     [width as f32, height as f32]
                 }),
-            Self::None => [canvas.width, canvas.height],
         }
     }
 }

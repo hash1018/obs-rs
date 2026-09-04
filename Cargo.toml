@@ -100,5 +100,6 @@ features = [
     "dxgi-capture",
     "wasapi-capture",
     "wasapi-renderer",
+    "mf-capture",
     "wgc-capture",
 ]

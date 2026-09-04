@@ -1,7 +1,7 @@
 use crate::domain::{
     AudioSourceId, Crop, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
-    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform,
-    WindowCaptureSettings,
+    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, Stroke, Transform, VideoCaptureMode,
+    VideoCaptureSettings, WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +55,10 @@ pub enum SourceCommand {
     AddRtsp {
         scene_id: SceneId,
         settings: RtspSourceSettings,
+    },
+    AddVideoCapture {
+        scene_id: SceneId,
+        settings: VideoCaptureSettings,
     },
     Delete(SceneItemId),
     MoveUp(SceneItemId),
@@ -115,6 +119,12 @@ pub enum SourceCommand {
     /// `None` to leave it to the user. Read the next time it drops, so
     /// changing it disturbs nothing that is running.
     SetRtspReconnect(SceneItemId, Option<std::time::Duration>),
+    /// Which mode to ask a camera for, or `None` to take its own first.
+    ///
+    /// Like a stream's transport this cannot take effect where it is: a mode
+    /// is negotiated when the device is opened, so the Source is reopened to
+    /// apply it.
+    SetVideoCaptureMode(SceneItemId, Option<VideoCaptureMode>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -187,6 +187,13 @@ fn handle_source_command(
             SourceStore::add_rtsp(transaction, scene_id, &settings)?;
             Ok(())
         }
+        SourceCommand::AddVideoCapture { scene_id, settings } => {
+            SourceStore::add_video_capture(transaction, scene_id, &settings)?;
+            Ok(())
+        }
+        SourceCommand::SetVideoCaptureMode(scene_item_id, mode) => {
+            SourceStore::set_video_capture_mode(transaction, scene_item_id, mode)
+        }
         SourceCommand::SetRtspTransport(scene_item_id, transport) => {
             SourceStore::set_rtsp_transport(transaction, scene_item_id, transport)
         }

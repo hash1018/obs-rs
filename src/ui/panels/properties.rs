@@ -297,12 +297,23 @@ fn show_settings(
             show_transport(ui, item.id, settings.transport, i18n, actions);
             show_reconnect(ui, item.id, settings.reconnect, i18n, actions);
         }
+        SourceSettings::VideoCapture(settings) => {
+            // The name it was picked by rather than the symbolic link. The
+            // link is a device path nobody reads, and the name is what the
+            // dialog showed — including while the camera is unplugged, which
+            // is the moment it matters.
+            row(
+                ui,
+                i18n.text(TextKey::PropertiesCamera).as_ref(),
+                &settings.device_name,
+            );
+            show_camera_mode(ui, item.id, settings, i18n, actions);
+        }
         SourceSettings::Image(settings) => row(
             ui,
             i18n.text(TextKey::PropertiesFile).as_ref(),
             &settings.path.display().to_string(),
         ),
-        SourceSettings::None => {}
     }
 }
 
@@ -483,6 +494,106 @@ fn show_transport(
         }
     });
     ui.end_row();
+}
+
+/// Which of the camera's own modes to ask it for.
+///
+/// The list is read from the device the first time the popup is opened and
+/// kept for the rest of the session: asking means opening the camera, which
+/// lights its indicator, and doing that once per frame to draw a closed combo
+/// box would leave it lit for as long as the panel is up.
+///
+/// A camera that will not answer — unplugged, or held by something that took
+/// it exclusively — leaves the list empty, and then the box shows what is
+/// stored and offers nothing else. That is the honest rendering: there is no
+/// list, rather than a list with nothing in it.
+///
+/// "Automatic" is a real choice and not an absence — it means whichever mode
+/// the camera offers first, which is its own preference and usually its best.
+fn show_camera_mode(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    settings: &crate::domain::VideoCaptureSettings,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    use std::sync::Arc;
+
+    use crate::domain::VideoCaptureMode;
+
+    ui.label(i18n.text(TextKey::PropertiesCameraMode));
+    let mut chosen = None;
+    egui::ComboBox::from_id_salt(("camera-mode", item.0))
+        .selected_text(camera_mode_label(settings.mode, i18n))
+        .show_ui(ui, |ui| {
+            let cache = egui::Id::new(("camera-modes", settings.device.as_str()));
+            let device = settings.device.clone();
+            let modes: Arc<Vec<VideoCaptureMode>> = ui.memory_mut(|memory| {
+                memory
+                    .data
+                    .get_temp_mut_or_insert_with(cache, || {
+                        Arc::new(crate::capture::video_capture_modes(&device))
+                    })
+                    .clone()
+            });
+
+            if ui
+                .selectable_label(
+                    settings.mode.is_none(),
+                    i18n.text(TextKey::PropertiesCameraModeAutomatic),
+                )
+                .clicked()
+                && settings.mode.is_some()
+            {
+                chosen = Some(None);
+            }
+            for mode in modes.iter().copied() {
+                if ui
+                    .selectable_label(settings.mode == Some(mode), camera_mode_text(mode))
+                    .clicked()
+                    && settings.mode != Some(mode)
+                {
+                    chosen = Some(Some(mode));
+                }
+            }
+        });
+    ui.end_row();
+
+    if let Some(mode) = chosen {
+        actions.push(UiAction::Project(ProjectCommand::Source(
+            SourceCommand::SetVideoCaptureMode(item, mode),
+        )));
+        // A mode is negotiated when the device is opened, so this is the one
+        // way to apply it — see `SourceCommand::SetVideoCaptureMode`.
+        actions.push(UiAction::ReopenSource(item));
+    }
+}
+
+/// What the closed combo box says.
+fn camera_mode_label(
+    mode: Option<crate::domain::VideoCaptureMode>,
+    i18n: &LocalizationManager,
+) -> String {
+    match mode {
+        Some(mode) => camera_mode_text(mode),
+        None => i18n
+            .text(TextKey::PropertiesCameraModeAutomatic)
+            .into_owned(),
+    }
+}
+
+/// One mode as a person reads it: the picture, then the rate.
+///
+/// The rate to one decimal because `30000/1001` is a real mode and rounding
+/// it to 30 would make it indistinguishable from the `30/1` sitting next to
+/// it in the same list.
+fn camera_mode_text(mode: crate::domain::VideoCaptureMode) -> String {
+    format!(
+        "{} × {} · {:.1} fps",
+        mode.width,
+        mode.height,
+        mode.framerate()
+    )
 }
 
 /// How long to wait before connecting again after the stream drops.

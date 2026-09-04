@@ -1223,8 +1223,8 @@ fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
         | SourceSettings::WindowCapture(_)
         | SourceSettings::MediaFile(_)
         | SourceSettings::Rtsp(_)
-        | SourceSettings::Image(_)
-        | SourceSettings::None => ui.visuals().widgets.inactive.bg_fill,
+        | SourceSettings::VideoCapture(_)
+        | SourceSettings::Image(_) => ui.visuals().widgets.inactive.bg_fill,
     }
     .gamma_multiply(0.65)
 }

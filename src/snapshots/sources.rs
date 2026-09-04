@@ -139,7 +139,10 @@ mod tests {
             id: SceneItemId(1),
             name: "Drawing".into(),
             kind: SourceKind::Drawing,
-            settings: SourceSettings::None,
+            settings: SourceSettings::Drawing(crate::domain::DrawingSourceSettings {
+                size: source_size,
+                strokes: Vec::new(),
+            }),
             source_size,
             transform: Transform::default(),
             crop,

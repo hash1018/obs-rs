@@ -17,6 +17,7 @@ pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod rtsp;
 pub(in crate::engine) mod sound;
+pub(in crate::engine) mod video_capture;
 pub(in crate::engine) mod window_capture;
 
 use std::sync::Arc;
@@ -142,6 +143,11 @@ pub(in crate::engine) fn input_name(item: &SceneItemSnapshot) -> String {
 }
 
 /// Convenience for a backend that has no Source of a given kind yet.
+///
+/// Unused on Windows, where the D3D11 backend now opens every kind there is —
+/// which is why its own match has no fallback arm any more, and why adding a
+/// ninth kind will stop that build until somebody decides what it does.
+#[allow(dead_code)]
 pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendError {
     format!("{:?} is not connected to the compositor yet", item.kind).into()
 }

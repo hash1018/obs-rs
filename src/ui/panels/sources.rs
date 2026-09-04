@@ -4,11 +4,13 @@ use std::sync::mpsc::{self, Receiver};
 
 use eframe::egui;
 
-use crate::capture::{MonitorTarget, NetworkStream, SourcePicker, WindowTarget};
+use crate::capture::{
+    MonitorTarget, NetworkStream, SourcePicker, VideoCaptureTarget, WindowTarget,
+};
 use crate::domain::{
     DisplayCaptureSettings, DisplayCaptureTarget, ImageSourceSettings, MediaFileSettings,
-    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, WindowCaptureSettings,
-    WindowCaptureTarget,
+    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, VideoCaptureSettings,
+    WindowCaptureSettings, WindowCaptureTarget,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SourceCommand};
@@ -23,7 +25,7 @@ use super::toolbar::{self, ToolIcon};
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
 const ICON_WIDTH: f32 = 22.0;
 const LIST_ROW_HEIGHT: f32 = 26.0;
-const SOURCE_KIND_LIST_HEIGHT: f32 = 174.0;
+const SOURCE_KIND_LIST_HEIGHT: f32 = 199.0;
 
 /// What the file picker offers before "all files".
 ///
@@ -46,6 +48,11 @@ pub(in crate::ui) struct SourcesPanelState {
     display_dialog_open: bool,
     display_targets: Vec<MonitorTarget>,
     selected_monitor_name: Option<String>,
+    camera_dialog_open: bool,
+    camera_targets: Vec<VideoCaptureTarget>,
+    /// The symbolic link of the picked row, which is what tells two cameras
+    /// apart: a machine with two of one model shows the same name twice.
+    selected_camera: Option<String>,
     window_dialog_open: bool,
     window_targets: Vec<WindowTarget>,
     /// The platform handle of the picked row, which is the only thing in the
@@ -123,6 +130,7 @@ struct StreamDialog {
 enum AddSourceKind {
     DisplayCapture,
     WindowCapture,
+    VideoCapture,
     MediaFile,
     Rtsp,
     Image,
@@ -212,6 +220,7 @@ pub(in crate::ui) fn show(
 
     show_add_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_display_dialog(ui.ctx(), state, snapshot, i18n, actions);
+    show_camera_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_window_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_stream_dialog(ui.ctx(), state, i18n, actions);
 }
@@ -796,6 +805,19 @@ fn show_add_dialog(
                     add_requested = true;
                 }
 
+                let camera_label = i18n.text(TextKey::SourceKindVideoCapture);
+                let response = list_row(
+                    ui,
+                    &camera_label,
+                    state.add_kind == AddSourceKind::VideoCapture,
+                );
+                if response.clicked() {
+                    state.add_kind = AddSourceKind::VideoCapture;
+                }
+                if response.double_clicked() {
+                    add_requested = true;
+                }
+
                 let media_label = i18n.text(TextKey::SourceKindMediaFile);
                 let response =
                     list_row(ui, &media_label, state.add_kind == AddSourceKind::MediaFile);
@@ -880,6 +902,7 @@ fn show_add_dialog(
             AddSourceKind::WindowCapture => {
                 prepare_window_picker(state, snapshot.scene_id, actions)
             }
+            AddSourceKind::VideoCapture => prepare_camera_picker(state),
             AddSourceKind::Rtsp => {
                 if let Some(scene_id) = snapshot.scene_id {
                     state.stream = Some(StreamDialog {
@@ -1004,6 +1027,122 @@ fn add_file(scene_id: SceneId, picked: PickedFile) -> SourceCommand {
             },
         },
     }
+}
+
+/// Fills the camera list and opens its dialog.
+///
+/// No fork by platform, unlike a display's: a camera is a device rather than
+/// something on screen, so there is no portal that owns the choice and every
+/// platform that has a backend answers with a list. A platform that has none
+/// answers with an empty one, and the dialog says so.
+fn prepare_camera_picker(state: &mut SourcesPanelState) {
+    state.camera_targets = crate::capture::video_capture_devices();
+    state.selected_camera = state.camera_targets.first().map(|target| target.id.clone());
+    state.camera_dialog_open = true;
+}
+
+fn show_camera_dialog(
+    ctx: &egui::Context,
+    state: &mut SourcesPanelState,
+    snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    if !state.camera_dialog_open {
+        return;
+    }
+
+    let mut open = true;
+    let mut add = false;
+    let mut back = false;
+    let mut cancel = false;
+    egui::Window::new(i18n.text(TextKey::SourceCameraTitle))
+        .id(egui::Id::new("video_capture_dialog"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.set_min_width(360.0);
+            ui.label(i18n.text(TextKey::SourceCameraPrompt));
+            ui.add_space(4.0);
+
+            show_list_view(ui, DISPLAY_LIST_HEIGHT, |ui| {
+                if state.camera_targets.is_empty() {
+                    ui.weak(i18n.text(TextKey::SourceCameraNone));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("video_capture_targets")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for target in &state.camera_targets {
+                                let selected =
+                                    state.selected_camera.as_deref() == Some(target.id.as_str());
+                                if list_row(ui, &target.name, selected).clicked() {
+                                    state.selected_camera = Some(target.id.clone());
+                                }
+                            }
+                        });
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        state.selected_camera.is_some(),
+                        egui::Button::new(i18n.text(TextKey::ActionAdd)),
+                    )
+                    .clicked()
+                {
+                    add = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionBack)).clicked() {
+                    back = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionCancel)).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+
+    if back {
+        open = false;
+        state.add_dialog_open = true;
+    } else if cancel {
+        open = false;
+    } else if add {
+        let selected = state
+            .selected_camera
+            .take()
+            .and_then(|id| state.camera_targets.iter().find(|target| target.id == id))
+            .map(|target| VideoCaptureSettings {
+                device: target.id.clone(),
+                device_name: target.name.clone(),
+                // Left automatic: the camera's own first mode is its stated
+                // preference, and on the hardware this was built against it
+                // is also its best. The properties panel is where a different
+                // one is picked, with the whole list in front of the user
+                // rather than a guess made here.
+                mode: None,
+                // Asked of the camera once, so the new item appears at the
+                // shape it will actually open at rather than filling the
+                // Canvas until the first frame arrives. `None` where the
+                // camera would not say, which the SceneItem handles the same
+                // way it handles a display that reported no size.
+                size_hint: crate::capture::video_capture_modes(&target.id)
+                    .first()
+                    .map(|mode| [mode.width, mode.height]),
+            });
+        if let (Some(scene_id), Some(settings)) = (snapshot.scene_id, selected) {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::AddVideoCapture { scene_id, settings },
+            )));
+            state.select_new_item = true;
+        }
+        open = false;
+    }
+    state.camera_dialog_open = open;
 }
 
 fn prepare_display_picker(
@@ -1412,7 +1551,11 @@ mod tests {
             id: SceneItemId(id),
             name: name.to_owned(),
             kind: SourceKind::Color,
-            settings: SourceSettings::None,
+            settings: SourceSettings::Color(crate::domain::ColorSourceSettings {
+                size: [1920.0, 1080.0],
+                rgba: [0, 0, 0, 255],
+            }),
+
             source_size: [1920.0, 1080.0],
             visible: true,
             locked: false,
