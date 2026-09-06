@@ -4,45 +4,118 @@ use super::database::PersistenceResult;
 
 const SCHEMA_VERSION: i64 = 18;
 
-pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
-    let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if current_version >= SCHEMA_VERSION {
-        return Ok(());
-    }
+/// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
+/// opened.
+///
+/// Everything below it used to be reachable one step at a time, seventeen
+/// blocks of them. They were collapsed into [`BASELINE`] once 0.1.0 was the
+/// first release anybody but the author had run: the only databases that
+/// ever carried a lower number were made by builds from this tree before
+/// then.
+const BASELINE_VERSION: i64 = 17;
 
-    let transaction = connection.transaction()?;
-    if current_version < 1 {
-        transaction.execute_batch(
-            "CREATE TABLE scenes (
-                id       INTEGER PRIMARY KEY,
-                name     TEXT NOT NULL UNIQUE,
-                position INTEGER NOT NULL
-            );
-
-            CREATE INDEX scenes_position_idx ON scenes(position);
-
-            CREATE TABLE app_state (
+/// The whole schema as of [`BASELINE_VERSION`], verbatim.
+///
+/// Copied out of `sqlite_master` rather than rewritten, which is why some of
+/// it looks the way it does — `display_capture_settings` is quoted because
+/// version 4 rebuilt and renamed it, and several tables carry columns
+/// appended after their closing parenthesis because a later version added
+/// them. Tidying that up would have produced a schema that *looks* like the
+/// one in the field without any way left to prove it is the same one: a
+/// `CHECK` constraint is not something a pragma can be asked about, so a
+/// dropped one would only surface as a row that should have been refused.
+///
+/// So this is not written, it is recorded.
+const BASELINE: &str = r#"
+CREATE TABLE app_state (
                 id                INTEGER PRIMARY KEY CHECK (id = 1),
                 selected_scene_id INTEGER REFERENCES scenes(id) ON DELETE SET NULL
             );
 
-            INSERT INTO scenes (name, position) VALUES ('Scene 1', 0);
-            INSERT INTO app_state (id, selected_scene_id)
-            VALUES (1, last_insert_rowid());
+CREATE TABLE audio_sources (
+                id       INTEGER PRIMARY KEY,
+                name     TEXT NOT NULL UNIQUE,
+                kind     TEXT NOT NULL,
+                device   TEXT,
+                gain_db  REAL NOT NULL DEFAULT 0,
+                muted    INTEGER NOT NULL DEFAULT 0,
+                position INTEGER NOT NULL
+            , monitored INTEGER NOT NULL DEFAULT 0
+                CHECK (monitored IN (0, 1)));
 
-            PRAGMA user_version = 1;",
-        )?;
-    }
-    if current_version < 2 {
-        transaction.execute_batch(
-            "CREATE TABLE sources (
-                id            INTEGER PRIMARY KEY,
-                name          TEXT NOT NULL UNIQUE,
-                kind          TEXT NOT NULL,
-                settings_json TEXT NOT NULL DEFAULT '{}'
+CREATE TABLE color_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                width     INTEGER NOT NULL,
+                height    INTEGER NOT NULL,
+                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
+                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
+                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
+                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255)
             );
 
-            CREATE TABLE scene_items (
+CREATE TABLE "display_capture_settings" (
+                source_id     INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                target_kind   TEXT NOT NULL CHECK (target_kind IN ('monitor', 'portal')),
+                monitor_name  TEXT,
+                restore_token TEXT, width INTEGER CHECK (width IS NULL OR width > 0), height INTEGER CHECK (height IS NULL OR height > 0),
+                CHECK (
+                    (target_kind = 'monitor'
+                        AND monitor_name IS NOT NULL
+                        AND restore_token IS NULL)
+                 OR (target_kind = 'portal' AND monitor_name IS NULL)
+                )
+            );
+
+CREATE TABLE drawing_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                width     INTEGER NOT NULL CHECK (width > 0),
+                height    INTEGER NOT NULL CHECK (height > 0)
+            );
+
+CREATE TABLE drawing_strokes (
+                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                ordinal   INTEGER NOT NULL,
+                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
+                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
+                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
+                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255),
+                width     REAL NOT NULL CHECK (width > 0),
+                points    BLOB NOT NULL,
+                PRIMARY KEY (source_id, ordinal)
+            );
+
+CREATE TABLE image_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                path      TEXT NOT NULL,
+                width     INTEGER,
+                height    INTEGER
+            );
+
+CREATE TABLE media_file_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                path      TEXT NOT NULL,
+                looping   INTEGER NOT NULL CHECK (looping IN (0, 1)),
+                width     INTEGER,
+                height    INTEGER,
+                has_audio INTEGER NOT NULL CHECK (has_audio IN (0, 1)),
+                gain_db   REAL NOT NULL,
+                muted     INTEGER NOT NULL CHECK (muted IN (0, 1))
+            , duration_us INTEGER, paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)), monitored INTEGER NOT NULL DEFAULT 0
+                CHECK (monitored IN (0, 1)));
+
+CREATE TABLE rtsp_source_settings (
+                source_id         INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                url               TEXT NOT NULL,
+                transport         TEXT NOT NULL CHECK (transport IN ('tcp', 'udp')),
+                reconnect_seconds INTEGER CHECK (reconnect_seconds > 0),
+                width             INTEGER,
+                height            INTEGER,
+                has_audio         INTEGER NOT NULL CHECK (has_audio IN (0, 1)),
+                gain_db           REAL NOT NULL,
+                muted             INTEGER NOT NULL CHECK (muted IN (0, 1))
+            );
+
+CREATE TABLE scene_items (
                 id               INTEGER PRIMARY KEY,
                 scene_id         INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
                 source_id        INTEGER NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
@@ -62,180 +135,32 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
                 z_index          INTEGER NOT NULL
             );
 
-            CREATE INDEX scene_items_scene_z_idx
-            ON scene_items(scene_id, z_index DESC);
-
-            CREATE INDEX scene_items_source_idx
-            ON scene_items(source_id);
-
-            PRAGMA user_version = 2;",
-        )?;
-    }
-    if current_version < 3 {
-        transaction.execute_batch(
-            "CREATE TABLE color_source_settings (
-                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                width     INTEGER NOT NULL,
-                height    INTEGER NOT NULL,
-                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
-                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
-                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
-                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255)
-            );
-
-            PRAGMA user_version = 3;",
-        )?;
-    }
-    if current_version < 4 {
-        transaction.execute_batch(
-            "CREATE TABLE display_capture_settings (
-                source_id    INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                monitor_name TEXT NOT NULL
-            );
-
-            PRAGMA user_version = 4;",
-        )?;
-    }
-    if current_version < 5 {
-        // A Wayland selection has no display name to store. Version 4 stuffed
-        // the portal's stream id into `monitor_name` as a placeholder, but a
-        // stream id belongs to the session that produced it and means nothing
-        // to a later one — the portal's restore token is the only value that
-        // reproduces a selection. Splitting the two apart needs `monitor_name`
-        // to become nullable, which SQLite only does by rebuilding the table.
-        //
-        // Placeholder rows carry no token and cannot be given one, so they
-        // become portal targets that prompt again on first capture.
-        transaction.execute_batch(
-            "CREATE TABLE display_capture_settings_new (
-                source_id     INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                target_kind   TEXT NOT NULL CHECK (target_kind IN ('monitor', 'portal')),
-                monitor_name  TEXT,
-                restore_token TEXT,
-                CHECK (
-                    (target_kind = 'monitor'
-                        AND monitor_name IS NOT NULL
-                        AND restore_token IS NULL)
-                 OR (target_kind = 'portal' AND monitor_name IS NULL)
-                )
-            );
-
-            INSERT INTO display_capture_settings_new
-                (source_id, target_kind, monitor_name)
-            SELECT
-                source_id,
-                CASE WHEN monitor_name LIKE 'portal: %'
-                       OR monitor_name LIKE 'portal-node: %'
-                     THEN 'portal' ELSE 'monitor' END,
-                CASE WHEN monitor_name LIKE 'portal: %'
-                       OR monitor_name LIKE 'portal-node: %'
-                     THEN NULL ELSE monitor_name END
-            FROM display_capture_settings;
-
-            DROP TABLE display_capture_settings;
-
-            ALTER TABLE display_capture_settings_new
-            RENAME TO display_capture_settings;
-
-            PRAGMA user_version = 5;",
-        )?;
-    }
-    if current_version < 6 {
-        // Every picker already knows the display's size and shows it to the
-        // user; only the stored source did not. Without it a SceneItem stands
-        // in at Canvas size, so an ultrawide display starts at the wrong aspect
-        // ratio and visibly changes shape the moment capture opens.
-        //
-        // Nullable because a picker may report no size, and because rows
-        // written before this migration have none. Both fall back to Canvas
-        // size, which is what they already did.
-        transaction.execute_batch(
-            "ALTER TABLE display_capture_settings
-                ADD COLUMN width INTEGER CHECK (width IS NULL OR width > 0);
-
-            ALTER TABLE display_capture_settings
-                ADD COLUMN height INTEGER CHECK (height IS NULL OR height > 0);
-
-            PRAGMA user_version = 6;",
-        )?;
-    }
-    if current_version < 7 {
-        // Audio does not hang off a Scene. A microphone belongs to whoever is
-        // broadcasting, and switching Scenes must not cut it — so these are
-        // their own rows rather than `sources` reached through `scene_items`.
-        //
-        // The two everyone has are seeded, the way a first run already gets
-        // "Scene 1": a mixer with nothing in it teaches the reader nothing,
-        // and these are the two entries an audio mixer is expected to open
-        // with. `device` is null, meaning whichever device the system calls
-        // its default — which follows the user changing it, rather than
-        // pinning whatever was default the day the project was made.
-        transaction.execute_batch(
-            "CREATE TABLE audio_sources (
+CREATE TABLE scenes (
                 id       INTEGER PRIMARY KEY,
                 name     TEXT NOT NULL UNIQUE,
-                kind     TEXT NOT NULL,
-                device   TEXT,
-                gain_db  REAL NOT NULL DEFAULT 0,
-                muted    INTEGER NOT NULL DEFAULT 0,
                 position INTEGER NOT NULL
             );
 
-            CREATE INDEX audio_sources_position_idx ON audio_sources(position);
-
-            INSERT INTO audio_sources (name, kind, device, gain_db, muted, position)
-            VALUES ('Desktop Audio', 'output', NULL, 0, 0, 0),
-                   ('Microphone',    'input',  NULL, 0, 0, 1);
-
-            PRAGMA user_version = 7;",
-        )?;
-    }
-    if current_version < 8 {
-        // Strokes live in a table of their own rather than a blob on the
-        // settings row: a Drawing gains one per gesture and loses one per
-        // undo, and a row apiece is what makes those an insert and a delete
-        // instead of a rewrite of everything drawn so far.
-        //
-        // `points` is the pairs packed as little-endian `f32`, two per point.
-        // A stroke is a few hundred of them at most and they are only ever
-        // read or written whole, so a column of numbers would buy nothing for
-        // the rows it would cost.
-        transaction.execute_batch(
-            "CREATE TABLE drawing_source_settings (
-                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                width     INTEGER NOT NULL CHECK (width > 0),
-                height    INTEGER NOT NULL CHECK (height > 0)
+CREATE TABLE sources (
+                id            INTEGER PRIMARY KEY,
+                name          TEXT NOT NULL UNIQUE,
+                kind          TEXT NOT NULL,
+                settings_json TEXT NOT NULL DEFAULT '{}'
             );
 
-            CREATE TABLE drawing_strokes (
-                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-                ordinal   INTEGER NOT NULL,
-                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
-                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
-                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
-                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255),
-                width     REAL NOT NULL CHECK (width > 0),
-                points    BLOB NOT NULL,
-                PRIMARY KEY (source_id, ordinal)
+CREATE TABLE video_capture_settings (
+                source_id             INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                device                TEXT NOT NULL,
+                device_name           TEXT NOT NULL,
+                mode_width            INTEGER,
+                mode_height           INTEGER,
+                mode_rate_numerator   INTEGER,
+                mode_rate_denominator INTEGER,
+                width                 INTEGER,
+                height                INTEGER
             );
 
-            PRAGMA user_version = 8;",
-        )?;
-    }
-    if current_version < 9 {
-        // A Window Capture, shaped like a Display Capture and for the same
-        // reason: two platforms that cannot produce each other's answer.
-        //
-        // Windows and X11 identify the window by the pair a person reads off
-        // a task bar — the owning executable and the title — because the
-        // handle itself is only meaningful inside the session that issued it.
-        // Wayland's portal names nothing and hands back a restore token.
-        //
-        // The size is the window's outer size when it was picked. Nullable
-        // because nothing guarantees a picker reported one, and a hint either
-        // way: a window is resized by whoever is using it.
-        transaction.execute_batch(
-            "CREATE TABLE window_capture_settings (
+CREATE TABLE window_capture_settings (
                 source_id     INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
                 target_kind   TEXT NOT NULL CHECK (target_kind IN ('window', 'portal')),
                 process       TEXT,
@@ -254,194 +179,49 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
                 )
             );
 
-            PRAGMA user_version = 9;",
-        )?;
+CREATE INDEX audio_sources_position_idx ON audio_sources(position);
+
+CREATE INDEX scene_items_scene_z_idx
+            ON scene_items(scene_id, z_index DESC);
+
+CREATE INDEX scene_items_source_idx
+            ON scene_items(source_id);
+
+CREATE INDEX scenes_position_idx ON scenes(position);
+INSERT INTO scenes (name, position) VALUES ('Scene 1', 0);
+INSERT INTO app_state (id, selected_scene_id)
+VALUES (1, last_insert_rowid());
+
+INSERT INTO audio_sources (name, kind, device, gain_db, muted, position)
+VALUES ('Desktop Audio', 'output', NULL, 0, 0, 0),
+       ('Microphone',    'input',  NULL, 0, 0, 1);
+
+PRAGMA user_version = 17;
+
+"#;
+
+pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
+    let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current_version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    // Zero is a database that does not exist yet, which every new project
+    // starts as. Anything between that and the baseline was made by a build
+    // that predates the first release, and the steps that would have carried
+    // it forward are gone — so it is refused by name rather than opened into
+    // a schema half of it does not have.
+    if current_version > 0 && current_version < BASELINE_VERSION {
+        return Err(format!(
+            "this project was made by a build of obs-rs from before 0.1.0 \
+             (schema {current_version}); the oldest that can be opened is \
+             {BASELINE_VERSION}"
+        )
+        .into());
     }
 
-    if current_version < 10 {
-        // The path is stored as it was picked and is never resolved to
-        // anything else: a file that has moved is an ordinary state the
-        // Source waits out, the same way a closed window is, so there is
-        // nothing here to keep current.
-        //
-        // The size is the video stream's own, read when the file was picked.
-        // Nullable because a file with no video stream, or one this machine
-        // cannot demux, still becomes a Source.
-        //
-        // `has_audio` is read at the same moment and for the same reason: the
-        // Audio Mixer dock has to know whether to draw a channel before
-        // anything is open. `gain_db` and `muted` are that channel's fader
-        // and button, per Source the way a device's are per device.
-        transaction.execute_batch(
-            "CREATE TABLE media_file_settings (
-                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                path      TEXT NOT NULL,
-                looping   INTEGER NOT NULL CHECK (looping IN (0, 1)),
-                width     INTEGER,
-                height    INTEGER,
-                has_audio INTEGER NOT NULL CHECK (has_audio IN (0, 1)),
-                gain_db   REAL NOT NULL,
-                muted     INTEGER NOT NULL CHECK (muted IN (0, 1))
-            );
-
-            PRAGMA user_version = 10;",
-        )?;
-    }
-
-    if current_version < 11 {
-        // A still picture: the path as it was picked, and the size it was
-        // read at. Nullable for the same reason a media file's is — a file
-        // this machine cannot decode still becomes a Source, and says so
-        // where that happens.
-        transaction.execute_batch(
-            "CREATE TABLE image_source_settings (
-                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                path      TEXT NOT NULL,
-                width     INTEGER,
-                height    INTEGER
-            );
-
-            PRAGMA user_version = 11;",
-        )?;
-    }
-
-    if current_version < 12 {
-        // What a media file's progress bar is drawn against, and whether it
-        // is stopped where it is. Added rather than folded into the table
-        // above because that version has shipped.
-        //
-        // `duration_us` is nullable: a container that does not say how long
-        // it is leaves the bar without a scale, which is a state to draw
-        // rather than a fault. Existing rows are files nobody was asked
-        // about, so they get it too, and it is read again the next time one
-        // is picked.
-        transaction.execute_batch(
-            "ALTER TABLE media_file_settings ADD COLUMN duration_us INTEGER;
-             ALTER TABLE media_file_settings
-                ADD COLUMN paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1));
-
-            PRAGMA user_version = 12;",
-        )?;
-    }
-
-    if current_version < 13 {
-        // A live network stream: the address as it was typed, how the session
-        // carries it, and how long to wait before connecting again when it
-        // stops. `reconnect_seconds` is nullable rather than zero-for-off —
-        // zero is a legitimate figure a user could ask for and "never" is not
-        // a duration, so the absence is stored as absence. The size is
-        // nullable for the same reason a media file's is: an address that was
-        // not answering yet still becomes a Source.
-        transaction.execute_batch(
-            "CREATE TABLE rtsp_source_settings (
-                source_id         INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                url               TEXT NOT NULL,
-                transport         TEXT NOT NULL CHECK (transport IN ('tcp', 'udp')),
-                reconnect_seconds INTEGER CHECK (reconnect_seconds > 0),
-                width             INTEGER,
-                height            INTEGER,
-                has_audio         INTEGER NOT NULL CHECK (has_audio IN (0, 1)),
-                gain_db           REAL NOT NULL,
-                muted             INTEGER NOT NULL CHECK (muted IN (0, 1))
-            );
-
-            PRAGMA user_version = 13;",
-        )?;
-    }
-
-    if current_version < 14 {
-        // Whether a source is played back to the person running obs-rs, and
-        // whether it still reaches the recording.
-        //
-        // One column rather than two flags, because the two are not
-        // independent in the way a pair of booleans would suggest: there is
-        // no fourth state. Not monitored and not recorded is a source that
-        // does nothing, which is what deleting it is for.
-        //
-        // Every existing row gets `off`, which is what they have been doing
-        // all along — nothing here was ever played back.
-        transaction.execute_batch(
-            "ALTER TABLE audio_sources
-                ADD COLUMN monitor TEXT NOT NULL DEFAULT 'off'
-                CHECK (monitor IN ('off', 'only', 'both'));
-
-            PRAGMA user_version = 14;",
-        )?;
-    }
-    if current_version < 15 {
-        // The same three states a device channel has, on a file's own sound.
-        // Its own column rather than a shared one because a media file's
-        // settings are a SceneItem's Source and an audio source's are the
-        // mixer's — two tables that have never had a row in common.
-        //
-        // Existing rows get `off`, which is what they have been: a file's
-        // sound reached the recording and nothing else.
-        transaction.execute_batch(
-            "ALTER TABLE media_file_settings
-                ADD COLUMN monitor TEXT NOT NULL DEFAULT 'off'
-                CHECK (monitor IN ('off', 'only', 'both'));
-
-            PRAGMA user_version = 15;",
-        )?;
-    }
-    if current_version < 16 {
-        // Three states became one flag, on both tables that had them.
-        //
-        // "Heard" and "recorded" are two questions everywhere except here.
-        // obs-rs monitors by playing and captures the desktop by listening to
-        // what is played, so a source kept out of the recording and sent to
-        // the speakers comes back in through Desktop Audio — late, and having
-        // been through a speaker. The state that promised otherwise could
-        // only keep the promise on a machine monitoring to an endpoint
-        // nothing captures.
-        //
-        // Anything that was monitored at all stays monitored, which is the
-        // half that was always true.
-        transaction.execute_batch(
-            "ALTER TABLE audio_sources
-                ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0
-                CHECK (monitored IN (0, 1));
-            UPDATE audio_sources SET monitored = (monitor <> 'off');
-            ALTER TABLE audio_sources DROP COLUMN monitor;
-
-            ALTER TABLE media_file_settings
-                ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0
-                CHECK (monitored IN (0, 1));
-            UPDATE media_file_settings SET monitored = (monitor <> 'off');
-            ALTER TABLE media_file_settings DROP COLUMN monitor;
-
-            PRAGMA user_version = 16;",
-        )?;
-    }
-    if current_version < 17 {
-        // A camera: the device by the only identity that survives a restart,
-        // the name it had when it was picked, and the mode to ask it for.
-        //
-        // The name is stored beside the link rather than resolved, so a
-        // camera that is unplugged is still shown as itself instead of as a
-        // device path — the same reason a window capture stores the process
-        // and title it was picked by.
-        //
-        // The mode is four nullable columns rather than one string: it is a
-        // size and a fraction, both of which are compared against what the
-        // device offers, and a rate is genuinely `30000/1001` on some
-        // cameras. All four absent means "whichever the camera offers
-        // first", which is a real choice and not a missing value.
-        transaction.execute_batch(
-            "CREATE TABLE video_capture_settings (
-                source_id             INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                device                TEXT NOT NULL,
-                device_name           TEXT NOT NULL,
-                mode_width            INTEGER,
-                mode_height           INTEGER,
-                mode_rate_numerator   INTEGER,
-                mode_rate_denominator INTEGER,
-                width                 INTEGER,
-                height                INTEGER
-            );
-
-            PRAGMA user_version = 17;",
-        )?;
+    let transaction = connection.transaction()?;
+    if current_version == 0 {
+        transaction.execute_batch(BASELINE)?;
     }
     if current_version < 18 {
         // Filters, and the first one: a chroma key.
@@ -498,7 +278,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_one_database_is_upgraded_without_losing_scenes() {
+    fn a_new_project_comes_up_at_the_current_schema() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run(&mut connection).unwrap();
+
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        let scene_name: String = connection
+            .query_row("SELECT name FROM scenes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(scene_name, "Scene 1", "a project opens with a Scene");
+    }
+
+    /// What every database in the field is: the baseline alone, exactly as
+    /// 0.1.0 left it, with nothing after it yet.
+    #[test]
+    fn a_project_from_the_first_release_is_carried_forward() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(BASELINE).unwrap();
+        assert_eq!(
+            connection
+                .query_row::<i64, _, _>("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap(),
+            BASELINE_VERSION,
+            "the baseline is what 0.1.0 shipped"
+        );
+
+        run(&mut connection).unwrap();
+
+        assert_eq!(
+            connection
+                .query_row::<i64, _, _>("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        // The Scene it already had is still there, and the tables it did not
+        // have now are.
+        assert_eq!(
+            connection
+                .query_row::<i64, _, _>("SELECT COUNT(*) FROM scenes", [], |row| row.get(0))
+                .unwrap(),
+            1
+        );
+        for table in ["source_filters", "chroma_key_filter_settings"] {
+            assert_eq!(
+                connection
+                    .query_row::<i64, _, _>(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [table],
+                        |row| row.get(0)
+                    )
+                    .unwrap(),
+                1,
+                "{table} should have been added"
+            );
+        }
+    }
+
+    /// The cost of collapsing seventeen steps into one, said out loud: a
+    /// database from before the first release cannot be carried forward, and
+    /// is refused by name rather than opened into a schema half of it does
+    /// not have.
+    #[test]
+    fn a_project_older_than_the_first_release_is_refused() {
         let mut connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
@@ -507,39 +352,24 @@ mod tests {
                     name     TEXT NOT NULL UNIQUE,
                     position INTEGER NOT NULL
                 );
-                INSERT INTO scenes (name, position) VALUES ('Existing Scene', 0);
                 PRAGMA user_version = 1;",
             )
             .unwrap();
 
-        run(&mut connection).unwrap();
+        let error = run(&mut connection).expect_err("a pre-release schema cannot be upgraded");
+        let message = error.to_string();
+        assert!(
+            message.contains("0.1.0") && message.contains("schema 1"),
+            "the message has to say which version made it: {message}"
+        );
 
-        let version: i64 = connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        let scene_name: String = connection
-            .query_row("SELECT name FROM scenes", [], |row| row.get(0))
-            .unwrap();
-        let source_tables_exist: bool = connection
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM sqlite_master
-                    WHERE type = 'table' AND name = 'sources'
-                ) AND EXISTS(
-                    SELECT 1 FROM sqlite_master
-                    WHERE type = 'table' AND name = 'color_source_settings'
-                ) AND EXISTS(
-                    SELECT 1 FROM sqlite_master
-                    WHERE type = 'table' AND name = 'display_capture_settings'
-                )",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(scene_name, "Existing Scene");
-        assert!(source_tables_exist);
+        assert_eq!(
+            connection
+                .query_row::<i64, _, _>("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap(),
+            1,
+            "and it must be left as it was found, not half-migrated"
+        );
     }
 
     /// Sources that existed before monitoring did have never been played
@@ -561,141 +391,6 @@ mod tests {
 
         assert!(!monitored.is_empty(), "the schema ships two audio sources");
         assert!(monitored.iter().all(|on| *on == 0), "got {monitored:?}");
-    }
-
-    /// The three states collapsed into one flag: anything that was heard at
-    /// all stays heard, which is the half of the promise that was always
-    /// kept. The other half — "and left out of the recording" — could only be
-    /// kept on a machine monitoring to an endpoint nothing captures.
-    ///
-    /// Built at version 15 by hand rather than run up to it, because `run`
-    /// goes all the way and every row it would leave says `off`: the mapping
-    /// this is here to check would never be exercised.
-    #[test]
-    fn every_monitored_state_becomes_the_flag_it_meant() {
-        let mut connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE audio_sources (
-                    id       INTEGER PRIMARY KEY,
-                    name     TEXT NOT NULL UNIQUE,
-                    kind     TEXT NOT NULL,
-                    device   TEXT,
-                    gain_db  REAL NOT NULL DEFAULT 0,
-                    muted    INTEGER NOT NULL DEFAULT 0,
-                    position INTEGER NOT NULL,
-                    monitor  TEXT NOT NULL DEFAULT 'off'
-                             CHECK (monitor IN ('off', 'only', 'both'))
-                );
-                INSERT INTO audio_sources (name, kind, position, monitor)
-                VALUES ('Off',  'input', 0, 'off'),
-                       ('Only', 'input', 1, 'only'),
-                       ('Both', 'input', 2, 'both');
-
-                CREATE TABLE media_file_settings (
-                    source_id INTEGER PRIMARY KEY,
-                    monitor   TEXT NOT NULL DEFAULT 'off'
-                              CHECK (monitor IN ('off', 'only', 'both'))
-                );
-                INSERT INTO media_file_settings (source_id, monitor)
-                VALUES (1, 'off'), (2, 'only'), (3, 'both');
-
-                PRAGMA user_version = 15;",
-            )
-            .unwrap();
-
-        run(&mut connection).unwrap();
-
-        let monitored: Vec<(String, i64)> = connection
-            .prepare("SELECT name, monitored FROM audio_sources ORDER BY position")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-
-        assert_eq!(
-            monitored,
-            vec![
-                ("Off".to_owned(), 0),
-                ("Only".to_owned(), 1),
-                ("Both".to_owned(), 1),
-            ]
-        );
-
-        // The same mapping on the other table that had the states, since one
-        // migration does both and either half could have been forgotten.
-        let files: Vec<i64> = connection
-            .prepare("SELECT monitored FROM media_file_settings ORDER BY source_id")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        assert_eq!(files, vec![0, 1, 1]);
-
-        // And the column the states lived in is gone, so nothing can write
-        // one again by accident.
-        assert!(
-            connection
-                .execute("UPDATE audio_sources SET monitor = 'both'", [])
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn version_four_display_capture_rows_split_into_named_and_portal_targets() {
-        let mut connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE sources (
-                    id            INTEGER PRIMARY KEY,
-                    name          TEXT NOT NULL UNIQUE,
-                    kind          TEXT NOT NULL,
-                    settings_json TEXT NOT NULL DEFAULT '{}'
-                );
-                CREATE TABLE display_capture_settings (
-                    source_id    INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
-                    monitor_name TEXT NOT NULL
-                );
-                INSERT INTO sources (id, name, kind) VALUES
-                    (1, 'Display Capture', 'display_capture'),
-                    (2, 'Display Capture 2', 'display_capture'),
-                    (3, 'Display Capture 3', 'display_capture');
-                INSERT INTO display_capture_settings (source_id, monitor_name) VALUES
-                    (1, 'DP-1'),
-                    (2, 'portal: 42'),
-                    (3, 'portal-node: 7');
-                PRAGMA user_version = 4;",
-            )
-            .unwrap();
-
-        run(&mut connection).unwrap();
-
-        let mut statement = connection
-            .prepare(
-                "SELECT target_kind, monitor_name, restore_token
-                 FROM display_capture_settings
-                 ORDER BY source_id",
-            )
-            .unwrap();
-        let rows: Vec<(String, Option<String>, Option<String>)> = statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-
-        // A real display name survives untouched; both placeholder spellings
-        // become portal targets that have to prompt again, since a stream id
-        // was never something a later session could reopen.
-        assert_eq!(
-            rows,
-            vec![
-                ("monitor".to_owned(), Some("DP-1".to_owned()), None),
-                ("portal".to_owned(), None, None),
-                ("portal".to_owned(), None, None),
-            ]
-        );
     }
 
     #[test]
