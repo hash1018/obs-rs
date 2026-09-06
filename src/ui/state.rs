@@ -1,5 +1,6 @@
 use super::docking::DockLayout;
 use super::editor::SceneEditorState;
+use super::panels::filters::FiltersPanelState;
 use super::panels::scenes::ScenesPanelState;
 use super::panels::sources::SourcesPanelState;
 use super::preview::PreviewViewState;
@@ -16,6 +17,7 @@ pub struct UiState {
     pub(super) scenes: ScenesPanelState,
     pub(super) editor: SceneEditorState,
     pub(super) sources: SourcesPanelState,
+    pub(super) filters: FiltersPanelState,
     pub(super) preview: PreviewViewState,
     pub(super) settings: SettingsDialogState,
 }

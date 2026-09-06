@@ -16,6 +16,7 @@ pub enum DockPanel {
     AudioMixer,
     Controls,
     Properties,
+    Filters,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,6 +99,7 @@ impl Default for DockLayout {
                         DockPanel::Scenes,
                         DockPanel::Sources,
                         DockPanel::Properties,
+                        DockPanel::Filters,
                         DockPanel::AudioMixer,
                         DockPanel::Controls,
                     ]),
@@ -109,6 +111,9 @@ impl Default for DockLayout {
                 (DockPanel::Scenes, DockState::open()),
                 (DockPanel::Sources, DockState::open()),
                 (DockPanel::Properties, DockState::open()),
+                // Closed by default: it is empty for every Source that has no
+                // filters, which is every Source until one is added.
+                (DockPanel::Filters, DockState::closed()),
                 (DockPanel::AudioMixer, DockState::open()),
                 (DockPanel::Controls, DockState::open()),
             ]),
@@ -122,6 +127,15 @@ impl DockState {
         Self {
             drag_active: false,
             open: true,
+        }
+    }
+
+    /// Present in the arrangement but not shown, which is how a dock that is
+    /// empty for most projects starts.
+    fn closed() -> Self {
+        Self {
+            drag_active: false,
+            open: false,
         }
     }
 }
@@ -142,6 +156,10 @@ impl DockPanel {
             // the most to say comes to. Below this the list scrolls rather
             // than the panel losing rows off the bottom.
             Self::Properties => egui::vec2(180.0, 140.0),
+            // A short list, its four buttons, and the settings of whichever
+            // row is open below them — which for a chroma key is a dropdown,
+            // a colour well and two sliders.
+            Self::Filters => egui::vec2(200.0, 200.0),
         }
     }
 }
@@ -651,6 +669,12 @@ mod tests {
 
     /// Weights are written normalized, and a hand-edited zero must not make
     /// `normalized_weights` divide by nothing.
+    ///
+    /// Normalized across the panels that are *shown*, which is what
+    /// `placement` computes. A closed one keeps its own weight untouched, so
+    /// that reopening it restores the share it had rather than a fraction of
+    /// a set it was not in — and so summing every panel in a region does not
+    /// come to one whenever any of them is closed.
     #[test]
     fn weights_are_written_as_fractions_and_a_zero_is_floored() {
         let layout = DockLayout::default();
@@ -660,8 +684,20 @@ mod tests {
             .iter()
             .find(|region| region.region == DockRegionId::Left)
             .expect("the left region is always written");
-        let total: f32 = left.panels.iter().map(|placement| placement.weight).sum();
+        let total: f32 = left
+            .panels
+            .iter()
+            .filter(|placement| placement.open)
+            .map(|placement| placement.weight)
+            .sum();
         assert!((total - 1.0).abs() < 1e-5, "weights summed to {total}");
+        assert!(
+            left.panels
+                .iter()
+                .filter(|placement| !placement.open)
+                .all(|placement| placement.weight > 0.0),
+            "a closed panel must keep a weight to come back to"
+        );
 
         let mut zeroed = saved.clone();
         for region in &mut zeroed.regions {

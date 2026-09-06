@@ -73,8 +73,11 @@ pub fn show(
     docking::show(
         ui,
         &mut state.dock_layout,
-        &mut state.scenes,
-        &mut state.sources,
+        docking::PanelStates {
+            scenes: &mut state.scenes,
+            sources: &mut state.sources,
+            filters: &mut state.filters,
+        },
         &mut state.editor,
         resources,
         actions,

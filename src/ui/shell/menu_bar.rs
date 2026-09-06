@@ -64,6 +64,12 @@ pub fn show(
                         dock_option(
                             ui,
                             state,
+                            DockPanel::Filters,
+                            i18n.text(TextKey::DockFilters),
+                        );
+                        dock_option(
+                            ui,
+                            state,
                             DockPanel::AudioMixer,
                             i18n.text(TextKey::DockAudioMixer),
                         );

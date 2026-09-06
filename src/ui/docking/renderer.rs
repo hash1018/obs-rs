@@ -9,8 +9,6 @@ use crate::i18n::{LocalizationManager, TextKey};
 use crate::snapshots::Snapshots;
 use crate::ui::editor::SceneEditorState;
 use crate::ui::{UiAction, UiResources, panels};
-use panels::scenes::ScenesPanelState;
-use panels::sources::SourcesPanelState;
 
 const SIDE_DEFAULT_SIZE: f32 = 260.0;
 const SIDE_MIN_SIZE: f32 = 180.0;
@@ -44,8 +42,7 @@ struct RegionOutput {
 }
 
 struct DockContent<'a> {
-    scenes_state: &'a mut ScenesPanelState,
-    sources_state: &'a mut SourcesPanelState,
+    panels: super::PanelStates<'a>,
     editor: &'a mut SceneEditorState,
     snapshots: &'a Snapshots,
     audio_devices: &'a [AudioDeviceTarget],
@@ -65,8 +62,7 @@ enum DropIndicator {
 pub(super) fn show(
     ui: &mut egui::Ui,
     layout: &mut DockLayout,
-    scenes_state: &mut ScenesPanelState,
-    sources_state: &mut SourcesPanelState,
+    panels: super::PanelStates<'_>,
     editor: &mut SceneEditorState,
     resources: &UiResources<'_>,
     actions: &mut Vec<UiAction>,
@@ -76,8 +72,7 @@ pub(super) fn show(
     let mut region_rects = HashMap::new();
     let mut pending_move = None;
     let mut content = DockContent {
-        scenes_state,
-        sources_state,
+        panels,
         editor,
         snapshots: resources.snapshots,
         audio_devices: resources.audio_devices,
@@ -251,6 +246,7 @@ fn show_panel(
             DockPanel::AudioMixer => TextKey::DockAudioMixer,
             DockPanel::Controls => TextKey::DockControls,
             DockPanel::Properties => TextKey::DockProperties,
+            DockPanel::Filters => TextKey::DockFilters,
         }),
         egui::TextStyle::Heading.resolve(child.style()),
         child.visuals().strong_text_color(),
@@ -261,7 +257,7 @@ fn show_panel(
         DockPanel::Scenes => {
             panels::scenes::show(
                 &mut child,
-                content.scenes_state,
+                content.panels.scenes,
                 &content.snapshots.scenes,
                 content.i18n,
                 content.actions,
@@ -270,7 +266,7 @@ fn show_panel(
         DockPanel::Sources => {
             panels::sources::show(
                 &mut child,
-                content.sources_state,
+                content.panels.sources,
                 content.editor,
                 &content.snapshots.sources,
                 content.snapshots.status.source_status.as_deref(),
@@ -294,6 +290,16 @@ fn show_panel(
             panels::controls::show(
                 &mut child,
                 &content.snapshots.status,
+                content.i18n,
+                content.actions,
+            );
+        }
+        DockPanel::Filters => {
+            panels::filters::show(
+                &mut child,
+                content.editor,
+                &content.snapshots.sources,
+                content.panels.filters,
                 content.i18n,
                 content.actions,
             );
