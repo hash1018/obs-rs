@@ -124,6 +124,7 @@ fn opened(
         layer,
         name,
         refreshed_token: None,
+        filters: Vec::new(),
         showing: true,
         running: true,
         // Held rather than dropped: an `AppSource` runs only while a handle to

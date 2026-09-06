@@ -340,9 +340,7 @@ fn sources_snapshot(
                 name,
                 kind,
                 settings,
-                // Not in the snapshot yet: nothing on the UI side reads a
-                // filter until the dock that shows them exists.
-                filters: _,
+                filters,
             } = source;
             debug_assert!(z_index >= 0);
             SceneItemSnapshot {
@@ -351,6 +349,7 @@ fn sources_snapshot(
                 kind,
                 source_size: settings.source_size(canvas),
                 settings,
+                filters,
                 visible,
                 locked,
                 transform,

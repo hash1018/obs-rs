@@ -9,7 +9,7 @@ use media_pp::pipeline::Pipeline;
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenSource, input_name};
+use crate::engine::source::{OpenSource, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Frames held between the camera and the upload — see the Windows half,
@@ -45,14 +45,22 @@ pub(in crate::engine) fn open(
         format.width,
         format.height,
     )?;
+    // Filters work in BGRA, so a camera with any gets one conversion in
+    // front of them and its layer is BGRA from there. One with none is
+    // untouched, NV12 all the way to the compositor as before.
+    let (filter_chain, filters) = filters::build(
+        &name,
+        device,
+        filters::ChainFormat::Nv12,
+        &item.filters,
+        format.width,
+        format.height,
+    )?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context
-            .branch()
-            .queue("camera", QUEUE_DEPTH)
-            .pipe(upload)
-            .to(sink)?;
+        let chain = context.branch().queue("camera", QUEUE_DEPTH).pipe(upload);
+        let branch = filter_chain.append(chain).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -65,6 +73,7 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
+        filters,
         showing: true,
         running: true,
         pushed: None,

@@ -247,6 +247,7 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
+        filters: Vec::new(),
         // The display layout can change between runs, so the size a picker
         // reported when the item was added is a hint rather than a fact —
         // this is what duplication actually opened.

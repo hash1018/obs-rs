@@ -4,13 +4,15 @@ use media_pp::elements::{
     D3d11Upload, D3d11VideoCompositorHandle, D3d11VideoCompositorInput, MfCaptureFormat,
     MfCaptureOptions, MfCaptureSource, MfDevice, VideoLayer,
 };
+use std::sync::{Arc, Mutex};
+
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
-use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenSource, input_name};
+use crate::engine::source::{OpenSource, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Frames held between the camera and the upload.
@@ -25,6 +27,7 @@ const QUEUE_DEPTH: usize = 2;
 /// parent.
 pub(in crate::engine) fn open(
     device: &ID3D11Device,
+    d3d_context: Arc<Mutex<ID3D11DeviceContext>>,
     handle: &D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
@@ -39,23 +42,31 @@ pub(in crate::engine) fn open(
     };
 
     // NV12 in, and the compositor converts it on the GPU exactly as it does
-    // for a hardware-decoded video file, so nothing converts on the way.
+    // for a hardware-decoded video file, so an unfiltered camera converts
+    // nothing on the way. One with filters does: they work in BGRA, and
+    // `filters::build` puts the conversion in front of them.
     let upload = D3d11Upload::new(
         format!("{name}-upload"),
         device,
         format.width,
         format.height,
     );
+    let (filter_chain, filters) = filters::build(
+        &name,
+        device,
+        d3d_context,
+        filters::ChainFormat::Nv12,
+        &item.filters,
+        format.width,
+        format.height,
+    )?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context
-            .branch()
-            .queue("camera", QUEUE_DEPTH)
-            .pipe(upload)
-            .to(sink)?;
+        let chain = context.branch().queue("camera", QUEUE_DEPTH).pipe(upload);
+        let branch = filter_chain.append(chain).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -67,6 +78,7 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
+        filters,
         // What the camera negotiated, which is not always the mode that was
         // asked for — see `start`, where a stored mode the device no longer
         // offers falls back to its own.

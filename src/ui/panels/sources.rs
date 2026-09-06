@@ -1546,6 +1546,7 @@ mod tests {
 
     fn item(id: i64, name: &str) -> SceneItemSnapshot {
         SceneItemSnapshot {
+            filters: Vec::new(),
             peak_db: None,
             position: None,
             id: SceneItemId(id),

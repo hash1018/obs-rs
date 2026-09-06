@@ -834,6 +834,7 @@ mod tests {
 
     fn media_item(duration: Option<std::time::Duration>) -> SceneItemSnapshot {
         SceneItemSnapshot {
+            filters: Vec::new(),
             id: SceneItemId(1),
             name: "Clip".to_owned(),
             kind: SourceKind::MediaFile,

@@ -284,9 +284,13 @@ impl Backend {
             SourceKind::Rtsp => {
                 source::rtsp::open(&self.device, &self.compositor, mixer, item, layer)
             }
-            SourceKind::VideoCapture => {
-                source::video_capture::open(&self.device, &self.compositor, item, layer)
-            }
+            SourceKind::VideoCapture => source::video_capture::open(
+                &self.device,
+                self.context.clone(),
+                &self.compositor,
+                item,
+                layer,
+            ),
             SourceKind::Image => source::image::open(&self.device, &self.compositor, item, layer),
             SourceKind::Color => {
                 source::color::open(&self.device, &self.compositor, item, layer).map(Some)

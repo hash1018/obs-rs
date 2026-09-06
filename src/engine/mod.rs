@@ -41,7 +41,9 @@ use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 
 use backend::{Backend, BackendError};
-use source::{OpenSource, PushedContent, push_content, refresh_media_file, refresh_pushed};
+use source::{
+    OpenSource, PushedContent, filters, push_content, refresh_media_file, refresh_pushed,
+};
 
 /// The rate to assume when the compositor cannot be asked — it is gone, or
 /// there is no backend at all.
@@ -1600,6 +1602,25 @@ fn retry_missing(
 }
 
 /// Brings the running Sources in line with what the project now holds.
+/// Applies a Source's filters as the project now has them, and answers
+/// whether that needed more than applying.
+///
+/// Settings and the enable flag reach the running elements through the
+/// handles kept beside them, which is the whole reason those are kept: a
+/// slider must not reopen a camera, and on Wayland a reopen is a portal
+/// dialog. Adding, removing or reordering one is a different question — a
+/// chain is only assembled when a Source is opened, so that answer is `true`
+/// and the Source is rebuilt.
+fn refresh_filters(source: &OpenSource, item: &SceneItemSnapshot) -> bool {
+    if filters::running_shape(&source.filters) != filters::shape(&item.filters) {
+        return true;
+    }
+    for (open, stored) in source.filters.iter().zip(&item.filters) {
+        open.apply(stored);
+    }
+    false
+}
+
 fn reconcile(
     engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
@@ -1607,6 +1628,10 @@ fn reconcile(
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
 ) {
+    // Sources whose filter chain is no longer the one they were opened with.
+    // Collected rather than reopened here: the arm that notices holds a
+    // mutable borrow of `open`, and replacing an entry needs another.
+    let mut rebuild: Vec<SceneItemId> = Vec::new();
     let count = snapshot.items.len();
     for (index, item) in snapshot.items.iter().enumerate() {
         // The snapshot is ordered front-most first, and the compositor draws
@@ -1617,6 +1642,9 @@ fn reconcile(
                 let _ = source.layer.set_layer(layer);
                 refresh_pushed(source, item);
                 refresh_media_file(source, item, monitor.as_ref());
+                if refresh_filters(source, item) {
+                    rebuild.push(item.id);
+                }
             }
             Some(SourceState::Failed | SourceState::Disconnected | SourceState::Ended) => {}
             // Already on its way, and asking again would only open a second
@@ -1626,6 +1654,13 @@ fn reconcile(
                 request_open(engine, mixer, open, item, layer);
             }
         }
+    }
+
+    for item_id in rebuild {
+        // Dropping the old one is what `insert` does here, and `Missing` in
+        // the past is what makes the next pass open the new chain — the same
+        // two steps `EngineCommand::ReopenSource` takes.
+        open.insert(item_id, SourceState::Missing(Instant::now()));
     }
 
     // A Source whose item merely left the Scene is kept, stopped: coming back
@@ -1830,6 +1865,7 @@ mod tests {
 
     fn window_item(id: i64, target: WindowCaptureTarget) -> SceneItemSnapshot {
         SceneItemSnapshot {
+            filters: Vec::new(),
             peak_db: None,
             position: None,
             id: SceneItemId(id),

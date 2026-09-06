@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::domain::{
-    Crop, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings, Transform,
+    Crop, Filter, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings, Transform,
 };
 
 #[derive(Clone)]
@@ -107,6 +107,13 @@ pub struct SceneItemSnapshot {
     pub name: String,
     pub kind: SourceKind,
     pub settings: SourceSettings,
+    /// What is done to this Source's picture before it is composited, in the
+    /// order it is done.
+    ///
+    /// The Source's, not the item's, so two items standing for one Source
+    /// carry the same list — see [`crate::domain::Filter`]. Empty for most
+    /// Sources, and cheap to clone when it is.
+    pub filters: Vec<Filter>,
     /// The Source's own size in Canvas units, before `transform` scales it.
     pub source_size: [f32; 2],
     pub visible: bool,
@@ -136,6 +143,7 @@ mod tests {
 
     fn item(source_size: [f32; 2], crop: Crop) -> SceneItemSnapshot {
         SceneItemSnapshot {
+            filters: Vec::new(),
             id: SceneItemId(1),
             name: "Drawing".into(),
             kind: SourceKind::Drawing,

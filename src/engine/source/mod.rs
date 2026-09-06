@@ -13,6 +13,7 @@
 pub(in crate::engine) mod color;
 pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
+pub(in crate::engine) mod filters;
 pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod rtsp;
@@ -92,6 +93,15 @@ pub(in crate::engine) struct OpenSource {
     pub(in crate::engine) pushed: Option<PushedSurface>,
     /// Set for a media file Source — see [`MediaFile`].
     pub(in crate::engine) media_file: Option<MediaFile>,
+    /// The Source's filters as they are running, in chain order, each with
+    /// the handle that reaches it.
+    ///
+    /// Empty for a Source with none, which is most of them. What is kept
+    /// here is only what can be changed without rebuilding: a filter's
+    /// settings and whether it is on. Adding, removing or reordering one
+    /// changes the chain itself, so `reconcile` reopens the Source instead
+    /// — see [`filters::shape`].
+    pub(in crate::engine) filters: Vec<filters::OpenFilter>,
 }
 
 /// The part of a media file Source that can be changed while it plays.

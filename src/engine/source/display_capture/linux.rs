@@ -109,6 +109,7 @@ pub(in crate::engine) fn open(
             layer,
             name,
             refreshed_token,
+            filters: Vec::new(),
             showing: true,
             running: true,
             pushed: None,
