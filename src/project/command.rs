@@ -1,7 +1,8 @@
 use crate::domain::{
-    AudioSourceId, Crop, DisplayCaptureSettings, ImageSourceSettings, MediaFileSettings,
-    RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, Stroke, Transform,
-    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings,
+    AudioSourceId, ChromaKeySettings, Crop, DisplayCaptureSettings, FilterId, FilterKind,
+    ImageSourceSettings, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId,
+    SceneItemId, SourceKind, Stroke, Transform, VideoCaptureMode, VideoCaptureSettings,
+    WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +72,38 @@ pub enum SourceCommand {
     /// every Scene the Source appears in — which is what sharing one is for.
     Rename(SceneItemId, String),
     SetLocked(SceneItemId, bool),
+    /// Adds a filter to the Source this item stands for.
+    ///
+    /// Through the item for the reason [`SourceCommand::Rename`] is: the
+    /// item is what the user has selected, and the filter lands on the
+    /// Source, so it applies in every Scene that Source appears in.
+    // The Filters dock is what will send these. Until it exists nothing in
+    // the binary constructs them, and this crate is linted with
+    // `-D warnings` — so each carries an allow that its own caller retires.
+    //
+    // `expect` rather than `allow` would say the same thing and remove
+    // itself, but these are constructed in this module's own tests, so it
+    // would go unfulfilled there and warn for the opposite reason.
+    #[allow(dead_code)]
+    AddFilter {
+        scene_item_id: SceneItemId,
+        kind: FilterKind,
+    },
+    /// Filters carry their own identity once they exist, so everything after
+    /// adding one addresses it directly rather than through an item.
+    #[allow(dead_code)]
+    RemoveFilter(FilterId),
+    /// Earlier in the chain, which is nearer the Source and higher in the
+    /// list.
+    #[allow(dead_code)]
+    MoveFilterEarlier(FilterId),
+    #[allow(dead_code)]
+    MoveFilterLater(FilterId),
+    /// Turns a filter off without discarding what it was tuned to.
+    #[allow(dead_code)]
+    SetFilterEnabled(FilterId, bool),
+    #[allow(dead_code)]
+    SetChromaKeySettings(FilterId, ChromaKeySettings),
     /// Replaces the portal token a Display Capture reopens with.
     SetRestoreToken(SceneItemId, Option<String>),
     SetTransform(SceneItemId, Transform),

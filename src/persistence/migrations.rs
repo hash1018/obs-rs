@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -441,6 +441,52 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 17;",
+        )?;
+    }
+    if current_version < 18 {
+        // Filters, and the first one: a chroma key.
+        //
+        // They hang off the Source rather than the SceneItem, which is where
+        // a Transform and a Crop hang. Placing one camera differently in two
+        // Scenes is the point of having it twice; keying its green screen is
+        // a property of what the camera is showing, and wanting that in one
+        // Scene and not another would be wanting two cameras.
+        //
+        // `position` orders them within a Source rather than globally: a
+        // filter chain is applied in order, and the number only has to mean
+        // something next to its siblings. Reordering is the same neighbour
+        // swap `scene_items.z_index` already gets.
+        //
+        // The settings live in their own table, keyed by the filter rather
+        // than by the source, which is the same shape `sources` and its
+        // per-kind settings tables already have one level up. A second kind
+        // of filter is then a table and a `kind` value, not a column added
+        // to a shared one.
+        transaction.execute_batch(
+            "CREATE TABLE source_filters (
+                id        INTEGER PRIMARY KEY,
+                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                position  INTEGER NOT NULL,
+                kind      TEXT NOT NULL,
+                enabled   INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE INDEX source_filters_source_idx
+                ON source_filters(source_id, position);
+
+            CREATE TABLE chroma_key_filter_settings (
+                filter_id  INTEGER PRIMARY KEY
+                           REFERENCES source_filters(id) ON DELETE CASCADE,
+                method     TEXT NOT NULL
+                           CHECK (method IN ('green', 'blue', 'custom')),
+                custom_red   INTEGER NOT NULL,
+                custom_green INTEGER NOT NULL,
+                custom_blue  INTEGER NOT NULL,
+                threshold  REAL NOT NULL,
+                smoothing  REAL NOT NULL
+            );
+
+            PRAGMA user_version = 18;",
         )?;
     }
     transaction.commit()?;

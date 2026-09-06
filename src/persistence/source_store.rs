@@ -11,7 +11,7 @@ use crate::domain::{
     WindowCaptureSettings, WindowCaptureTarget,
 };
 
-use super::PersistenceResult;
+use super::{FilterStore, PersistenceResult};
 
 /// A stroke's points as they are stored: pairs of little-endian `f32`.
 ///
@@ -56,6 +56,18 @@ fn source_of(transaction: &Transaction<'_>, item_id: SceneItemId) -> Persistence
 pub(crate) struct SourceStore;
 
 impl SourceStore {
+    /// Which Source a SceneItem stands for.
+    ///
+    /// Exposed because a filter lands on the Source while the user has
+    /// selected an item, so the caller adding one has an item and needs the
+    /// other half.
+    pub(crate) fn source_of(
+        transaction: &Transaction<'_>,
+        item_id: SceneItemId,
+    ) -> PersistenceResult<SourceId> {
+        source_of(transaction, item_id)
+    }
+
     pub(crate) fn list_for_scene(
         connection: &Connection,
         scene_id: SceneId,
@@ -320,14 +332,23 @@ impl SourceStore {
                         name: row.get(16)?,
                         kind,
                         settings,
+                        // Filled by the second pass below: filters are many
+                        // rows per Source, which the join above cannot carry
+                        // without multiplying every SceneItem by them.
+                        filters: Vec::new(),
                     },
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        let source_ids: Vec<SourceId> = rows.iter().map(|(_, source)| source.id).collect();
+        let filters = FilterStore::for_sources(connection, &source_ids)?;
         for (_, source) in &mut rows {
             if let SourceSettings::Drawing(settings) = &mut source.settings {
                 settings.strokes = Self::strokes(connection, source.id)?;
             }
+            // Cloned rather than taken: one Source can stand behind more than
+            // one SceneItem, and the second one must not come back bare.
+            source.filters = filters.get(&source.id).cloned().unwrap_or_default();
         }
         Ok(rows)
     }

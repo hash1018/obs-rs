@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::SceneCanvas;
+use super::{Filter, SceneCanvas};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceId(pub i64);
@@ -468,4 +468,11 @@ pub struct Source {
     pub name: String,
     pub kind: SourceKind,
     pub settings: SourceSettings,
+    /// What is done to this Source's picture before it reaches the Canvas,
+    /// in the order it is done — see [`Filter`](super::Filter).
+    ///
+    /// On the Source and not on the SceneItem, so a camera used in two
+    /// Scenes is keyed in both. Empty for every kind and every Source that
+    /// has never been given one, which is most of them.
+    pub filters: Vec<Filter>,
 }

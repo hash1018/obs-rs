@@ -2,7 +2,10 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
 use crate::domain::{Scene, SceneItem, Source};
-use crate::persistence::{AudioStore, PersistenceResult, ProjectDatabase, SceneStore, SourceStore};
+use crate::persistence::{
+    AudioStore, FilterNeighbour, FilterStore, PersistenceResult, ProjectDatabase, SceneStore,
+    SourceStore,
+};
 use crate::snapshots::{
     AudioSnapshot, AudioSourceSnapshot, SceneItemSnapshot, SceneSnapshot, ScenesSnapshot,
     SourcesSnapshot,
@@ -246,6 +249,26 @@ fn handle_source_command(
         SourceCommand::SetColor(scene_item_id, rgba) => {
             SourceStore::set_color(transaction, scene_item_id, rgba)
         }
+        SourceCommand::AddFilter {
+            scene_item_id,
+            kind,
+        } => {
+            let source_id = SourceStore::source_of(transaction, scene_item_id)?;
+            FilterStore::add(transaction, source_id, kind).map(|_| ())
+        }
+        SourceCommand::RemoveFilter(filter_id) => FilterStore::remove(transaction, filter_id),
+        SourceCommand::MoveFilterEarlier(filter_id) => {
+            FilterStore::swap_with_neighbour(transaction, filter_id, FilterNeighbour::Earlier)
+        }
+        SourceCommand::MoveFilterLater(filter_id) => {
+            FilterStore::swap_with_neighbour(transaction, filter_id, FilterNeighbour::Later)
+        }
+        SourceCommand::SetFilterEnabled(filter_id, enabled) => {
+            FilterStore::set_enabled(transaction, filter_id, enabled)
+        }
+        SourceCommand::SetChromaKeySettings(filter_id, settings) => {
+            FilterStore::set_chroma_key(transaction, filter_id, settings)
+        }
     })
 }
 
@@ -317,6 +340,9 @@ fn sources_snapshot(
                 name,
                 kind,
                 settings,
+                // Not in the snapshot yet: nothing on the UI side reads a
+                // filter until the dock that shows them exists.
+                filters: _,
             } = source;
             debug_assert!(z_index >= 0);
             SceneItemSnapshot {
@@ -400,6 +426,121 @@ mod tests {
     use super::*;
     use crate::domain::{SourceSettings, Stroke};
 
+    /// The whole filter chain through the commands that make it: added,
+    /// ordered, retuned, turned off and removed, read back from the database
+    /// each time.
+    #[test]
+    fn filter_commands_are_persisted_in_order() {
+        use crate::domain::{
+            ChromaKeyMethod, ChromaKeySettings, FilterKind, FilterSettings, SceneId,
+        };
+        use crate::persistence::{SceneStore, SourceStore};
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(SceneId(1))).unwrap();
+        let item = sources_snapshot(&database, &scene_snapshot(&database).unwrap())
+            .unwrap()
+            .items[0]
+            .id;
+
+        // Filters hang off the Source, and the Scene load is what attaches
+        // them — so reading them back means loading the Scene, which is also
+        // the path the application takes.
+        let filters_now = |database: &ProjectDatabase| {
+            let connection = database.connection();
+            let scene_id = SceneStore::selected_scene_id(connection)
+                .unwrap()
+                .expect("a project opens with a Scene selected");
+            SourceStore::list_for_scene(connection, scene_id).unwrap()[0]
+                .1
+                .filters
+                .clone()
+        };
+
+        assert!(
+            filters_now(&database).is_empty(),
+            "a Source starts with no filters"
+        );
+
+        for _ in 0..2 {
+            handle_source_command(
+                &mut database,
+                SourceCommand::AddFilter {
+                    scene_item_id: item,
+                    kind: FilterKind::ChromaKey,
+                },
+            )
+            .unwrap();
+        }
+        let filters = filters_now(&database);
+        assert_eq!(filters.len(), 2, "both were added");
+        assert!(filters[0].enabled, "and both start on");
+        let (first, second) = (filters[0].id, filters[1].id);
+
+        handle_source_command(&mut database, SourceCommand::MoveFilterEarlier(second)).unwrap();
+        assert_eq!(
+            filters_now(&database)
+                .iter()
+                .map(|filter| filter.id)
+                .collect::<Vec<_>>(),
+            vec![second, first],
+            "the second one moved ahead of the first"
+        );
+
+        // Already at the front: a no-op rather than a wrap-around.
+        handle_source_command(&mut database, SourceCommand::MoveFilterEarlier(second)).unwrap();
+        assert_eq!(filters_now(&database)[0].id, second);
+
+        handle_source_command(&mut database, SourceCommand::MoveFilterLater(second)).unwrap();
+        assert_eq!(
+            filters_now(&database)
+                .iter()
+                .map(|filter| filter.id)
+                .collect::<Vec<_>>(),
+            vec![first, second],
+            "and back the other way"
+        );
+        handle_source_command(&mut database, SourceCommand::MoveFilterLater(second)).unwrap();
+        assert_eq!(
+            filters_now(&database)[1].id,
+            second,
+            "already last, so nothing moved"
+        );
+        handle_source_command(&mut database, SourceCommand::MoveFilterEarlier(second)).unwrap();
+
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetFilterEnabled(second, false),
+        )
+        .unwrap();
+        assert!(
+            !filters_now(&database)[0].enabled,
+            "turning one off is remembered"
+        );
+
+        let tuned = ChromaKeySettings {
+            method: ChromaKeyMethod::Custom,
+            custom_rgb: [12, 34, 56],
+            threshold: 0.4,
+            smoothing: 0.0,
+        };
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetChromaKeySettings(second, tuned),
+        )
+        .unwrap();
+        let FilterSettings::ChromaKey(stored) = filters_now(&database)[0].settings;
+        assert_eq!(stored, tuned, "every field came back as it went in");
+        assert!(
+            !filters_now(&database)[0].enabled,
+            "and retuning one did not turn it back on"
+        );
+
+        handle_source_command(&mut database, SourceCommand::RemoveFilter(second)).unwrap();
+        let filters = filters_now(&database);
+        assert_eq!(filters.len(), 1, "only the one named was removed");
+        assert_eq!(filters[0].id, first);
+    }
     #[test]
     fn scene_commands_are_persisted_and_ordered() {
         let mut database = ProjectDatabase::open_in_memory().unwrap();
