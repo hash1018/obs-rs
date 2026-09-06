@@ -4,7 +4,7 @@
 //! request, so nothing two SceneItems show *has* to be shared and each owns
 //! its own pipeline.
 
-use media_pp::elements::{CudaDevice, CudaVideoCompositorHandle, VideoLayer};
+use media_pp::elements::{CudaDevice, CudaFrameFormat, CudaVideoCompositorHandle, VideoLayer};
 use media_pp::pipeline::Pipeline;
 use media_pp::rate::FrameRateHandle;
 
@@ -88,6 +88,7 @@ pub(in crate::engine) fn open(
     let converter = CudaConverter::new(
         format!("{name}-convert"),
         device,
+        CudaFrameFormat::Nv12,
         format.width,
         format.height,
     )?;

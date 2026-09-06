@@ -5,7 +5,7 @@
 //! is no "not found" state and this never answers `Ok(None)`.
 
 use media_pp::elements::{
-    CaptureSourceKind, CudaConverter, CudaDevice, CudaVideoCompositorHandle,
+    CaptureSourceKind, CudaConverter, CudaDevice, CudaFrameFormat, CudaVideoCompositorHandle,
     CudaVideoCompositorInput, PipeWireScreenCaptureOptions, PipeWireScreenCaptureSource,
     VideoLayer,
 };
@@ -76,6 +76,7 @@ pub(in crate::engine) fn open(
     let converter = CudaConverter::new(
         format!("{name}-convert"),
         device,
+        CudaFrameFormat::Nv12,
         format.width,
         format.height,
     )?;

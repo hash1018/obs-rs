@@ -156,7 +156,13 @@ pub(in crate::engine) fn open(
         width,
         height,
     )?;
-    let converter = CudaConverter::new(format!("{name}-convert"), device, width, height)?;
+    let converter = CudaConverter::new(
+        format!("{name}-convert"),
+        device,
+        CudaFrameFormat::Nv12,
+        width,
+        height,
+    )?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
