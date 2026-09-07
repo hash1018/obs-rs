@@ -38,7 +38,18 @@ use crate::engine::preview::{Nv12Target, PreviewRenderer, PreviewSurface, Shared
 pub(in crate::engine) type Layer = CudaVideoLayerHandle;
 
 pub(in crate::engine) struct Backend {
-    pub(in crate::engine) device: CudaDevice,
+    /// The one CUDA device this process opens, in an `Arc` so a Source can
+    /// keep it.
+    ///
+    /// media-pp hands this out by reference and says it need only outlive
+    /// the constructor calls, because every element takes its own FFmpeg
+    /// reference. A filter rack breaks that: it builds elements long after
+    /// the Source was opened, whenever the filter list changes. The `Arc` is
+    /// what lets it hold the same device rather than opening a second one —
+    /// which is the one thing this type's own docs forbid, since creating or
+    /// dropping a primary context while another thread encodes can fault
+    /// inside the driver.
+    pub(in crate::engine) device: Arc<CudaDevice>,
     pub(in crate::engine) size: [u32; 2],
     pub(in crate::engine) compositor: CudaVideoCompositorHandle,
     /// Every open capture's rate control, keyed by the name it was
@@ -175,7 +186,7 @@ impl Backend {
         let tee = tee.expect("Pipeline::new runs the builder before returning");
 
         Ok(Self {
-            device,
+            device: Arc::new(device),
             size,
             capture_rates: Mutex::new(HashMap::new()),
             compositor: handle,

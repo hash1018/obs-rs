@@ -4,6 +4,8 @@ use media_pp::elements::{
     CudaDevice, CudaUpload, CudaVideoCompositorHandle, CudaVideoCompositorInput, V4l2CaptureFormat,
     V4l2CaptureOptions, V4l2CaptureSource, V4l2Device, VideoLayer,
 };
+use std::sync::Arc;
+
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
@@ -21,7 +23,7 @@ const QUEUE_DEPTH: usize = 2;
 /// `Ok(None)` when the camera is not there to open — see this module's
 /// parent.
 pub(in crate::engine) fn open(
-    device: &CudaDevice,
+    device: &Arc<CudaDevice>,
     handle: &CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: VideoLayer,

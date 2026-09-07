@@ -319,6 +319,8 @@ mod windows {
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use std::sync::Arc;
+
     use media_pp::contract::MemoryDomain;
     use media_pp::element::Filter as PpFilter;
     use media_pp::elements::{CudaChromaKey, CudaConverter, CudaDevice, CudaFrameFormat, Rack};
@@ -328,11 +330,13 @@ mod linux {
     };
 
     /// What a refill needs and the rack cannot hold for it — see the Windows
-    /// twin. A `CudaDevice` is refcounted the same way, so this is a clone
-    /// rather than a lifetime.
+    /// twin, whose device is a refcounted interface and needs no wrapper.
+    /// A `CudaDevice` is not `Clone` — media-pp hands it out by reference and
+    /// documents that it need only outlive the constructor calls — so the
+    /// backend keeps the one it opened in an `Arc` and this shares it.
     pub(super) struct Backend {
         name: String,
-        device: CudaDevice,
+        device: Arc<CudaDevice>,
         incoming: ChainFormat,
         width: u32,
         height: u32,
@@ -340,7 +344,7 @@ mod linux {
 
     pub(in crate::engine) fn rack(
         name: &str,
-        device: &CudaDevice,
+        device: &Arc<CudaDevice>,
         incoming: ChainFormat,
         width: u32,
         height: u32,
