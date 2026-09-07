@@ -195,7 +195,7 @@ impl Backend {
                     &self.device,
                     Arc::clone(&self.context),
                     D3d11VideoEncoderOptions {
-                        codec: if settings.encoder == RecordingEncoder::Nvenc {
+                        codec: if encoding.encoder == RecordingEncoder::Nvenc {
                             D3d11VideoCodec::H264Nvenc
                         } else {
                             D3d11VideoCodec::H264MediaFoundation
@@ -245,10 +245,14 @@ impl Backend {
             RecordingEncoder::ALL
                 .into_iter()
                 .filter(|encoder| {
+                    // The Canvas's own size, not a token one: an encoder
+                    // that opens at 320x240 and refuses 4K would be offered
+                    // and then fail at the moment it was used.
                     let probe = RecordingSettings {
                         encoder: *encoder,
                         ..RecordingSettings::default()
-                    };
+                    }
+                    .encoding(self.size);
                     self.open_encoder(OutputKind::Recording, PROBE_FPS, &probe)
                         .is_ok()
                 })
