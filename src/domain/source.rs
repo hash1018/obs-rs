@@ -6,50 +6,21 @@ use super::{Filter, SceneCanvas};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceId(pub i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    DisplayCapture,
-    WindowCapture,
-    VideoCapture,
-    MediaFile,
-    /// A live network stream, pulled over RTSP — an IP camera, most often.
-    Rtsp,
-    Image,
-    Color,
-    Drawing,
-    /// A line of text drawn by this application rather than captured from
-    /// anywhere — a caption, a name plate, a clock.
-    Text,
-}
-
-impl SourceKind {
-    pub(crate) fn storage_name(self) -> &'static str {
-        match self {
-            Self::DisplayCapture => "display_capture",
-            Self::WindowCapture => "window_capture",
-            Self::VideoCapture => "video_capture",
-            Self::MediaFile => "media_file",
-            Self::Rtsp => "rtsp",
-            Self::Image => "image",
-            Self::Color => "color",
-            Self::Drawing => "drawing",
-            Self::Text => "text",
-        }
-    }
-
-    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
-        match name {
-            "display_capture" => Some(Self::DisplayCapture),
-            "window_capture" => Some(Self::WindowCapture),
-            "video_capture" => Some(Self::VideoCapture),
-            "media_file" => Some(Self::MediaFile),
-            "rtsp" => Some(Self::Rtsp),
-            "image" => Some(Self::Image),
-            "color" => Some(Self::Color),
-            "drawing" => Some(Self::Drawing),
-            "text" => Some(Self::Text),
-            _ => None,
-        }
+stored_by_name! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SourceKind {
+        DisplayCapture => "display_capture",
+        WindowCapture => "window_capture",
+        VideoCapture => "video_capture",
+        MediaFile => "media_file",
+        /// A live network stream, pulled over RTSP — an IP camera, most often.
+        Rtsp => "rtsp",
+        Image => "image",
+        Color => "color",
+        Drawing => "drawing",
+        /// A line of text drawn by this application rather than captured from
+        /// anywhere — a caption, a name plate, a clock.
+        Text => "text",
     }
 }
 
@@ -59,39 +30,20 @@ pub struct ColorSourceSettings {
     pub rgba: [u8; 4],
 }
 
-/// Where a line of text sits in the box it is drawn into.
-///
-/// A box rather than a rectangle that hugs the glyphs, because the surface
-/// the engine pushes is fixed when the Source opens — see `text::open`. So
-/// the string's own width changes underneath it, and this is what decides
-/// which edge stays put while it does. Right for a clock, whose last digit
-/// is the one that must not walk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextAlignment {
-    #[default]
-    Left,
-    Centre,
-    Right,
-}
-
-impl TextAlignment {
-    pub const ALL: [Self; 3] = [Self::Left, Self::Centre, Self::Right];
-
-    pub(crate) fn storage_name(self) -> &'static str {
-        match self {
-            Self::Left => "left",
-            Self::Centre => "centre",
-            Self::Right => "right",
-        }
-    }
-
-    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
-        match name {
-            "left" => Some(Self::Left),
-            "centre" => Some(Self::Centre),
-            "right" => Some(Self::Right),
-            _ => None,
-        }
+stored_by_name! {
+    /// Where a line of text sits in the box it is drawn into.
+    ///
+    /// A box rather than a rectangle that hugs the glyphs, because the surface
+    /// the engine pushes is fixed when the Source opens — see `text::open`. So
+    /// the string's own width changes underneath it, and this is what decides
+    /// which edge stays put while it does. Right for a clock, whose last digit
+    /// is the one that must not walk.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum TextAlignment {
+        #[default]
+        Left => "left",
+        Centre => "centre",
+        Right => "right",
     }
 }
 
@@ -100,117 +52,55 @@ impl TextAlignment {
 /// Read at 1920x1080 from across a room, which is what a caption is for.
 pub const DEFAULT_FONT_SIZE: f32 = 72.0;
 
-/// What a Text Source says, as opposed to how it looks.
-///
-/// The three are one enum rather than a flag and a string because they are
-/// the same question — where the words come from — and only one answer can
-/// be true at a time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TextMode {
-    /// What was typed, and nothing else. Redrawn when it is edited.
-    #[default]
-    Static,
-    /// The wall clock, redrawn as it moves.
-    Clock,
-    /// A stopwatch this Source owns, started and stopped from the Properties
-    /// dock — see [`TextTimer`].
-    Timer,
-}
-
-impl TextMode {
-    pub const ALL: [Self; 3] = [Self::Static, Self::Clock, Self::Timer];
-
-    pub(crate) fn storage_name(self) -> &'static str {
-        match self {
-            Self::Static => "static",
-            Self::Clock => "clock",
-            Self::Timer => "timer",
-        }
-    }
-
-    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
-        match name {
-            "static" => Some(Self::Static),
-            "clock" => Some(Self::Clock),
-            "timer" => Some(Self::Timer),
-            _ => None,
-        }
+stored_by_name! {
+    /// What a Text Source says, as opposed to how it looks.
+    ///
+    /// The three are one enum rather than a flag and a string because they are
+    /// the same question — where the words come from — and only one answer can
+    /// be true at a time.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum TextMode {
+        /// What was typed, and nothing else. Redrawn when it is edited.
+        #[default]
+        Static => "static",
+        /// The wall clock, redrawn as it moves.
+        Clock => "clock",
+        /// A stopwatch this Source owns, started and stopped from the Properties
+        /// dock — see [`TextTimer`].
+        Timer => "timer",
     }
 }
 
-/// How [`TextMode::Clock`] writes the time.
-///
-/// A fixed list rather than a format string the user types. A mistyped
-/// format is a Source that silently shows nothing, and there is no good place
-/// to report that — the caption *is* the report, and it is blank.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ClockFormat {
-    /// `14:32:07`
-    #[default]
-    Time,
-    /// `14:32`
-    TimeToMinute,
-    /// `2026-09-07 14:32:07`
-    DateAndTime,
-    /// `2026-09-07`
-    Date,
-}
-
-impl ClockFormat {
-    pub const ALL: [Self; 4] = [
-        Self::Time,
-        Self::TimeToMinute,
-        Self::DateAndTime,
-        Self::Date,
-    ];
-
-    pub(crate) fn storage_name(self) -> &'static str {
-        match self {
-            Self::Time => "time",
-            Self::TimeToMinute => "time-to-minute",
-            Self::DateAndTime => "date-and-time",
-            Self::Date => "date",
-        }
-    }
-
-    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
-        match name {
-            "time" => Some(Self::Time),
-            "time-to-minute" => Some(Self::TimeToMinute),
-            "date-and-time" => Some(Self::DateAndTime),
-            "date" => Some(Self::Date),
-            _ => None,
-        }
+stored_by_name! {
+    /// How [`TextMode::Clock`] writes the time.
+    ///
+    /// A fixed list rather than a format string the user types. A mistyped
+    /// format is a Source that silently shows nothing, and there is no good place
+    /// to report that — the caption *is* the report, and it is blank.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum ClockFormat {
+        /// `14:32:07`
+        #[default]
+        Time => "time",
+        /// `14:32`
+        TimeToMinute => "time-to-minute",
+        /// `2026-09-07 14:32:07`
+        DateAndTime => "date-and-time",
+        /// `2026-09-07`
+        Date => "date",
     }
 }
 
-/// How [`TextMode::Timer`] writes an elapsed duration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TimerFormat {
-    /// `01:23:45`
-    #[default]
-    HoursMinutesSeconds,
-    /// `23:45`, and `83:45` once it passes an hour — minutes keep counting
-    /// rather than rolling into a field that is not being shown.
-    MinutesSeconds,
-}
-
-impl TimerFormat {
-    pub const ALL: [Self; 2] = [Self::HoursMinutesSeconds, Self::MinutesSeconds];
-
-    pub(crate) fn storage_name(self) -> &'static str {
-        match self {
-            Self::HoursMinutesSeconds => "hours-minutes-seconds",
-            Self::MinutesSeconds => "minutes-seconds",
-        }
-    }
-
-    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
-        match name {
-            "hours-minutes-seconds" => Some(Self::HoursMinutesSeconds),
-            "minutes-seconds" => Some(Self::MinutesSeconds),
-            _ => None,
-        }
+stored_by_name! {
+    /// How [`TextMode::Timer`] writes an elapsed duration.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum TimerFormat {
+        /// `01:23:45`
+        #[default]
+        HoursMinutesSeconds => "hours-minutes-seconds",
+        /// `23:45`, and `83:45` once it passes an hour — minutes keep counting
+        /// rather than rolling into a field that is not being shown.
+        MinutesSeconds => "minutes-seconds",
     }
 }
 
@@ -710,4 +600,60 @@ pub struct Source {
     /// Scenes is keyed in both. Empty for every kind and every Source that
     /// has never been given one, which is most of them.
     pub filters: Vec<Filter>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every kind survives being written to the project file and read back.
+    ///
+    /// The other half of this — that `ALL` lists every kind, which is what
+    /// the Add Source dialog is built from — needs no test any more:
+    /// `stored_by_name!` writes the enum and the list from one declaration,
+    /// so a kind that exists is a kind in `ALL`. What is left to check is
+    /// that no two kinds are stored under the same name, which the macro
+    /// cannot see: duplicate names compile, and the second kind then reads
+    /// back as the first.
+    #[test]
+    fn every_source_kind_survives_a_round_trip_through_storage() {
+        let mut seen = std::collections::HashSet::new();
+        for kind in SourceKind::ALL {
+            assert!(
+                seen.insert(kind.storage_name()),
+                "{kind:?} shares its storage name with another kind"
+            );
+            assert_eq!(
+                SourceKind::from_storage_name(kind.storage_name()),
+                Some(kind)
+            );
+        }
+        assert_eq!(SourceKind::from_storage_name("nothing-like-this"), None);
+    }
+
+    /// And the same for the four the Text Source stores.
+    #[test]
+    fn every_text_setting_survives_a_round_trip_through_storage() {
+        for alignment in TextAlignment::ALL {
+            assert_eq!(
+                TextAlignment::from_storage_name(alignment.storage_name()),
+                Some(alignment)
+            );
+        }
+        for mode in TextMode::ALL {
+            assert_eq!(TextMode::from_storage_name(mode.storage_name()), Some(mode));
+        }
+        for format in ClockFormat::ALL {
+            assert_eq!(
+                ClockFormat::from_storage_name(format.storage_name()),
+                Some(format)
+            );
+        }
+        for format in TimerFormat::ALL {
+            assert_eq!(
+                TimerFormat::from_storage_name(format.storage_name()),
+                Some(format)
+            );
+        }
+    }
 }

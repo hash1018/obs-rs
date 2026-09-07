@@ -44,7 +44,7 @@ pub(in crate::ui) struct SourcesPanelState {
     scene_id: Option<SceneId>,
     known_item_count: usize,
     add_dialog_open: bool,
-    add_kind: AddSourceKind,
+    add_kind: Option<SourceKind>,
     display_dialog_open: bool,
     display_targets: Vec<MonitorTarget>,
     selected_monitor_name: Option<String>,
@@ -126,29 +126,32 @@ struct StreamDialog {
     error: Option<String>,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-enum AddSourceKind {
-    DisplayCapture,
-    WindowCapture,
-    VideoCapture,
-    MediaFile,
-    Rtsp,
-    Image,
-    #[default]
-    Color,
-    Drawing,
-    Text,
+/// The two kinds that are a file, and what a dialog should offer for each.
+/// `None` for the kinds that are picked some other way.
+fn file_filter(kind: SourceKind) -> Option<(TextKey, &'static [&'static str])> {
+    match kind {
+        SourceKind::MediaFile => Some((TextKey::SourceMediaFileFilter, &MEDIA_FILE_EXTENSIONS)),
+        SourceKind::Image => Some((TextKey::SourceImageFilter, &IMAGE_EXTENSIONS)),
+        _ => None,
+    }
 }
 
-impl AddSourceKind {
-    /// The two kinds that are a file, and what a dialog should offer for
-    /// each. `None` for the kinds that are picked some other way.
-    fn file_filter(self) -> Option<(TextKey, &'static [&'static str])> {
-        match self {
-            Self::MediaFile => Some((TextKey::SourceMediaFileFilter, &MEDIA_FILE_EXTENSIONS)),
-            Self::Image => Some((TextKey::SourceImageFilter, &IMAGE_EXTENSIONS)),
-            _ => None,
-        }
+/// What the Add Source dialog offers first, and what a fresh panel has
+/// selected. A Color Source needs nothing picked and no device present, so it
+/// is the one kind that always works.
+const DEFAULT_ADD_KIND: SourceKind = SourceKind::Color;
+
+impl SourcesPanelState {
+    /// Which kind the Add Source dialog has selected.
+    ///
+    /// Stored as an `Option` so this struct can go on deriving `Default`
+    /// across its twenty-seven fields: `None` is "nothing chosen yet". The
+    /// alternative was a `Default` on `SourceKind` itself, and there is no
+    /// default Source kind — that would be the domain answering a dialog's
+    /// question, and every other `SourceKind::default()` in the future would
+    /// inherit the answer.
+    fn selected_add_kind(&self) -> SourceKind {
+        self.add_kind.unwrap_or(DEFAULT_ADD_KIND)
     }
 }
 
@@ -781,99 +784,21 @@ fn show_add_dialog(
             ui.label(i18n.text(TextKey::SourceType));
             ui.add_space(4.0);
             show_list_view(ui, SOURCE_KIND_LIST_HEIGHT, |ui| {
-                let display_label = i18n.text(TextKey::SourceKindDisplayCapture);
-                let response = list_row(
-                    ui,
-                    &display_label,
-                    state.add_kind == AddSourceKind::DisplayCapture,
-                );
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::DisplayCapture;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let window_label = i18n.text(TextKey::SourceKindWindowCapture);
-                let response = list_row(
-                    ui,
-                    &window_label,
-                    state.add_kind == AddSourceKind::WindowCapture,
-                );
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::WindowCapture;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let camera_label = i18n.text(TextKey::SourceKindVideoCapture);
-                let response = list_row(
-                    ui,
-                    &camera_label,
-                    state.add_kind == AddSourceKind::VideoCapture,
-                );
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::VideoCapture;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let media_label = i18n.text(TextKey::SourceKindMediaFile);
-                let response =
-                    list_row(ui, &media_label, state.add_kind == AddSourceKind::MediaFile);
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::MediaFile;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let stream_label = i18n.text(TextKey::SourceKindRtsp);
-                let response = list_row(ui, &stream_label, state.add_kind == AddSourceKind::Rtsp);
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::Rtsp;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let image_label = i18n.text(TextKey::SourceKindImage);
-                let response = list_row(ui, &image_label, state.add_kind == AddSourceKind::Image);
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::Image;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let color_label = i18n.text(TextKey::SourceKindColor);
-                let response = list_row(ui, &color_label, state.add_kind == AddSourceKind::Color);
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::Color;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let drawing_label = i18n.text(TextKey::SourceKindDrawing);
-                let response =
-                    list_row(ui, &drawing_label, state.add_kind == AddSourceKind::Drawing);
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::Drawing;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
-                }
-
-                let text_label = i18n.text(TextKey::SourceKindText);
-                let response = list_row(ui, &text_label, state.add_kind == AddSourceKind::Text);
-                if response.clicked() {
-                    state.add_kind = AddSourceKind::Text;
-                }
-                if response.double_clicked() {
-                    add_requested = true;
+                // Every kind there is, rather than a row per kind written
+                // out: a kind left out of this list is a kind that cannot be
+                // made, and nothing else in the application would notice —
+                // every other place one is handled is a `match` the compiler
+                // will not let go unfinished.
+                let selected = state.selected_add_kind();
+                for kind in SourceKind::ALL {
+                    let label = i18n.text(source_kind_key(kind));
+                    let response = list_row(ui, &label, selected == kind);
+                    if response.clicked() {
+                        state.add_kind = Some(kind);
+                    }
+                    if response.double_clicked() {
+                        add_requested = true;
+                    }
                 }
             });
             ui.add_space(12.0);
@@ -890,8 +815,8 @@ fn show_add_dialog(
     if cancel {
         open = false;
     } else if add_requested {
-        match state.add_kind {
-            AddSourceKind::Color => {
+        match state.selected_add_kind() {
+            SourceKind::Color => {
                 if let Some(scene_id) = snapshot.scene_id {
                     actions.push(UiAction::Project(ProjectCommand::Source(
                         SourceCommand::AddColor(scene_id),
@@ -899,7 +824,7 @@ fn show_add_dialog(
                     state.select_new_item = true;
                 }
             }
-            AddSourceKind::Drawing => {
+            SourceKind::Drawing => {
                 if let Some(scene_id) = snapshot.scene_id {
                     actions.push(UiAction::Project(ProjectCommand::Source(
                         SourceCommand::AddDrawing(scene_id),
@@ -907,7 +832,7 @@ fn show_add_dialog(
                     state.select_new_item = true;
                 }
             }
-            AddSourceKind::Text => {
+            SourceKind::Text => {
                 if let Some(scene_id) = snapshot.scene_id {
                     actions.push(UiAction::Project(ProjectCommand::Source(
                         SourceCommand::AddText(scene_id),
@@ -915,14 +840,10 @@ fn show_add_dialog(
                     state.select_new_item = true;
                 }
             }
-            AddSourceKind::DisplayCapture => {
-                prepare_display_picker(state, snapshot.scene_id, actions)
-            }
-            AddSourceKind::WindowCapture => {
-                prepare_window_picker(state, snapshot.scene_id, actions)
-            }
-            AddSourceKind::VideoCapture => prepare_camera_picker(state),
-            AddSourceKind::Rtsp => {
+            SourceKind::DisplayCapture => prepare_display_picker(state, snapshot.scene_id, actions),
+            SourceKind::WindowCapture => prepare_window_picker(state, snapshot.scene_id, actions),
+            SourceKind::VideoCapture => prepare_camera_picker(state),
+            SourceKind::Rtsp => {
                 if let Some(scene_id) = snapshot.scene_id {
                     state.stream = Some(StreamDialog {
                         scene_id,
@@ -934,7 +855,7 @@ fn show_add_dialog(
                     });
                 }
             }
-            kind @ (AddSourceKind::MediaFile | AddSourceKind::Image) => {
+            kind @ (SourceKind::MediaFile | SourceKind::Image) => {
                 open_file_picker(ctx, state, snapshot.scene_id, kind, i18n)
             }
         }
@@ -952,10 +873,10 @@ fn open_file_picker(
     ctx: &egui::Context,
     state: &mut SourcesPanelState,
     scene_id: Option<SceneId>,
-    kind: AddSourceKind,
+    kind: SourceKind,
     i18n: &LocalizationManager,
 ) {
-    let (Some(scene_id), Some((label, extensions))) = (scene_id, kind.file_filter()) else {
+    let (Some(scene_id), Some((label, extensions))) = (scene_id, file_filter(kind)) else {
         return;
     };
     if state.file_picker.is_some() {
@@ -971,7 +892,7 @@ fn open_file_picker(
                 .add_filter(filter, extensions)
                 .pick_file()
                 .map(|path| match kind {
-                    AddSourceKind::Image => PickedFile::Image {
+                    SourceKind::Image => PickedFile::Image {
                         size: crate::capture::image_size(&path),
                         path,
                     },
