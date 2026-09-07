@@ -19,6 +19,7 @@ mod audio;
 mod general;
 mod hotkeys;
 mod recording;
+mod streaming;
 mod video;
 
 use std::path::PathBuf;
@@ -39,16 +40,18 @@ pub(in crate::ui) enum SettingsPage {
     Video,
     Audio,
     Recording,
+    Streaming,
     Hotkeys,
 }
 
 impl SettingsPage {
     /// Every page, in the order the list shows them.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::General,
         Self::Video,
         Self::Audio,
         Self::Recording,
+        Self::Streaming,
         Self::Hotkeys,
     ];
 
@@ -58,6 +61,7 @@ impl SettingsPage {
             Self::Video => TextKey::SettingsPageVideo,
             Self::Audio => TextKey::SettingsPageAudio,
             Self::Recording => TextKey::SettingsPageRecording,
+            Self::Streaming => TextKey::SettingsPageStreaming,
             Self::Hotkeys => TextKey::SettingsPageHotkeys,
         }
     }
@@ -84,6 +88,11 @@ pub(in crate::ui) struct SettingsDialogState {
     /// pass that drew the button would freeze this window for as long as the
     /// picker was open.
     folder_picker: Option<Receiver<Option<PathBuf>>>,
+    /// Whether the Streaming page is showing the key rather than dots. Held
+    /// here so it survives a page switch within one visit to the dialog, and
+    /// reset with the rest of this when the dialog is opened again — see
+    /// [`streaming::StreamingPageState`].
+    streaming_page: streaming::StreamingPageState,
 }
 
 impl SettingsDialogState {
@@ -178,6 +187,7 @@ pub(in crate::ui) fn show(
     ctx: &egui::Context,
     state: &mut SettingsDialogState,
     recording: bool,
+    streaming: bool,
     encoders: &[crate::settings::RecordingEncoder],
     audio_codecs: &[crate::settings::RecordingAudioCodec],
     audio_devices: &[crate::capture::AudioDeviceTarget],
@@ -268,6 +278,17 @@ pub(in crate::ui) fn show(
                                     if let Some(action) = outcome.capture {
                                         state.capturing_hotkey = Some(action);
                                     }
+                                }
+                                SettingsPage::Streaming => {
+                                    streaming::show(
+                                        ui,
+                                        &mut state.draft,
+                                        &mut state.streaming_page,
+                                        streaming,
+                                        encoders,
+                                        audio_codecs,
+                                        i18n,
+                                    );
                                 }
                                 SettingsPage::Recording => {
                                     browse = recording::show(

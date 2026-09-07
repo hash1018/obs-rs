@@ -67,6 +67,25 @@ fn show_buttons(
         }
     }
 
+    // Above the recording buttons rather than below: a broadcast is the
+    // thing a viewer is waiting for, and its button is the one to reach for
+    // first. Both can run at once — they are separate branches off the same
+    // two `Tee`s — so this is not a mode the recording buttons switch out of.
+    ui.add_space(BUTTON_SPACING);
+    let streaming = status.streaming_elapsed.is_some();
+    let label = if streaming {
+        TextKey::ControlStopStreaming
+    } else {
+        TextKey::ControlStartStreaming
+    };
+    if button(ui, i18n, label).clicked() {
+        actions.push(if streaming {
+            UiAction::StopStreaming
+        } else {
+            UiAction::StartStreaming
+        });
+    }
+
     ui.add_space(BUTTON_SPACING);
     if button(ui, i18n, TextKey::ControlSettings).clicked() {
         actions.push(UiAction::OpenSettings);

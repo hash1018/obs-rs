@@ -293,4 +293,20 @@ text_keys! {
     PreviewFitWorkspace           => "preview-fit-workspace";
     PreviewResetView              => "preview-reset-view";
     PreviewScaleOptions           => "preview-scale-options";
+    ControlStartStreaming           => "control-start-streaming";
+    ControlStopStreaming            => "control-stop-streaming";
+    StatusStreaming                 => "status-streaming";
+    SettingsPageStreaming           => "settings-page-streaming";
+    SettingsStreamingWhileRunning   => "settings-streaming-while-running";
+    SettingsStreamingServer         => "settings-streaming-server";
+    SettingsStreamingKey            => "settings-streaming-key";
+    SettingsStreamingKeyShow        => "settings-streaming-key-show";
+    SettingsStreamingKeyHide        => "settings-streaming-key-hide";
+    SettingsStreamingKeyStored      => "settings-streaming-key-stored";
+    SettingsStreamingEncoder        => "settings-streaming-encoder";
+    SettingsStreamingBitRate        => "settings-streaming-bit-rate";
+    SettingsStreamingBitRateNote    => "settings-streaming-bit-rate-note";
+    SettingsStreamingKeyframes      => "settings-streaming-keyframes";
+    SettingsStreamingAudioCodec     => "settings-streaming-audio-codec";
+    SettingsStreamingAudioBitRate   => "settings-streaming-audio-bit-rate";
 }

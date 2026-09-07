@@ -42,7 +42,7 @@ use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
-use output::{RecordingState, describe, start_recording};
+use output::{OutputState, describe, start_recording};
 
 use backend::{Backend, BackendError};
 use source::{
@@ -134,6 +134,9 @@ enum EngineCommand {
     /// an mp4's header is written before its first frame, so none of this can
     /// be renegotiated after it has started.
     RecordingSettings(Box<crate::settings::RecordingSettings>),
+    StartStreaming,
+    StopStreaming,
+    StreamingSettings(Box<crate::settings::StreamingSettings>),
 }
 
 /// What the engine is started with, as opposed to what it is told afterwards
@@ -142,7 +145,7 @@ enum EngineCommand {
 struct EngineSetup {
     size: [u32; 2],
     project: Option<ProjectDispatcher>,
-    recording: RecordingState,
+    recording: OutputState,
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -162,6 +165,16 @@ struct Published {
     /// while paused it is what the elapsed time is measured *to*, so the
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
+    /// When the running broadcast started, or `None` when none is.
+    ///
+    /// Its own slot rather than a flag beside the recording's: the two run
+    /// independently and each has its own clock, and a viewer wants to know
+    /// how long the channel has been live whether or not anything is also
+    /// being written to disk.
+    streaming_since: Arc<ArcSwapOption<Instant>>,
+    /// Why the last attempt to start a broadcast failed, if it did. Cleared
+    /// when the next attempt is made, exactly as the recording's is.
+    streaming_error: Arc<ArcSwapOption<String>>,
     /// The SceneItems whose Source is not running, and why: a window that has
     /// closed, one that never opened, or a file that played out. The Sources
     /// list says so beside them, which is the only thing that explains an
@@ -192,6 +205,17 @@ struct Published {
     recording_error: Arc<ArcSwapOption<String>>,
 }
 
+/// What the engine is handed at construction about where output goes.
+///
+/// One argument rather than two, which is also what keeps `spawn` inside
+/// what clippy will look at without complaint — but the reason they are
+/// together is that they are the same thing said twice: what the next
+/// recording is written as, and what the next broadcast is published as.
+pub struct OutputSettings {
+    pub recording: crate::settings::RecordingSettings,
+    pub streaming: crate::settings::StreamingSettings,
+}
+
 pub struct EngineManager {
     frame: Arc<ArcSwapOption<CompositeFrame>>,
     /// `f32` bits, so the UI can read the rate without a lock.
@@ -204,6 +228,9 @@ pub struct EngineManager {
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
     recording_error: Arc<ArcSwapOption<String>>,
+    /// When the running broadcast started — see `Published::streaming_since`.
+    streaming_since: Arc<ArcSwapOption<Instant>>,
+    streaming_error: Arc<ArcSwapOption<String>>,
     /// The SceneItems drawing nothing — see `Published::source_status`.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
     /// What each playing media file measures — see `Published::media_meters`.
@@ -226,7 +253,11 @@ impl EngineManager {
         render_state: RenderState,
         canvas: SceneCanvas,
         project: Option<ProjectDispatcher>,
-        recording_settings: crate::settings::RecordingSettings,
+        // The two output settings as one, because they arrive together and
+        // for the same reason: handed over at construction rather than sent
+        // afterwards, so an output started before the Settings dialog is
+        // ever opened uses what the user saved rather than the defaults.
+        outputs: OutputSettings,
         // Where a recording's audio track attaches — see
         // `AudioManager::mixer_tee`. `None` records without sound.
         mixer: Option<(
@@ -234,7 +265,7 @@ impl EngineManager {
             media_pp::elements::MixerHandle,
         )>,
         // The monitor mix, which unlike the one above is read again on every
-        // pass — see `RecordingState::monitor`.
+        // pass — see `OutputState::monitor`.
         monitor: Arc<ArcSwapOption<media_pp::elements::MixerHandle>>,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
@@ -245,6 +276,8 @@ impl EngineManager {
         let recording_paused_at = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
+        let streaming_since = Arc::new(ArcSwapOption::empty());
+        let streaming_error = Arc::new(ArcSwapOption::empty());
         let source_status = Arc::new(ArcSwapOption::empty());
         let media_meters = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
@@ -257,6 +290,8 @@ impl EngineManager {
             let recording_since = Arc::clone(&recording_since);
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
+            let streaming_since = Arc::clone(&streaming_since);
+            let streaming_error = Arc::clone(&streaming_error);
             let source_status = Arc::clone(&source_status);
             let media_meters = Arc::clone(&media_meters);
             let encoders = Arc::clone(&encoders);
@@ -272,6 +307,8 @@ impl EngineManager {
                     recording_since,
                     recording_paused_at,
                     recording_error,
+                    streaming_since,
+                    streaming_error,
                     source_status,
                     media_meters,
                     encoders,
@@ -280,13 +317,15 @@ impl EngineManager {
                 let setup = EngineSetup {
                     size,
                     project,
-                    recording: RecordingState {
-                        settings: recording_settings,
+                    recording: OutputState {
+                        settings: outputs.recording,
+                        streaming: outputs.streaming,
                         mixer,
                         monitor,
                         // Filled in once the probe has run — see `run`.
                         audio_codecs: Vec::new(),
                         running: None,
+                        broadcast: None,
                     },
                 };
                 if let Err(error) = run(
@@ -311,6 +350,8 @@ impl EngineManager {
             recording_since,
             recording_paused_at,
             recording_error,
+            streaming_since,
+            streaming_error,
             source_status,
             media_meters,
             encoders,
@@ -449,6 +490,38 @@ impl EngineManager {
             Some(paused_at) => paused_at.saturating_duration_since(*since),
             None => since.elapsed(),
         })
+    }
+
+    /// Begin publishing to the server the settings name.
+    pub fn start_streaming(&self) {
+        let _ = self.commands.send(EngineCommand::StartStreaming);
+    }
+
+    /// End the running broadcast.
+    pub fn stop_streaming(&self) {
+        let _ = self.commands.send(EngineCommand::StopStreaming);
+    }
+
+    /// What the *next* broadcast publishes to and how. Read when one starts,
+    /// so changing this disturbs nothing that is running.
+    pub fn set_streaming_settings(&self, settings: crate::settings::StreamingSettings) {
+        let _ = self
+            .commands
+            .send(EngineCommand::StreamingSettings(Box::new(settings)));
+    }
+
+    /// How long the running broadcast has been live, or `None` when none is.
+    ///
+    /// Unlike a recording's, this has no paused span to subtract: a
+    /// broadcast cannot be paused. Stopping it ends it.
+    pub fn streaming(&self) -> Option<Duration> {
+        let since = self.streaming_since.load_full()?;
+        Some(since.elapsed())
+    }
+
+    /// Why the last attempt to start a broadcast failed, if it did.
+    pub fn streaming_error(&self) -> Option<Arc<String>> {
+        self.streaming_error.load_full()
     }
 
     /// Whether the running recording is paused.
@@ -858,7 +931,7 @@ fn apply_command(
     open: &mut HashMap<SceneItemId, SourceState>,
     scene: &mut SourcesSnapshot,
     published: &Published,
-    recording: &mut RecordingState,
+    recording: &mut OutputState,
     command: EngineCommand,
 ) -> bool {
     match command {
@@ -1036,6 +1109,37 @@ fn apply_command(
                     published.recording_paused_at.store(None);
                 }
                 _ => {}
+            }
+            false
+        }
+        EngineCommand::StreamingSettings(settings) => {
+            recording.streaming = *settings;
+            false
+        }
+        EngineCommand::StartStreaming => {
+            // The same order the recording's start uses, and for the same
+            // reasons: the error describes this attempt, and the instant is
+            // published only once there is a broadcast to describe.
+            published.streaming_error.store(None);
+            match output::start_streaming(engine.backend, recording) {
+                Ok(started) => published.streaming_since.store(Some(Arc::new(started))),
+                Err(error) => {
+                    let reason = describe(error.as_ref());
+                    eprintln!("could not start streaming: {reason}");
+                    published.streaming_error.store(Some(Arc::new(reason)));
+                }
+            }
+            false
+        }
+        EngineCommand::StopStreaming => {
+            published.streaming_since.store(None);
+            match recording.broadcast.take() {
+                Some(running) => {
+                    if let Err(error) = running.stop(engine.backend) {
+                        eprintln!("could not stop streaming cleanly: {error}");
+                    }
+                }
+                None => eprintln!("no broadcast is running"),
             }
             false
         }
@@ -1564,6 +1668,8 @@ mod tests {
             encoders: Arc::new(ArcSwapOption::empty()),
             audio_codecs: Arc::new(ArcSwapOption::empty()),
             recording_error: Arc::new(ArcSwapOption::empty()),
+            streaming_since: Arc::new(ArcSwapOption::empty()),
+            streaming_error: Arc::new(ArcSwapOption::empty()),
         }
     }
 

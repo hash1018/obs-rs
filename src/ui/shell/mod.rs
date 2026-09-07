@@ -134,6 +134,7 @@ pub fn show(
         ui.ctx(),
         &mut state.settings,
         resources.snapshots.status.recording_elapsed.is_some(),
+        resources.snapshots.status.streaming_elapsed.is_some(),
         &resources.snapshots.status.encoders,
         &resources.snapshots.status.audio_codecs,
         resources.audio_devices,

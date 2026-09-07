@@ -256,3 +256,21 @@ filters-chroma-key-custom-method = 사용자 지정
 project-unavailable-title = 프로젝트를 열 수 없습니다
 project-unavailable-body = 프로젝트 없이 실행 중입니다. 이번 세션에서 만든 장면·소스·설정은 저장되지 않습니다.
 project-unavailable-dismiss = 그래도 계속
+
+# Streaming
+control-start-streaming = 송출 시작
+control-stop-streaming = 송출 중지
+status-streaming = 송출 중
+settings-page-streaming = 송출
+settings-streaming-while-running = 송출 중입니다. 여기 설정은 다음 송출부터 적용됩니다.
+settings-streaming-server = 서버
+settings-streaming-key = 스트림 키
+settings-streaming-key-show = 보기
+settings-streaming-key-hide = 가리기
+settings-streaming-key-stored = 이 컴퓨터의 설정 파일에 평문으로 저장됩니다.
+settings-streaming-encoder = 인코더
+settings-streaming-bit-rate = 비트레이트
+settings-streaming-bit-rate-note = 디스크가 아니라 업로드 속도가 한계입니다.
+settings-streaming-keyframes = 키프레임 간격
+settings-streaming-audio-codec = 오디오 코덱
+settings-streaming-audio-bit-rate = 오디오 비트레이트

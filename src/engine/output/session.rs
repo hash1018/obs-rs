@@ -29,11 +29,14 @@ use super::Output;
 ///
 /// Grouped because they are only ever reached together, and because
 /// `apply_command` had collected as many parameters as it can carry.
-pub(in crate::engine) struct RecordingState {
+pub(in crate::engine) struct OutputState {
     /// What the *next* recording is written as. Loaded from disk before the
     /// engine existed — see `ObsApp::new` — and replaced whenever the
     /// Settings dialog is applied.
     pub(in crate::engine) settings: crate::settings::RecordingSettings,
+    /// Where the *next* broadcast is published, and how. Arrives the same
+    /// way and is read at the same moment: when one starts.
+    pub(in crate::engine) streaming: crate::settings::StreamingSettings,
     /// The mixer, taken once at startup because it lives on a thread this one
     /// cannot ask. `None` when it never started, which records video only and
     /// plays media files without their sound.
@@ -58,11 +61,18 @@ pub(in crate::engine) struct RecordingState {
     /// back rather than failing the recording — see [`usable_settings`].
     pub(in crate::engine) audio_codecs: Vec<crate::settings::RecordingAudioCodec>,
     /// The recording that is running, if one is. It rather than the backend
-    /// holds the video branch too — see [`Recording`].
+    /// holds the video branch too — see [`Output`].
     pub(in crate::engine) running: Option<Output>,
+    /// The broadcast that is running, if one is.
+    ///
+    /// Beside the recording rather than instead of it: both hang off the
+    /// same two `Tee`s, which take as many branches as are asked of them, so
+    /// recording while streaming is not a mode — it is simply both fields
+    /// being `Some`, each with its own encoder at its own bit rate.
+    pub(in crate::engine) broadcast: Option<Output>,
 }
 
-impl RecordingState {
+impl OutputState {
     /// The mixer's own control, for whatever attaches an input to it.
     pub(in crate::engine) fn mixer_handle(&self) -> Option<&media_pp::elements::MixerHandle> {
         self.mixer.as_ref().map(|(_, mixer)| mixer)
@@ -93,7 +103,7 @@ impl RecordingState {
 /// frames, not the moment the button was pressed.
 pub(in crate::engine) fn start_recording(
     backend: &Backend,
-    recording: &mut RecordingState,
+    recording: &mut OutputState,
 ) -> Result<Instant, BackendError> {
     if recording.running.is_some() {
         return Err("a recording is already running".into());

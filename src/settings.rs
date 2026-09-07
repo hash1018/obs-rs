@@ -17,6 +17,7 @@ pub struct AppSettings {
     pub locale: Locale,
     pub theme: Theme,
     pub recording: RecordingSettings,
+    pub streaming: StreamingSettings,
     pub audio: AudioSettings,
     pub hotkeys: crate::hotkey::HotkeySettings,
     pub workspace: WorkspaceLayout,
@@ -281,6 +282,124 @@ impl Default for RecordingSettings {
         }
     }
 }
+
+/// Where a broadcast is published, and how it is encoded.
+///
+/// Read when a broadcast *starts*, as a recording's settings are and for the
+/// same reason: the FLV header goes out before the first frame and nothing
+/// in it can be renegotiated afterwards.
+///
+/// # The stream key is stored as it was typed
+///
+/// In this file, in plain text, next to everything else. That is what OBS
+/// does — its `service.json` holds the key the same way — and this
+/// application has no keychain of its own to do better with. What that costs
+/// is worth being honest about: anyone who can read the settings file can
+/// broadcast to the channel until the key is regenerated.
+///
+/// What is done instead is narrower and worth more than a false sense of
+/// safety: the key is never shown unless it is asked for, never written to
+/// the log, and never carried in an error message. `media-pp`'s own
+/// `RtmpMuxer::redacted_url` is what everything downstream of here reports
+/// with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamingSettings {
+    /// The publish address, without the key — `rtmp://live.twitch.tv/app`
+    /// and the like. Kept apart from the key because that is how every
+    /// service hands them out, and because only one of the two is a secret.
+    pub server: String,
+    /// The secret half of the address. See this type's own docs.
+    pub stream_key: String,
+    pub encoder: RecordingEncoder,
+    pub bit_rate_mbps: u32,
+    /// Two seconds, and low for a reason a recording does not share: a
+    /// viewer who joins sees nothing until a keyframe arrives, so this is
+    /// how long a channel takes to appear rather than a size trade-off.
+    pub keyframe_seconds: u32,
+    pub audio_codec: RecordingAudioCodec,
+    pub audio_bit_rate_kbps: u32,
+    /// How far the broadcast is scaled down from the Canvas, as a height in
+    /// pixels; zero is the Canvas's own. Separate from the recording's:
+    /// publishing at 720p while recording at 1080p is the ordinary case.
+    pub output_height: u32,
+}
+
+impl Default for StreamingSettings {
+    fn default() -> Self {
+        Self {
+            server: String::new(),
+            stream_key: String::new(),
+            encoder: RecordingEncoder::default(),
+            bit_rate_mbps: DEFAULT_STREAM_BIT_RATE_MBPS,
+            keyframe_seconds: DEFAULT_STREAM_KEYFRAME_SECONDS,
+            audio_codec: RecordingAudioCodec::default(),
+            audio_bit_rate_kbps: DEFAULT_AUDIO_BIT_RATE_KBPS,
+            output_height: 0,
+        }
+    }
+}
+
+impl StreamingSettings {
+    /// The whole publish address, key and all.
+    ///
+    /// The one place the two are put together, and deliberately not a field:
+    /// what is stored, shown and logged is the two halves, and this is made
+    /// at the moment a connection is opened and dropped straight after.
+    ///
+    /// A missing slash between them is the mistake everyone makes when
+    /// pasting a server address, so it is repaired here rather than refused.
+    pub fn publish_url(&self) -> String {
+        let server = self.server.trim().trim_end_matches('/');
+        let key = self.stream_key.trim();
+        if key.is_empty() {
+            return server.to_owned();
+        }
+        format!("{server}/{key}")
+    }
+
+    /// Whether there is enough here to try at all.
+    ///
+    /// Only the shape, not whether the server exists or the key is current —
+    /// those cannot be known without connecting, which is what the button
+    /// does. This is what greys the button out.
+    pub fn is_addressable(&self) -> bool {
+        let server = self.server.trim();
+        !server.is_empty() && !self.stream_key.trim().is_empty() && server.contains("://")
+    }
+
+    /// What a broadcast encodes with, resolved against the Canvas — the
+    /// streaming counterpart of [`RecordingSettings::encoding`].
+    pub fn encoding(&self, canvas: [u32; 2]) -> crate::engine::OutputEncoding {
+        crate::engine::OutputEncoding {
+            encoder: self.encoder,
+            size: RecordingSettings {
+                output_height: self.output_height,
+                ..RecordingSettings::default()
+            }
+            .output_size(canvas),
+            bit_rate_bits: self
+                .bit_rate_mbps
+                .clamp(*BIT_RATE_MBPS_RANGE.start(), *BIT_RATE_MBPS_RANGE.end())
+                as usize
+                * 1_000_000,
+            keyframe_seconds: self.keyframe_seconds.clamp(
+                *KEYFRAME_SECONDS_RANGE.start(),
+                *KEYFRAME_SECONDS_RANGE.end(),
+            ),
+            audio_codec: self.audio_codec,
+            audio_bit_rate_kbps: self.audio_bit_rate_kbps,
+        }
+    }
+}
+
+/// Lower than a recording's, because this one leaves the machine: twelve
+/// megabits is a good local file and more than most upstreams carry.
+pub const DEFAULT_STREAM_BIT_RATE_MBPS: u32 = 6;
+
+/// See [`StreamingSettings::keyframe_seconds`] — this is how long a viewer
+/// waits to see anything, so it is short.
+pub const DEFAULT_STREAM_KEYFRAME_SECONDS: u32 = 2;
 
 /// How far a recording can be scaled down from the Scene Canvas, as
 /// divisors of it.

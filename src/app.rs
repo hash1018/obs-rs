@@ -127,7 +127,10 @@ impl ObsApp {
             ui_state.report_project_error(error);
         }
         let project_dispatcher = project_manager.as_ref().map(ProjectManager::dispatcher);
-        let recording_settings = settings.recording.clone();
+        let outputs = crate::engine::OutputSettings {
+            recording: settings.recording.clone(),
+            streaming: settings.streaming.clone(),
+        };
         // Taken before the struct owns them, since the fields below are
         // where they end up.
         let saved_window = settings.workspace.window;
@@ -177,7 +180,7 @@ impl ObsApp {
                     // Settings dialog was opened and applied, and a recording
                     // started before that would ignore everything the user had
                     // saved.
-                    recording_settings,
+                    outputs,
                     mixer,
                     monitor,
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
@@ -244,6 +247,8 @@ impl ObsApp {
         // whether a recording actually started, and the Controls dock reads
         // the same answer the status bar's clock does.
         self.snapshots.status.recording_elapsed = engine.recording();
+        self.snapshots.status.streaming_elapsed = engine.streaming();
+        self.snapshots.status.streaming_error = engine.streaming_error();
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
         self.snapshots.status.source_status = engine.source_status();
@@ -301,6 +306,7 @@ impl ObsApp {
         // than any that is running.
         if let Some(engine) = &self.engine {
             engine.set_recording_settings(settings.recording.clone());
+            engine.set_streaming_settings(settings.streaming.clone());
         }
         // The mixer's own format, which takes immediately — so it is refused
         // while a recording runs, the same as the frame rate and for the same
@@ -689,6 +695,16 @@ impl ObsApp {
             UiAction::SetRecordingPaused(paused) => {
                 if let Some(engine) = &self.engine {
                     engine.set_recording_paused(paused);
+                }
+            }
+            UiAction::StartStreaming => {
+                if let Some(engine) = &self.engine {
+                    engine.start_streaming();
+                }
+            }
+            UiAction::StopStreaming => {
+                if let Some(engine) = &self.engine {
+                    engine.stop_streaming();
                 }
             }
             UiAction::StopRecording => {

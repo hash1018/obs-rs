@@ -39,7 +39,7 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     ui.monospace(format_memory(status.memory))
                         .on_hover_text(memory_tooltip(status.memory, i18n));
                     ui.separator();
-                    let clock = format_recording_time(status.recording_elapsed);
+                    let clock = format_elapsed("REC", status.recording_elapsed);
                     match recording_mark(ui.visuals(), status) {
                         Some((colour, reason)) => {
                             ui.monospace(egui::RichText::new(clock).color(colour))
@@ -48,6 +48,18 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                         None => {
                             ui.monospace(clock);
                         }
+                    }
+                    ui.separator();
+                    // The same shape beside it, holding the same width when
+                    // nothing is live — so the bar does not shift the moment
+                    // a broadcast starts, which is a moment nobody wants to
+                    // spend re-reading the whole strip.
+                    let live = format_elapsed("LIVE", status.streaming_elapsed);
+                    if status.streaming_elapsed.is_some() {
+                        ui.monospace(egui::RichText::new(live).color(RECORDING_COLOR))
+                            .on_hover_text(i18n.text(TextKey::StatusStreaming));
+                    } else {
+                        ui.monospace(live);
                     }
                 });
             });
@@ -124,13 +136,19 @@ fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationMan
 /// readings on the right need the rest, and they are fixed-width.
 const ERROR_WIDTH_SHARE: f32 = 0.55;
 
-fn format_recording_time(elapsed: Option<Duration>) -> String {
+/// One clock in the status bar: a label and an elapsed time, or the same
+/// label over dashes when there is nothing to count.
+///
+/// The dashes are not a state to announce — they are what holds the segment
+/// at its running width, so the bar beside them does not move when a
+/// recording or a broadcast begins.
+fn format_elapsed(label: &str, elapsed: Option<Duration>) -> String {
     let Some(elapsed) = elapsed else {
-        return "REC --:--:--".to_owned();
+        return format!("{label} --:--:--");
     };
     let seconds = elapsed.as_secs();
     format!(
-        "REC {:02}:{:02}:{:02}",
+        "{label} {:02}:{:02}:{:02}",
         seconds / 3600,
         (seconds % 3600) / 60,
         seconds % 60
@@ -272,11 +290,24 @@ mod tests {
     }
 
     #[test]
-    fn recording_time_is_zero_padded() {
+    fn an_elapsed_clock_is_zero_padded_and_keeps_its_width() {
         assert_eq!(
-            format_recording_time(Some(Duration::from_secs(3_725))),
+            format_elapsed("REC", Some(Duration::from_secs(3_725))),
             "REC 01:02:05"
         );
+        assert_eq!(
+            format_elapsed("LIVE", Some(Duration::from_secs(59))),
+            "LIVE 00:00:59"
+        );
+        // The placeholder is the running width, which is what keeps the bar
+        // from shifting the moment either one starts.
+        for label in ["REC", "LIVE"] {
+            assert_eq!(
+                format_elapsed(label, None).len(),
+                format_elapsed(label, Some(Duration::ZERO)).len(),
+                "{label} changes width when it starts"
+            );
+        }
     }
 
     #[test]

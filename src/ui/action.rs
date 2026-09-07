@@ -70,6 +70,12 @@ pub enum UiAction {
     SetRecordingPaused(bool),
     /// Finish the running recording and close its file.
     StopRecording,
+    /// Begin publishing to the configured server. Where it goes is the
+    /// settings' to decide, so this carries nothing — as `StartRecording`
+    /// does.
+    StartStreaming,
+    /// End the running broadcast.
+    StopStreaming,
     /// End the recording properly and then quit — what the closing question
     /// asks about.
     StopRecordingAndExit,

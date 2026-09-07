@@ -41,8 +41,10 @@
 //! per recording, from what is actually running.
 
 mod session;
+mod streaming;
 
-pub(in crate::engine) use session::{RecordingState, describe, start_recording};
+pub(in crate::engine) use session::{OutputState, describe, start_recording};
+pub(in crate::engine) use streaming::start_streaming;
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]

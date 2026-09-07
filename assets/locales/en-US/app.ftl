@@ -256,3 +256,21 @@ filters-chroma-key-custom-method = Custom
 project-unavailable-title = Project could not be opened
 project-unavailable-body = obs-rs is running without a project. Scenes, sources and settings from this session will not be saved.
 project-unavailable-dismiss = Carry on anyway
+
+# Streaming
+control-start-streaming = Start Streaming
+control-stop-streaming = Stop Streaming
+status-streaming = Broadcasting
+settings-page-streaming = Streaming
+settings-streaming-while-running = A broadcast is running. These settings apply to the next one.
+settings-streaming-server = Server
+settings-streaming-key = Stream key
+settings-streaming-key-show = Show
+settings-streaming-key-hide = Hide
+settings-streaming-key-stored = Stored in this machine's settings file as plain text.
+settings-streaming-encoder = Encoder
+settings-streaming-bit-rate = Bit rate
+settings-streaming-bit-rate-note = Limited by your upload speed, not your disk.
+settings-streaming-keyframes = Keyframe interval
+settings-streaming-audio-codec = Audio codec
+settings-streaming-audio-bit-rate = Audio bit rate

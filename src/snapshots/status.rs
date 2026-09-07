@@ -31,6 +31,14 @@ pub struct StatusSnapshot {
     /// running clock — so this is the only thing that says it was tried.
     /// `Arc` because it is read on every pass and rarely changes.
     pub recording_error: Option<Arc<String>>,
+    /// How long the broadcast has been live, or `None` when none is.
+    ///
+    /// Its own field beside the recording's, not a variant of it: both can
+    /// be running at once, and each has a clock of its own.
+    pub streaming_elapsed: Option<Duration>,
+    /// Why the last attempt to start a broadcast failed, if it did — kept
+    /// for the reason `recording_error` is.
+    pub streaming_error: Option<Arc<String>>,
     /// The SceneItems whose Source is not running, and why, from the engine.
     ///
     /// The Sources list says so beside them, which is the only thing that
