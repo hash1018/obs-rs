@@ -75,87 +75,87 @@ impl SourceStore {
     ) -> PersistenceResult<Vec<(SceneItem, Source)>> {
         let mut statement = connection.prepare(
             "SELECT
-                scene_items.id,
-                scene_items.source_id,
-                scene_items.visible,
-                scene_items.locked,
-                scene_items.position_x,
-                scene_items.position_y,
-                scene_items.scale_x,
-                scene_items.scale_y,
-                scene_items.rotation_degrees,
-                scene_items.anchor_x,
-                scene_items.anchor_y,
-                scene_items.crop_left,
-                scene_items.crop_top,
-                scene_items.crop_right,
-                scene_items.crop_bottom,
-                scene_items.z_index,
-                sources.name,
-                sources.kind,
-                color_source_settings.width,
-                color_source_settings.height,
-                color_source_settings.red,
-                color_source_settings.green,
-                color_source_settings.blue,
-                color_source_settings.alpha,
-                display_capture_settings.target_kind,
-                display_capture_settings.monitor_name,
-                display_capture_settings.restore_token,
-                display_capture_settings.width,
-                display_capture_settings.height,
-                drawing_source_settings.width,
-                drawing_source_settings.height,
-                window_capture_settings.target_kind,
-                window_capture_settings.process,
-                window_capture_settings.title,
-                window_capture_settings.restore_token,
-                window_capture_settings.width,
-                window_capture_settings.height,
-                media_file_settings.path,
-                media_file_settings.looping,
-                media_file_settings.width,
-                media_file_settings.height,
-                media_file_settings.has_audio,
-                media_file_settings.gain_db,
-                media_file_settings.muted,
-                media_file_settings.duration_us,
-                media_file_settings.paused,
-                media_file_settings.monitored,
-                image_source_settings.path,
-                image_source_settings.width,
-                image_source_settings.height,
-                rtsp_source_settings.url,
-                rtsp_source_settings.transport,
-                rtsp_source_settings.reconnect_seconds,
-                rtsp_source_settings.width,
-                rtsp_source_settings.height,
-                rtsp_source_settings.has_audio,
-                rtsp_source_settings.gain_db,
-                rtsp_source_settings.muted,
-                video_capture_settings.device,
-                video_capture_settings.device_name,
-                video_capture_settings.mode_width,
-                video_capture_settings.mode_height,
-                video_capture_settings.mode_rate_numerator,
-                video_capture_settings.mode_rate_denominator,
-                video_capture_settings.width,
-                video_capture_settings.height,
-                text_source_settings.width,
-                text_source_settings.height,
-                text_source_settings.text,
-                text_source_settings.font,
-                text_source_settings.font_size,
-                text_source_settings.red,
-                text_source_settings.green,
-                text_source_settings.blue,
-                text_source_settings.alpha,
-                text_source_settings.alignment,
-                text_source_settings.mode,
-                text_source_settings.clock_format,
-                text_source_settings.timer_format,
-                text_source_settings.timer_running_since,
-                text_source_settings.timer_accumulated_us
+                scene_items.id AS item_id,
+                scene_items.source_id AS item_source_id,
+                scene_items.visible AS item_visible,
+                scene_items.locked AS item_locked,
+                scene_items.position_x AS item_position_x,
+                scene_items.position_y AS item_position_y,
+                scene_items.scale_x AS item_scale_x,
+                scene_items.scale_y AS item_scale_y,
+                scene_items.rotation_degrees AS item_rotation_degrees,
+                scene_items.anchor_x AS item_anchor_x,
+                scene_items.anchor_y AS item_anchor_y,
+                scene_items.crop_left AS item_crop_left,
+                scene_items.crop_top AS item_crop_top,
+                scene_items.crop_right AS item_crop_right,
+                scene_items.crop_bottom AS item_crop_bottom,
+                scene_items.z_index AS item_z_index,
+                sources.name AS source_name,
+                sources.kind AS source_kind,
+                color_source_settings.width AS color_width,
+                color_source_settings.height AS color_height,
+                color_source_settings.red AS color_red,
+                color_source_settings.green AS color_green,
+                color_source_settings.blue AS color_blue,
+                color_source_settings.alpha AS color_alpha,
+                display_capture_settings.target_kind AS display_capture_target_kind,
+                display_capture_settings.monitor_name AS display_capture_monitor_name,
+                display_capture_settings.restore_token AS display_capture_restore_token,
+                display_capture_settings.width AS display_capture_width,
+                display_capture_settings.height AS display_capture_height,
+                drawing_source_settings.width AS drawing_width,
+                drawing_source_settings.height AS drawing_height,
+                window_capture_settings.target_kind AS window_capture_target_kind,
+                window_capture_settings.process AS window_capture_process,
+                window_capture_settings.title AS window_capture_title,
+                window_capture_settings.restore_token AS window_capture_restore_token,
+                window_capture_settings.width AS window_capture_width,
+                window_capture_settings.height AS window_capture_height,
+                media_file_settings.path AS media_file_path,
+                media_file_settings.looping AS media_file_looping,
+                media_file_settings.width AS media_file_width,
+                media_file_settings.height AS media_file_height,
+                media_file_settings.has_audio AS media_file_has_audio,
+                media_file_settings.gain_db AS media_file_gain_db,
+                media_file_settings.muted AS media_file_muted,
+                media_file_settings.duration_us AS media_file_duration_us,
+                media_file_settings.paused AS media_file_paused,
+                media_file_settings.monitored AS media_file_monitored,
+                image_source_settings.path AS image_path,
+                image_source_settings.width AS image_width,
+                image_source_settings.height AS image_height,
+                rtsp_source_settings.url AS rtsp_url,
+                rtsp_source_settings.transport AS rtsp_transport,
+                rtsp_source_settings.reconnect_seconds AS rtsp_reconnect_seconds,
+                rtsp_source_settings.width AS rtsp_width,
+                rtsp_source_settings.height AS rtsp_height,
+                rtsp_source_settings.has_audio AS rtsp_has_audio,
+                rtsp_source_settings.gain_db AS rtsp_gain_db,
+                rtsp_source_settings.muted AS rtsp_muted,
+                video_capture_settings.device AS video_capture_device,
+                video_capture_settings.device_name AS video_capture_device_name,
+                video_capture_settings.mode_width AS video_capture_mode_width,
+                video_capture_settings.mode_height AS video_capture_mode_height,
+                video_capture_settings.mode_rate_numerator AS video_capture_mode_rate_numerator,
+                video_capture_settings.mode_rate_denominator AS video_capture_mode_rate_denominator,
+                video_capture_settings.width AS video_capture_width,
+                video_capture_settings.height AS video_capture_height,
+                text_source_settings.width AS text_width,
+                text_source_settings.height AS text_height,
+                text_source_settings.text AS text_text,
+                text_source_settings.font AS text_font,
+                text_source_settings.font_size AS text_font_size,
+                text_source_settings.red AS text_red,
+                text_source_settings.green AS text_green,
+                text_source_settings.blue AS text_blue,
+                text_source_settings.alpha AS text_alpha,
+                text_source_settings.alignment AS text_alignment,
+                text_source_settings.mode AS text_mode,
+                text_source_settings.clock_format AS text_clock_format,
+                text_source_settings.timer_format AS text_timer_format,
+                text_source_settings.timer_running_since AS text_timer_running_since,
+                text_source_settings.timer_accumulated_us AS text_timer_accumulated_us
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -182,39 +182,34 @@ impl SourceStore {
 
         let mut rows = statement
             .query_map([scene_id.0], |row| {
-                let kind_name: String = row.get(17)?;
-                let kind = SourceKind::from_storage_name(&kind_name).ok_or_else(|| {
-                    rusqlite::Error::InvalidColumnType(
-                        17,
-                        "kind".into(),
-                        rusqlite::types::Type::Text,
-                    )
-                })?;
+                let kind_name: String = row.get("source_kind")?;
+                let kind = SourceKind::from_storage_name(&kind_name)
+                    .ok_or_else(|| unrecognized_name("kind"))?;
                 let settings = match kind {
                     SourceKind::Color => SourceSettings::Color(ColorSourceSettings {
-                        size: [row.get::<_, i64>(18)? as f32, row.get::<_, i64>(19)? as f32],
+                        size: [
+                            row.get::<_, i64>("color_width")? as f32,
+                            row.get::<_, i64>("color_height")? as f32,
+                        ],
                         rgba: [
-                            row.get::<_, i64>(20)? as u8,
-                            row.get::<_, i64>(21)? as u8,
-                            row.get::<_, i64>(22)? as u8,
-                            row.get::<_, i64>(23)? as u8,
+                            row.get::<_, i64>("color_red")? as u8,
+                            row.get::<_, i64>("color_green")? as u8,
+                            row.get::<_, i64>("color_blue")? as u8,
+                            row.get::<_, i64>("color_alpha")? as u8,
                         ],
                     }),
                     SourceKind::DisplayCapture => {
                         SourceSettings::DisplayCapture(DisplayCaptureSettings {
                             target: display_capture_target(
-                                &row.get::<_, String>(24)?,
-                                row.get(25)?,
-                                row.get(26)?,
+                                &row.get::<_, String>("display_capture_target_kind")?,
+                                row.get("display_capture_monitor_name")?,
+                                row.get("display_capture_restore_token")?,
                             )
-                            .ok_or_else(|| {
-                                rusqlite::Error::InvalidColumnType(
-                                    24,
-                                    "target_kind".into(),
-                                    rusqlite::types::Type::Text,
-                                )
-                            })?,
-                            size_hint: match (row.get(27)?, row.get(28)?) {
+                            .ok_or_else(|| unrecognized_name("target_kind"))?,
+                            size_hint: match (
+                                row.get("display_capture_width")?,
+                                row.get("display_capture_height")?,
+                            ) {
                                 (Some(width), Some(height)) => Some([width, height]),
                                 _ => None,
                             },
@@ -224,128 +219,130 @@ impl SourceStore {
                     // the rest of this query has one row per item. They are
                     // filled in below, once the items are known.
                     SourceKind::Drawing => SourceSettings::Drawing(DrawingSourceSettings {
-                        size: [row.get::<_, i64>(29)? as f32, row.get::<_, i64>(30)? as f32],
+                        size: [
+                            row.get::<_, i64>("drawing_width")? as f32,
+                            row.get::<_, i64>("drawing_height")? as f32,
+                        ],
                         strokes: Vec::new(),
                     }),
                     SourceKind::Text => SourceSettings::Text(TextSourceSettings {
-                        size: [row.get::<_, i64>(66)? as f32, row.get::<_, i64>(67)? as f32],
-                        text: row.get(68)?,
-                        font: row.get::<_, Option<String>>(69)?.map(PathBuf::from),
-                        font_size: row.get(70)?,
-                        rgba: [
-                            row.get::<_, i64>(71)? as u8,
-                            row.get::<_, i64>(72)? as u8,
-                            row.get::<_, i64>(73)? as u8,
-                            row.get::<_, i64>(74)? as u8,
+                        size: [
+                            row.get::<_, i64>("text_width")? as f32,
+                            row.get::<_, i64>("text_height")? as f32,
                         ],
-                        alignment: TextAlignment::from_storage_name(&row.get::<_, String>(75)?)
-                            .ok_or_else(|| {
-                                rusqlite::Error::InvalidColumnType(
-                                    75,
-                                    "alignment".into(),
-                                    rusqlite::types::Type::Text,
-                                )
-                            })?,
-                        mode: TextMode::from_storage_name(&row.get::<_, String>(76)?).ok_or_else(
-                            || {
-                                rusqlite::Error::InvalidColumnType(
-                                    76,
-                                    "mode".into(),
-                                    rusqlite::types::Type::Text,
-                                )
-                            },
-                        )?,
+                        text: row.get("text_text")?,
+                        font: row
+                            .get::<_, Option<String>>("text_font")?
+                            .map(PathBuf::from),
+                        font_size: row.get("text_font_size")?,
+                        rgba: [
+                            row.get::<_, i64>("text_red")? as u8,
+                            row.get::<_, i64>("text_green")? as u8,
+                            row.get::<_, i64>("text_blue")? as u8,
+                            row.get::<_, i64>("text_alpha")? as u8,
+                        ],
+                        alignment: TextAlignment::from_storage_name(
+                            &row.get::<_, String>("text_alignment")?,
+                        )
+                        .ok_or_else(|| unrecognized_name("alignment"))?,
+                        mode: TextMode::from_storage_name(&row.get::<_, String>("text_mode")?)
+                            .ok_or_else(|| unrecognized_name("mode"))?,
                         // A format this build does not know is the default
                         // rather than a project that will not open: it can
                         // only come from a newer build, and a clock in the
                         // wrong format is a better answer than no project.
-                        clock_format: ClockFormat::from_storage_name(&row.get::<_, String>(77)?)
-                            .unwrap_or_default(),
-                        timer_format: TimerFormat::from_storage_name(&row.get::<_, String>(78)?)
-                            .unwrap_or_default(),
+                        clock_format: ClockFormat::from_storage_name(
+                            &row.get::<_, String>("text_clock_format")?,
+                        )
+                        .unwrap_or_default(),
+                        timer_format: TimerFormat::from_storage_name(
+                            &row.get::<_, String>("text_timer_format")?,
+                        )
+                        .unwrap_or_default(),
                         timer: TextTimer {
-                            running_since: row.get(79)?,
+                            running_since: row.get("text_timer_running_since")?,
                             accumulated: std::time::Duration::from_micros(
-                                row.get::<_, i64>(80)?.max(0) as u64,
+                                row.get::<_, i64>("text_timer_accumulated_us")?.max(0) as u64,
                             ),
                         },
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
                             target: window_capture_target(
-                                &row.get::<_, String>(31)?,
-                                row.get(32)?,
-                                row.get(33)?,
-                                row.get(34)?,
+                                &row.get::<_, String>("window_capture_target_kind")?,
+                                row.get("window_capture_process")?,
+                                row.get("window_capture_title")?,
+                                row.get("window_capture_restore_token")?,
                             )
-                            .ok_or_else(|| {
-                                rusqlite::Error::InvalidColumnType(
-                                    31,
-                                    "target_kind".into(),
-                                    rusqlite::types::Type::Text,
-                                )
-                            })?,
-                            size_hint: match (row.get(35)?, row.get(36)?) {
+                            .ok_or_else(|| unrecognized_name("target_kind"))?,
+                            size_hint: match (
+                                row.get("window_capture_width")?,
+                                row.get("window_capture_height")?,
+                            ) {
                                 (Some(width), Some(height)) => Some([width, height]),
                                 _ => None,
                             },
                         })
                     }
                     SourceKind::MediaFile => SourceSettings::MediaFile(MediaFileSettings {
-                        path: PathBuf::from(row.get::<_, String>(37)?),
-                        looping: row.get(38)?,
-                        size_hint: match (row.get(39)?, row.get(40)?) {
+                        path: PathBuf::from(row.get::<_, String>("media_file_path")?),
+                        looping: row.get("media_file_looping")?,
+                        size_hint: match (
+                            row.get("media_file_width")?,
+                            row.get("media_file_height")?,
+                        ) {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
-                        has_audio: row.get(41)?,
-                        gain_db: row.get(42)?,
-                        muted: row.get(43)?,
+                        has_audio: row.get("media_file_has_audio")?,
+                        gain_db: row.get("media_file_gain_db")?,
+                        muted: row.get("media_file_muted")?,
                         duration: row
-                            .get::<_, Option<i64>>(44)?
+                            .get::<_, Option<i64>>("media_file_duration_us")?
                             .and_then(|micros| u64::try_from(micros).ok())
                             .map(std::time::Duration::from_micros),
-                        paused: row.get(45)?,
-                        monitored: row.get(46)?,
+                        paused: row.get("media_file_paused")?,
+                        monitored: row.get("media_file_monitored")?,
                     }),
                     SourceKind::Image => SourceSettings::Image(ImageSourceSettings {
-                        path: PathBuf::from(row.get::<_, String>(47)?),
-                        size_hint: match (row.get(48)?, row.get(49)?) {
+                        path: PathBuf::from(row.get::<_, String>("image_path")?),
+                        size_hint: match (row.get("image_width")?, row.get("image_height")?) {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
                     }),
                     SourceKind::Rtsp => SourceSettings::Rtsp(RtspSourceSettings {
-                        url: row.get(50)?,
-                        transport: RtspTransport::from_storage_name(&row.get::<_, String>(51)?)
-                            .ok_or_else(|| {
-                                rusqlite::Error::InvalidColumnType(
-                                    51,
-                                    "transport".into(),
-                                    rusqlite::types::Type::Text,
-                                )
-                            })?,
+                        url: row.get("rtsp_url")?,
+                        transport: RtspTransport::from_storage_name(
+                            &row.get::<_, String>("rtsp_transport")?,
+                        )
+                        .ok_or_else(|| unrecognized_name("transport"))?,
                         reconnect: row
-                            .get::<_, Option<i64>>(52)?
+                            .get::<_, Option<i64>>("rtsp_reconnect_seconds")?
                             .and_then(|seconds| u64::try_from(seconds).ok())
                             .map(std::time::Duration::from_secs),
-                        size_hint: match (row.get(53)?, row.get(54)?) {
+                        size_hint: match (row.get("rtsp_width")?, row.get("rtsp_height")?) {
                             (Some(width), Some(height)) => Some([width, height]),
                             _ => None,
                         },
-                        has_audio: row.get(55)?,
-                        gain_db: row.get(56)?,
-                        muted: row.get(57)?,
+                        has_audio: row.get("rtsp_has_audio")?,
+                        gain_db: row.get("rtsp_gain_db")?,
+                        muted: row.get("rtsp_muted")?,
                     }),
                     SourceKind::VideoCapture => {
                         SourceSettings::VideoCapture(VideoCaptureSettings {
-                            device: row.get(58)?,
-                            device_name: row.get(59)?,
+                            device: row.get("video_capture_device")?,
+                            device_name: row.get("video_capture_device_name")?,
                             // All four together or none: a half-stated mode
                             // is not one the camera could be asked for, and
                             // taking its first offered mode is what the
                             // absence already means.
-                            mode: match (row.get(60)?, row.get(61)?, row.get(62)?, row.get(63)?) {
+                            mode: match (
+                                row.get("video_capture_mode_width")?,
+                                row.get("video_capture_mode_height")?,
+                                row.get("video_capture_mode_rate_numerator")?,
+                                row.get("video_capture_mode_rate_denominator")?,
+                            ) {
                                 (
                                     Some(width),
                                     Some(height),
@@ -359,38 +356,41 @@ impl SourceStore {
                                 }),
                                 _ => None,
                             },
-                            size_hint: match (row.get(64)?, row.get(65)?) {
+                            size_hint: match (
+                                row.get("video_capture_width")?,
+                                row.get("video_capture_height")?,
+                            ) {
                                 (Some(width), Some(height)) => Some([width, height]),
                                 _ => None,
                             },
                         })
                     }
                 };
-                let source_id = SourceId(row.get(1)?);
+                let source_id = SourceId(row.get("item_source_id")?);
                 Ok((
                     SceneItem {
-                        id: SceneItemId(row.get(0)?),
+                        id: SceneItemId(row.get("item_id")?),
                         scene_id,
                         source_id,
-                        visible: row.get(2)?,
-                        locked: row.get(3)?,
+                        visible: row.get("item_visible")?,
+                        locked: row.get("item_locked")?,
                         transform: Transform {
-                            position: [row.get(4)?, row.get(5)?],
-                            scale: [row.get(6)?, row.get(7)?],
-                            rotation_degrees: row.get(8)?,
-                            anchor: [row.get(9)?, row.get(10)?],
+                            position: [row.get("item_position_x")?, row.get("item_position_y")?],
+                            scale: [row.get("item_scale_x")?, row.get("item_scale_y")?],
+                            rotation_degrees: row.get("item_rotation_degrees")?,
+                            anchor: [row.get("item_anchor_x")?, row.get("item_anchor_y")?],
                         },
                         crop: Crop {
-                            left: row.get(11)?,
-                            top: row.get(12)?,
-                            right: row.get(13)?,
-                            bottom: row.get(14)?,
+                            left: row.get("item_crop_left")?,
+                            top: row.get("item_crop_top")?,
+                            right: row.get("item_crop_right")?,
+                            bottom: row.get("item_crop_bottom")?,
                         },
-                        z_index: row.get(15)?,
+                        z_index: row.get("item_z_index")?,
                     },
                     Source {
                         id: source_id,
-                        name: row.get(16)?,
+                        name: row.get("source_name")?,
                         kind,
                         settings,
                         // Filled by the second pass below: filters are many
@@ -1474,6 +1474,16 @@ fn set_media_column<T: rusqlite::ToSql>(
         params![value, scene_item_id.0],
     )?;
     Ok(())
+}
+
+/// The error for a column holding a name no variant of this build answers
+/// to — a project written by a newer one, or by hand.
+///
+/// `rusqlite` wants a column index and there is no longer one to give: the
+/// query is read by name, which is the whole point of it. Zero is what it
+/// gets, and the name beside it is what anyone reading the error needs.
+fn unrecognized_name(column: &'static str) -> rusqlite::Error {
+    rusqlite::Error::InvalidColumnType(0, column.into(), rusqlite::types::Type::Text)
 }
 
 fn set_text_column<T: rusqlite::ToSql>(
