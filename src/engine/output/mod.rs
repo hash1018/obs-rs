@@ -160,7 +160,7 @@ pub struct OutputEncoding {
 
 /// One track an output will carry, as the muxer has to be told about it.
 pub(in crate::engine) struct TrackDef {
-    pub(in crate::engine) name: &'static str,
+    pub(in crate::engine) name: String,
     pub(in crate::engine) parameters: ffmpeg::codec::Parameters,
     pub(in crate::engine) time_base: ffmpeg::Rational,
 }
@@ -325,15 +325,19 @@ impl Output {
             })
             .transpose()?;
 
-        // The tracks, in the order their sinks come back.
+        // The tracks, in the order their sinks come back. Named after the
+        // output like everything else in it: a muxer track is the element a
+        // failure is now reported under — `media-pp` traces an error back to
+        // whatever raised it — and `video` alone would not say which of two
+        // running outputs had stopped.
         let mut tracks = vec![TrackDef {
-            name: "video",
+            name: format!("{}-video", kind.prefix()),
             parameters: video.parameters(),
             time_base: video.time_base(),
         }];
         if let Some((_, encoder)) = &audio {
             tracks.push(TrackDef {
-                name: "audio",
+                name: format!("{}-audio", kind.prefix()),
                 parameters: encoder.parameters(),
                 time_base: audio_time_base,
             });

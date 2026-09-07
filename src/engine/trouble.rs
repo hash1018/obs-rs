@@ -65,16 +65,14 @@ pub(in crate::engine) fn drain(bus: &BusReceiver, source: &str) -> Vec<Trouble> 
             BusEvent::Error { name, error, .. } => {
                 let reason = format!("{name}: {error}");
                 eprintln!("{source}: {reason}");
-                // Attributed by name, not by element type. A muxer that
-                // fails is not what reaches the bus: the `Queue` in front of
-                // it catches what its sink returned, drops that buffer,
-                // keeps its worker alive — which is right — and posts the
-                // error **as its own**, hardcoded to `ElementType::Queue`
-                // with the queue's own name. The failing element's identity
-                // is in `media-pp`'s log and nowhere else.
+                // Attributed by name. `media-pp` traces an error back to
+                // the element that raised it, so what arrives here names the
+                // muxer that stopped writing rather than the queue in front
+                // of it — but a muxer track is called `video` or `audio`,
+                // and both outputs have one.
                 //
-                // So what says which output has stopped is what its elements
-                // are called, which is why they are named after
+                // So what says *which* output has stopped is the prefix its
+                // elements are named with, which is why they are named after
                 // `OutputKind` and why that lives beside this.
                 if name.starts_with(OutputKind::Broadcast.prefix()) {
                     troubles.push(Trouble::Broadcast(reason));
