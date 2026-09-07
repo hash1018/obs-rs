@@ -48,7 +48,7 @@ pub(in crate::engine) use session::{RecordingState, describe, start_recording};
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
 mod platform;
 
-pub(in crate::engine) use platform::PreparedRecording;
+pub(in crate::engine) use platform::PreparedOutput;
 
 use std::path::Path;
 use std::time::Duration;
@@ -66,9 +66,7 @@ use media_pp::{
 };
 
 use super::audio::DEFAULT_MIX_FORMAT;
-use super::backend::{
-    Backend, BackendError, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, VideoTrack,
-};
+use super::backend::{Backend, BackendError, OUTPUT_QUEUE_DEPTH, OUTPUT_SEND_TIMEOUT, VideoTrack};
 use crate::settings::{DEFAULT_AUDIO_BIT_RATE_KBPS, RecordingAudioCodec, RecordingSplit};
 
 /// Which audio codecs this FFmpeg build can actually open, at the mix format
@@ -114,10 +112,29 @@ fn media_codec(codec: RecordingAudioCodec) -> AudioCodec {
 /// The three take the same `add_stream(name, parameters, time_base)`, so the
 /// tracks are described once and the choice below is only about which muxer
 /// hears them.
-struct TrackDef {
-    name: &'static str,
-    parameters: ffmpeg::codec::Parameters,
-    time_base: ffmpeg::Rational,
+/// What an output encodes with, whatever it does with the packets.
+///
+/// Read off a `RecordingSettings` or a `StreamingSettings` — see their
+/// `encoding` methods — so that the encoders and the backend never have to
+/// know which of the two they are serving. The two differ in where the
+/// packets go and in nothing before that.
+pub struct OutputEncoding {
+    pub encoder: crate::settings::RecordingEncoder,
+    /// The picture size to encode at, already resolved against the Canvas.
+    pub size: [u32; 2],
+    pub bit_rate_bits: usize,
+    /// How often a keyframe is written, in seconds. A broadcast wants these
+    /// often — a viewer joining cannot see anything until one arrives.
+    pub keyframe_seconds: u32,
+    pub audio_codec: crate::settings::RecordingAudioCodec,
+    pub audio_bit_rate_kbps: u32,
+}
+
+/// One track an output will carry, as the muxer has to be told about it.
+pub(in crate::engine) struct TrackDef {
+    pub(in crate::engine) name: &'static str,
+    pub(in crate::engine) parameters: ffmpeg::codec::Parameters,
+    pub(in crate::engine) time_base: ffmpeg::Rational,
 }
 
 /// Opens whichever muxer the settings ask for, into one [`Sink`] per track in
@@ -203,13 +220,19 @@ fn open_hls_muxer(path: &Path, tracks: Vec<TrackDef>) -> Result<Vec<Box<dyn Sink
 /// See [`open_hls_muxer`] for why this is a constant.
 const HLS_SEGMENT_DURATION: Duration = Duration::from_secs(6);
 
-/// A recording that is running, and everything needed to end it.
-pub(super) struct Recording {
+/// One running output — a file being written, or a broadcast being
+/// published — and everything needed to end it.
+///
+/// Both are the same two branches: the compositor's `Tee` through a video
+/// encoder, and the mixer's through an audio one, meeting at a muxer. What
+/// differs is only which muxer, which is why [`Output::start`] takes one
+/// rather than opening it.
+pub(in crate::engine) struct Output {
     video: Option<VideoTrack>,
     audio: Option<AudioTrack>,
 }
 
-/// The recording's audio branch, on the mixer's `Tee`.
+/// The output's audio branch, on the mixer's `Tee`.
 struct AudioTrack {
     /// Cloned rather than borrowed: this outlives the call that made it, and
     /// the mixer's `Tee` is reached from nowhere else on this thread.
@@ -218,27 +241,34 @@ struct AudioTrack {
     pause: PauseGateHandle,
 }
 
-impl Recording {
-    /// Opens `path` and starts both tracks writing into it.
+impl Output {
+    /// Opens both encoders, hands their descriptions to `open_muxer`, and
+    /// starts both branches writing into what it returns.
     ///
-    /// `fps` is the compositor's own rate; what the file is written at comes
-    /// from `settings` and can be less. `mixer` is `None` on a machine
-    /// whose mixer never started, which yields a video-only file rather than
-    /// an error.
-    pub(super) fn start(
+    /// `fps` is the compositor's own rate; what the output is written at
+    /// comes from `encoding` and can be less. `mixer` is `None` on a machine
+    /// whose mixer never started, which yields a video-only output rather
+    /// than an error.
+    ///
+    /// # Why the muxer arrives as a function
+    ///
+    /// Because a container's tracks are fixed before its header is written,
+    /// and the tracks cannot be described until both encoders are open. So
+    /// the muxer cannot be opened by the caller — it does not yet know what
+    /// to declare — and it cannot be opened here either, because a file and
+    /// a broadcast are opened in entirely different ways. What this knows is
+    /// the moment between the two, which is what it hands over.
+    pub(in crate::engine) fn start(
         backend: &Backend,
         mixer: Option<&(TeeHandle, MixerHandle)>,
-        path: &Path,
         fps: u32,
-        settings: &crate::settings::RecordingSettings,
+        encoding: &OutputEncoding,
+        open_muxer: impl FnOnce(Vec<TrackDef>) -> Result<Vec<Box<dyn Sink>>, BackendError>,
     ) -> Result<Self, BackendError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         // Both encoders open before the file does. An encoder that cannot be
         // opened must not leave a zero-length mp4 behind, and the audio one
         // is the more likely of the two to refuse.
-        let video: PreparedRecording = backend.prepare_recording(fps, settings)?;
+        let video: PreparedOutput = backend.prepare_output(fps, encoding)?;
         // The format the mixer is actually summing into, not what the settings
         // asked for: one it refused leaves the old one running, and a track
         // opened for a format nothing is producing is samples that do not fit
@@ -253,13 +283,13 @@ impl Recording {
                 Ok((
                     tee,
                     SwAudioEncoder::new(
-                        "record-audio-encode",
+                        "output-audio-encode",
                         SwAudioEncoderOptions {
-                            codec: media_codec(settings.audio_codec),
+                            codec: media_codec(encoding.audio_codec),
                             sample_rate: mix.sample_rate,
                             channels: mix.channels,
                             time_base: audio_time_base,
-                            bit_rate: settings.audio_bit_rate_kbps.max(1) as usize * 1_000,
+                            bit_rate: encoding.audio_bit_rate_kbps.max(1) as usize * 1_000,
                         },
                     )?,
                 ))
@@ -279,7 +309,7 @@ impl Recording {
                 time_base: audio_time_base,
             });
         }
-        let mut sinks = open_muxer(path, settings, tracks)?;
+        let mut sinks = open_muxer(tracks)?;
         // Taken from the front, so each sink is the stream added at that
         // index — `add_stream` order is what `open` answers in.
         if sinks.is_empty() {
@@ -290,7 +320,7 @@ impl Recording {
         let audio = match audio {
             Some((tee, encoder)) => {
                 let sink = sinks.remove(0);
-                let (gate, pause) = PauseGate::for_audio("record-audio-pause");
+                let (gate, pause) = PauseGate::for_audio("output-audio-pause");
                 let branch = tee
                     .branch()
                     .ok_or("the mixer's Tee is gone")?
@@ -299,16 +329,16 @@ impl Recording {
                     // on the mixer's own thread, where a slow write would
                     // stall the mix everything else is listening to.
                     .queue_with_policy(
-                        "record-audio-queue",
-                        RECORDING_QUEUE_DEPTH,
-                        OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
+                        "output-audio-queue",
+                        OUTPUT_QUEUE_DEPTH,
+                        OverflowPolicy::Block(OUTPUT_SEND_TIMEOUT),
                     )
                     .pipe(gate)
                     .pipe(encoder)
                     // The mixer has been running since the application
                     // started and its timeline says so, exactly as the
                     // compositor's does.
-                    .pipe(TimestampOrigin::new("record-audio-origin"))
+                    .pipe(TimestampOrigin::new("output-audio-origin"))
                     .to(sink)?;
                 Some(AudioTrack {
                     branch: tee.attach(branch)?,
@@ -322,7 +352,7 @@ impl Recording {
         // Attached last, so a failure above leaves no track running: the
         // video branch is the one that cannot be un-attached without
         // finalizing the file.
-        let video = match backend.attach_recording(video, video_sink) {
+        let video = match backend.attach_output(video, video_sink) {
             Ok(video) => video,
             Err(error) => {
                 // Whatever was already writing has to be ended, or the file
@@ -348,7 +378,7 @@ impl Recording {
     /// within a tick of each — about 16 ms for video at 60 fps and a
     /// millisecond for audio — and that much accumulates across repeated
     /// pauses rather than cancelling out.
-    pub(super) fn set_paused(&self, paused: bool) {
+    pub(in crate::engine) fn set_paused(&self, paused: bool) {
         if let Some(video) = &self.video {
             video.pause.set_paused(paused);
         }
@@ -363,7 +393,7 @@ impl Recording {
     /// done, so a failure on one track is not a reason to skip the other —
     /// that would leave the mp4 unplayable rather than merely truncated. The
     /// first error is reported after both have been tried.
-    pub(super) fn stop(mut self, backend: &Backend) -> Result<(), BackendError> {
+    pub(in crate::engine) fn stop(mut self, backend: &Backend) -> Result<(), BackendError> {
         let mut failure = None;
         if let Some(audio) = self.audio.take()
             && let Err(error) = audio.tee.finish_branch(audio.branch)
@@ -371,7 +401,7 @@ impl Recording {
             failure = Some(BackendError::from(error));
         }
         if let Some(video) = self.video.take()
-            && let Err(error) = backend.detach_recording(video)
+            && let Err(error) = backend.detach_output(video)
         {
             failure = failure.or(Some(error));
         }

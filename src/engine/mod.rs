@@ -14,14 +14,17 @@
 
 mod audio;
 mod backend;
+mod output;
 mod preview;
-mod recording;
 mod status;
 
 pub use preview::CompositeFrame;
 mod source;
 
 pub use audio::AudioManager;
+/// What an output encodes with — read off the settings, and the only thing
+/// the encoders are told about which kind of output they serve.
+pub use output::OutputEncoding;
 
 use std::collections::HashMap;
 use std::sync::{
@@ -39,7 +42,7 @@ use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
-use recording::{RecordingState, describe, start_recording};
+use output::{RecordingState, describe, start_recording};
 
 use backend::{Backend, BackendError};
 use source::{
@@ -625,7 +628,7 @@ fn run(
     // dialog has one moment at which both lists exist. Kept as well as
     // published: `usable_settings` needs it and cannot read a published slot
     // the UI owns.
-    recording.audio_codecs = recording::available_audio_codecs(recording.mix_format());
+    recording.audio_codecs = output::available_audio_codecs(recording.mix_format());
     published
         .audio_codecs
         .store(Some(Arc::new(recording.audio_codecs.clone())));
@@ -984,7 +987,7 @@ fn apply_command(
             // The rate the mix runs at decides which audio encoders can open —
             // `libopus` takes 48 kHz and a short list of others, and nothing
             // else. Re-probed here because Apply is when it can have moved.
-            recording.audio_codecs = recording::available_audio_codecs(recording.mix_format());
+            recording.audio_codecs = output::available_audio_codecs(recording.mix_format());
             published
                 .audio_codecs
                 .store(Some(Arc::new(recording.audio_codecs.clone())));

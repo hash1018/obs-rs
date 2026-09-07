@@ -71,23 +71,23 @@ impl Backend {
     /// Unreachable in practice — `start` refuses, so no `Backend` exists on
     /// this platform to ask. Present because the engine above is written
     /// against one backend interface, not three.
-    pub(in crate::engine) fn prepare_recording(
+    pub(in crate::engine) fn prepare_output(
         &self,
         _fps: u32,
         _settings: &crate::settings::RecordingSettings,
-    ) -> Result<PreparedRecording, BackendError> {
+    ) -> Result<PreparedOutput, BackendError> {
         Err("no compositor backend is written for this platform yet".into())
     }
 
-    pub(in crate::engine) fn attach_recording(
+    pub(in crate::engine) fn attach_output(
         &self,
-        _prepared: PreparedRecording,
+        _prepared: PreparedOutput,
         _sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<super::VideoTrack, BackendError> {
         Err("no compositor backend is written for this platform yet".into())
     }
 
-    pub(in crate::engine) fn detach_recording(
+    pub(in crate::engine) fn detach_output(
         &self,
         _track: super::VideoTrack,
     ) -> Result<(), BackendError> {
@@ -111,9 +111,9 @@ impl Backend {
 
 /// No encoder is ever opened here, so there is nothing to carry — but the
 /// engine names this type, so it has to exist.
-pub(in crate::engine) enum PreparedRecording {}
+pub(in crate::engine) enum PreparedOutput {}
 
-impl PreparedRecording {
+impl PreparedOutput {
     pub(in crate::engine) fn parameters(&self) -> media_pp::ffmpeg::codec::Parameters {
         match *self {}
     }

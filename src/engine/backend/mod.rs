@@ -119,7 +119,7 @@ pub(super) const PROBE_FPS: u32 = 60;
 /// made to wait — at 60 fps, about an eighth of a second of slack for an
 /// encoder that hiccups.
 #[allow(dead_code)]
-pub(super) const RECORDING_QUEUE_DEPTH: usize = 8;
+pub(super) const OUTPUT_QUEUE_DEPTH: usize = 8;
 
 /// How long the compositor waits for room in that queue before giving up on
 /// a frame.
@@ -132,8 +132,7 @@ pub(super) const RECORDING_QUEUE_DEPTH: usize = 8;
 /// branch, which is what makes an overloaded encoder visible instead of
 /// silent.
 #[allow(dead_code)]
-pub(super) const RECORDING_SEND_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(500);
+pub(super) const OUTPUT_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The recording's video branch while one is running.
 ///

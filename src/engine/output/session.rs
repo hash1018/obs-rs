@@ -23,7 +23,7 @@ use arc_swap::ArcSwapOption;
 
 use super::super::audio;
 use super::super::backend::{Backend, BackendError};
-use super::Recording;
+use super::Output;
 
 /// Everything a recording is opened from, and the one that is open.
 ///
@@ -59,7 +59,7 @@ pub(in crate::engine) struct RecordingState {
     pub(in crate::engine) audio_codecs: Vec<crate::settings::RecordingAudioCodec>,
     /// The recording that is running, if one is. It rather than the backend
     /// holds the video branch too — see [`Recording`].
-    pub(in crate::engine) running: Option<Recording>,
+    pub(in crate::engine) running: Option<Output>,
 }
 
 impl RecordingState {
@@ -116,12 +116,12 @@ pub(in crate::engine) fn start_recording(
         crate::clock::now_local(),
         settings.format,
     );
-    let running = Recording::start(
+    let running = Output::start(
         backend,
         recording.mixer.as_ref(),
-        &path,
         backend.frame_rate(),
-        settings,
+        &settings.encoding(backend.size),
+        |tracks| super::open_muxer(&path, settings, tracks),
     )?;
     recording.running = Some(running);
     println!("recording to {}", path.display());

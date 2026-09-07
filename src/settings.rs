@@ -607,6 +607,22 @@ impl RecordingSettings {
     /// Derived rather than stored as a pair: a width and a height that can
     /// disagree with the canvas is a stretched recording nobody asked for,
     /// and the one place to keep them agreeing is here.
+    /// What an output encodes with, resolved against the Canvas.
+    ///
+    /// The engine takes this rather than the settings themselves, so that
+    /// nothing below it has to know whether it is serving a recording or a
+    /// broadcast — see `engine::output::OutputEncoding`.
+    pub fn encoding(&self, canvas: [u32; 2]) -> crate::engine::OutputEncoding {
+        crate::engine::OutputEncoding {
+            encoder: self.encoder,
+            size: self.output_size(canvas),
+            bit_rate_bits: self.bit_rate_bits(),
+            keyframe_seconds: self.keyframe_seconds_clamped(),
+            audio_codec: self.audio_codec,
+            audio_bit_rate_kbps: self.audio_bit_rate_kbps,
+        }
+    }
+
     pub fn output_size(&self, canvas: [u32; 2]) -> [u32; 2] {
         let [canvas_width, canvas_height] = canvas;
         if self.output_height == 0 || self.output_height >= canvas_height || canvas_height == 0 {

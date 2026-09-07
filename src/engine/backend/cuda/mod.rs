@@ -60,7 +60,7 @@ pub(in crate::engine) struct Backend {
     pub(in crate::engine) capture_rates: Mutex<HashMap<String, FrameRateHandle>>,
     pub(in crate::engine) preview: Arc<Pipeline>,
     /// Where a recording branch is attached — see
-    /// [`Backend::attach_recording`].
+    /// [`Backend::attach_output`].
     pub(in crate::engine) tee: TeeHandle,
     /// Which encoders this machine can open, worked out on first ask — see
     /// [`Backend::available_encoders`].

@@ -19,20 +19,22 @@ use media_pp::ffmpeg;
 use media_pp::queue::OverflowPolicy;
 
 use crate::engine::backend::{
-    Backend, BackendError, PROBE_FPS, RECORDING_QUEUE_DEPTH, RECORDING_SEND_TIMEOUT, VideoTrack,
+    Backend, BackendError, OUTPUT_QUEUE_DEPTH, OUTPUT_SEND_TIMEOUT, PROBE_FPS, VideoTrack,
     software_codec,
 };
 use crate::settings::{RecordingEncoder, RecordingSettings};
+
+use super::OutputEncoding;
 
 /// A video encoder opened and ready, waiting only for the muxer sink it
 /// writes into.
 ///
 /// It exists because an mp4's tracks are fixed before its header is written,
-/// and the audio track is added by `engine::recording` — which cannot open
+/// and the audio track is added by `engine::output` — which cannot open
 /// this one, since which encoder and which frame format are the backend's
 /// own. So the work splits: this end opens the encoder and says what stream
 /// it needs, and the branch is built once the sink for it exists.
-pub(in crate::engine) struct PreparedRecording {
+pub(in crate::engine) struct PreparedOutput {
     encoder: RecordEncoder,
     /// What the file's video track is stamped in — the reciprocal of the
     /// rate the compositor is running at, which is the only rate frames can
@@ -44,7 +46,7 @@ pub(in crate::engine) struct PreparedRecording {
     size: [u32; 2],
 }
 
-impl PreparedRecording {
+impl PreparedOutput {
     /// What `Mp4Muxer::add_stream` needs to describe this track.
     pub(in crate::engine) fn parameters(&self) -> ffmpeg::codec::Parameters {
         match &self.encoder {
@@ -67,29 +69,29 @@ enum RecordEncoder {
 }
 
 impl Backend {
-    pub(in crate::engine) fn prepare_recording(
+    pub(in crate::engine) fn prepare_output(
         &self,
         fps: u32,
-        settings: &crate::settings::RecordingSettings,
-    ) -> Result<PreparedRecording, BackendError> {
+        encoding: &OutputEncoding,
+    ) -> Result<PreparedOutput, BackendError> {
         // The compositor's own rate, which the settings have already been
         // applied to — a recording is written at what is being composited,
         // and there is nothing in between to re-rate it. Read from the
         // compositor rather than from the setting so that a rate it refused
         // cannot produce a file claiming frames nothing is making.
-        Ok(PreparedRecording {
-            encoder: self.open_encoder(fps, settings)?,
+        Ok(PreparedOutput {
+            encoder: self.open_encoder(fps, encoding)?,
             time_base: ffmpeg::Rational::new(1, fps as i32),
-            size: settings.output_size(self.size),
+            size: encoding.size,
         })
     }
 
     /// Builds the recording's video branch onto the compositor's `Tee` and
     /// starts it writing into `sink`.
     ///
-    /// Separate from [`Backend::prepare_recording`] only because the sink
+    /// Separate from [`Backend::prepare_output`] only because the sink
     /// cannot exist until every track has been declared — see
-    /// [`PreparedRecording`].
+    /// [`PreparedOutput`].
     ///
     /// No colour conversion anywhere: the compositor draws BGRA and NVENC
     /// takes BGRA directly, converting to its own YUV as part of encoding.
@@ -102,12 +104,12 @@ impl Backend {
     /// compositor, and with it the Preview and every other branch. So it
     /// blocks, but only for a bounded time, and a timeout arrives on the bus
     /// as an error naming this branch rather than as silence.
-    pub(in crate::engine) fn attach_recording(
+    pub(in crate::engine) fn attach_output(
         &self,
-        prepared: PreparedRecording,
+        prepared: PreparedOutput,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<VideoTrack, BackendError> {
-        let PreparedRecording { encoder, size, .. } = prepared;
+        let PreparedOutput { encoder, size, .. } = prepared;
         let [width, height] = size;
 
         let mut branch = self
@@ -115,13 +117,13 @@ impl Backend {
             .branch()
             .ok_or("the compositor's Tee is gone")?
             .queue_with_policy(
-                "record-queue",
-                RECORDING_QUEUE_DEPTH,
-                OverflowPolicy::Block(RECORDING_SEND_TIMEOUT),
+                "output-queue",
+                OUTPUT_QUEUE_DEPTH,
+                OverflowPolicy::Block(OUTPUT_SEND_TIMEOUT),
             );
         // The gate first, so a paused span is gone before anything downstream
         // has to reason about it.
-        let (gate, pause) = PauseGate::new("record-pause");
+        let (gate, pause) = PauseGate::new("output-pause");
         branch = branch.pipe(gate);
         // Only when the file is smaller than the canvas. `Preserve` because
         // this is a resize and nothing more — the compositor draws BGRA and
@@ -164,7 +166,7 @@ impl Backend {
             // The compositor has been running since the application started, and
             // its timeline says so. Without this the file is written as
             // beginning that far in, and a player shows the lead-in as empty.
-            .pipe(TimestampOrigin::new("record-origin"))
+            .pipe(TimestampOrigin::new("output-origin"))
             .to(sink)?;
         Ok(VideoTrack {
             branch: self.tee.attach(branch)?,
@@ -172,21 +174,21 @@ impl Backend {
         })
     }
 
-    /// Opens whichever encoder the settings name.
+    /// Opens whichever encoder the output asks for.
     fn open_encoder(
         &self,
         fps: u32,
-        settings: &RecordingSettings,
+        encoding: &OutputEncoding,
     ) -> Result<RecordEncoder, BackendError> {
-        let [width, height] = settings.output_size(self.size);
+        let [width, height] = encoding.size;
         let time_base = ffmpeg::Rational::new(1, fps as i32);
         let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
-        let bit_rate = settings.bit_rate_bits();
-        let gop_size = fps * settings.keyframe_seconds_clamped();
-        match settings.encoder {
+        let bit_rate = encoding.bit_rate_bits;
+        let gop_size = fps * encoding.keyframe_seconds.max(1);
+        match encoding.encoder {
             RecordingEncoder::Nvenc | RecordingEncoder::MediaFoundation => {
                 Ok(RecordEncoder::Hardware(D3d11VideoEncoder::new(
-                    "record-encode",
+                    "output-encode",
                     &self.device,
                     Arc::clone(&self.context),
                     D3d11VideoEncoderOptions {
@@ -218,7 +220,7 @@ impl Backend {
                 )?))
             }
             other => Ok(RecordEncoder::Software(SwEncoder::new(
-                "record-encode",
+                "output-encode",
                 SwEncoderOptions {
                     codec: software_codec(other),
                     width,
@@ -260,17 +262,14 @@ impl Backend {
     ///
     /// Only *this* track: the trailer is written once every track has
     /// reported done, so a file with audio in it stays unplayable until the
-    /// audio branch is finished too. Ending both is `engine::recording`'s
+    /// audio branch is finished too. Ending both is `engine::output`'s
     /// job, and the reason it rather than this owns them.
     ///
     /// Returns once the `Eos` is on its way, not once the file is closed: the
     /// encoder flush and the trailer happen on a thread the `Tee` owns, so
     /// this does not block the engine. The file is complete a moment after
     /// this returns rather than at the instant it does.
-    pub(in crate::engine) fn detach_recording(
-        &self,
-        track: VideoTrack,
-    ) -> Result<(), BackendError> {
+    pub(in crate::engine) fn detach_output(&self, track: VideoTrack) -> Result<(), BackendError> {
         self.tee.finish_branch(track.branch)?;
         Ok(())
     }
