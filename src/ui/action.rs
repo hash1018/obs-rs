@@ -30,6 +30,19 @@ pub enum UiAction {
     /// reason `DragSceneItem` exists: the picture has to follow the pointer,
     /// and the repaint is recorded once when it is let go.
     DragSourceColour(SceneItemId, [u8; 4]),
+    /// A Text Source as it is being edited, for the same reason
+    /// `DragSourceColour` exists: a caption is written while watching it, so
+    /// the picture follows every keystroke and the project hears one edit
+    /// when the field is let go.
+    ///
+    /// The whole settings rather than the one field that changed, because
+    /// drawing is done from all of them either way — the same reason
+    /// `DrawStrokes` carries the whole list.
+    DragSourceText(SceneItemId, crate::domain::TextSourceSettings),
+    /// Ask for a font file for one Text Source. The dialog is the system's
+    /// and outlives this pass, so it is run where the state to hold it is —
+    /// see `ObsApp::open_font_picker`.
+    PickTextFont(SceneItemId),
     /// One source's gain while the fader is still held. Goes to the audio
     /// graph and not to the project, for the same reason `DragSceneItem`
     /// does: what is heard has to follow the pointer, and the edit is

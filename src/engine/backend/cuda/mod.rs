@@ -324,6 +324,9 @@ impl Backend {
             SourceKind::Drawing => {
                 source::drawing::open(&self.device, &self.compositor, item, layer).map(Some)
             }
+            SourceKind::Text => {
+                source::text::open(&self.device, &self.compositor, item, layer).map(Some)
+            }
         }
     }
 }

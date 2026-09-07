@@ -18,6 +18,7 @@ pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod rtsp;
 pub(in crate::engine) mod sound;
+pub(in crate::engine) mod text;
 pub(in crate::engine) mod video_capture;
 pub(in crate::engine) mod window_capture;
 
@@ -58,6 +59,11 @@ pub(in crate::engine) enum PushedContent {
     /// an Image Source is opened with one file and keeps it — so this is what
     /// keeps a Scene change from decoding and uploading it again.
     Image(std::path::PathBuf),
+    /// A line of text and everything about how it is drawn. All of it,
+    /// rather than the string alone: a colour or an alignment changes the
+    /// pixels exactly as the words do, and each has to be noticed the same
+    /// way — see [`push_content`].
+    Text(crate::domain::TextSourceSettings),
 }
 
 /// A Source that is running, and the controls for its layer.
@@ -271,6 +277,7 @@ pub(in crate::engine) fn refresh_pushed(source: &mut OpenSource, item: &SceneIte
     let wanted = match &item.settings {
         SourceSettings::Color(settings) => PushedContent::Color(settings.rgba),
         SourceSettings::Drawing(settings) => PushedContent::Drawing(settings.strokes.clone()),
+        SourceSettings::Text(settings) => PushedContent::Text(settings.clone()),
         _ => return,
     };
     push_content(source, wanted);
@@ -290,6 +297,17 @@ pub(in crate::engine) fn push_content(source: &mut OpenSource, wanted: PushedCon
     let frame = match &wanted {
         PushedContent::Color(rgba) => color::flat_bgra(width, height, *rgba),
         PushedContent::Drawing(strokes) => drawing::drawing_bgra(width, height, strokes),
+        PushedContent::Text(settings) => match text::text_bgra(width, height, settings) {
+            Ok(frame) => frame,
+            // A font that has gone missing since the Source opened, most
+            // likely. Reported once per change rather than per frame, and
+            // what was last drawn stays on the Canvas — which is a better
+            // answer for a caption than blanking it.
+            Err(error) => {
+                eprintln!("could not redraw \"{}\": {error}", source.name);
+                return;
+            }
+        },
         // Nothing asks for this. An Image Source is opened with one file and
         // keeps it, so `refresh_pushed` never names one here — the arm exists
         // because the content is compared like every other kind's, not

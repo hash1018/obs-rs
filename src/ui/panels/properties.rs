@@ -203,6 +203,7 @@ fn show_settings(
                 &format!("{:.0}%", f32::from(settings.rgba[3]) / 255.0 * 100.0),
             );
         }
+        SourceSettings::Text(settings) => show_text(ui, item.id, settings, i18n, actions),
         SourceSettings::Drawing(settings) => {
             row(
                 ui,
@@ -716,6 +717,206 @@ fn show_colour(
     ui.end_row();
 }
 
+/// Everything a Text Source is, all of it editable.
+///
+/// The one Source with nothing to report: a caption has no device that
+/// negotiated anything and no file that turned out to be a size. So unlike
+/// the rows above it, every one of these is a control.
+///
+/// # One action for every field
+///
+/// Each control edits a copy of the settings and the whole copy is what goes
+/// out, rather than a per-field action each. Redrawing is done from all of
+/// them anyway — see `text::text_bgra` — and the alternative is six actions
+/// and six engine commands that would each rebuild the same frame.
+///
+/// The project still hears one command per field, because that is what an
+/// undo would want to be and what the store writes a column for.
+fn show_text(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: &crate::domain::TextSourceSettings,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let mut edited = stored.clone();
+    let mut committed: Option<SourceCommand> = None;
+
+    ui.label(i18n.text(TextKey::PropertiesText));
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut edited.text)
+            .desired_width(f32::INFINITY)
+            .hint_text(i18n.text(TextKey::PropertiesText)),
+    );
+    // Committed when the field is let go rather than per keystroke, which is
+    // the same split the colour picker makes below. Return counts as letting
+    // go: a caption is one line, so there is nothing else it could mean.
+    if field.lost_focus() && edited.text != stored.text {
+        committed = Some(SourceCommand::SetText(item, edited.text.clone()));
+    }
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesFont));
+    ui.horizontal(|ui| {
+        // The file name, not the path: the path is what identifies the font
+        // and is far too wide for this column, and the name is what the
+        // person who picked it recognizes.
+        let shown = stored.font.as_ref().map_or_else(
+            || i18n.text(TextKey::PropertiesFontDefault).into_owned(),
+            |path| {
+                path.file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
+            },
+        );
+        if ui
+            .button(i18n.text(TextKey::PropertiesFontBrowse))
+            .clicked()
+        {
+            actions.push(UiAction::PickTextFont(item));
+        }
+        // Only offered once there is something to go back from, so the row
+        // is a single button for as long as the default is in use.
+        if stored.font.is_some()
+            && ui
+                .button(i18n.text(TextKey::PropertiesFontDefault))
+                .clicked()
+        {
+            committed = Some(SourceCommand::SetTextFont(item, None));
+        }
+        let galley = elide::one_row(
+            ui,
+            &shown,
+            ui.available_width().max(1.0),
+            &egui::TextStyle::Body,
+        );
+        ui.label(galley).on_hover_text(shown);
+    });
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesFontSize));
+    let size_field = ui.add(
+        egui::DragValue::new(&mut edited.font_size)
+            .speed(1.0)
+            .range(MIN_FONT_SIZE..=MAX_FONT_SIZE)
+            .fixed_decimals(0),
+    );
+    if (size_field.drag_stopped() || size_field.lost_focus())
+        && edited.font_size != stored.font_size
+    {
+        committed = Some(SourceCommand::SetTextFontSize(item, edited.font_size));
+    }
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesColour));
+    ui.horizontal(|ui| {
+        // With alpha, unlike a Color Source's picker: a Color Source's alpha
+        // is the layer's opacity, and this one is the ink's. A translucent
+        // caption over a capture is a different thing from a translucent
+        // layer, and this is the one that has to be here.
+        let mut colour = egui::Color32::from_rgba_unmultiplied(
+            edited.rgba[0],
+            edited.rgba[1],
+            edited.rgba[2],
+            edited.rgba[3],
+        );
+        let picker = egui::color_picker::color_edit_button_srgba(
+            ui,
+            &mut colour,
+            egui::color_picker::Alpha::OnlyBlend,
+        );
+        edited.rgba = colour.to_srgba_unmultiplied();
+        if edited.rgba != stored.rgba {
+            let released = ui.input(|input| input.pointer.any_released());
+            let held = ui.input(|input| input.pointer.any_down());
+            if released || (picker.changed() && !held) {
+                committed = Some(SourceCommand::SetTextColour(item, edited.rgba));
+            }
+        }
+        ui.monospace(format!(
+            "#{:02X}{:02X}{:02X}",
+            edited.rgba[0], edited.rgba[1], edited.rgba[2]
+        ));
+    });
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesAlignment));
+    egui::ComboBox::from_id_salt(("text-alignment", item.0))
+        .width(ui.available_width())
+        .selected_text(i18n.text(alignment_key(edited.alignment)))
+        .show_ui(ui, |ui| {
+            for alignment in crate::domain::TextAlignment::ALL {
+                let label = i18n.text(alignment_key(alignment));
+                if ui
+                    .selectable_label(edited.alignment == alignment, label)
+                    .clicked()
+                {
+                    edited.alignment = alignment;
+                }
+            }
+        });
+    // Not a drag: an alignment is chosen once, and there is nothing to follow
+    // between choosing and letting go.
+    if edited.alignment != stored.alignment {
+        committed = Some(SourceCommand::SetTextAlignment(item, edited.alignment));
+    }
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesSurface));
+    let mut box_size = edited.size;
+    let mut box_released = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let field_width = ((ui.available_width() - FIELD_MARGIN) / 2.0).max(28.0);
+        for value in &mut box_size {
+            let field = ui.add_sized(
+                [field_width, 18.0],
+                egui::DragValue::new(value)
+                    .speed(1.0)
+                    .range(2.0..=f32::from(u16::MAX))
+                    .fixed_decimals(0),
+            );
+            box_released |= field.drag_stopped() || field.lost_focus();
+        }
+    });
+    ui.end_row();
+    // The box alone is not sent live: it is the one field that cannot take
+    // effect where it is — the upload element's size is fixed when the
+    // pipeline is built — so the Source is reopened, and reopening one per
+    // frame of a drag is not something to do.
+    if box_released && box_size != stored.size {
+        committed = Some(SourceCommand::SetTextSize(
+            item,
+            [box_size[0].round() as u32, box_size[1].round() as u32],
+        ));
+    }
+
+    // The picture follows everything except the box, which the reopen brings.
+    if edited != *stored {
+        actions.push(UiAction::DragSourceText(item, edited));
+    }
+    if let Some(command) = committed {
+        actions.push(UiAction::Project(ProjectCommand::Source(command)));
+    }
+}
+
+fn alignment_key(alignment: crate::domain::TextAlignment) -> TextKey {
+    match alignment {
+        crate::domain::TextAlignment::Left => TextKey::PropertiesAlignLeft,
+        crate::domain::TextAlignment::Centre => TextKey::PropertiesAlignCentre,
+        crate::domain::TextAlignment::Right => TextKey::PropertiesAlignRight,
+    }
+}
+
+/// The glyph heights this dock will set.
+///
+/// The floor is where anti-aliased glyphs stop being letters; the ceiling is
+/// twice the height of a 4K Canvas, which is past any caption and short of
+/// the size at which one string would be refused as too large to rasterize.
+const MIN_FONT_SIZE: f32 = 6.0;
+const MAX_FONT_SIZE: f32 = 4320.0;
+
 /// Where this display is and how big it is, as one rectangle, read now rather
 /// than remembered.
 ///
@@ -810,6 +1011,7 @@ fn kind_key(kind: SourceKind) -> TextKey {
         SourceKind::Rtsp => TextKey::SourceKindRtsp,
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
+        SourceKind::Text => TextKey::SourceKindText,
     }
 }
 

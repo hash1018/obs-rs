@@ -9,6 +9,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/hash1018/obs-rs"
 
 [dependencies]
+# Turns a font and a string into per-pixel coverage, for a Text Source. Named
+# here rather than reached through `eframe`, which already pulls it in for its
+# own glyph atlas: this draws into frames the compositor takes, not into the
+# interface, so the dependency is real and is its own.
+ab_glyph = "0.2"
+
 # `wgpu` rather than the default `glow` backend: the preview will eventually
 # receive frames as GPU textures imported from `media-pp`'s own device
 # (D3D11 on Windows, CUDA/Vulkan on Linux, Metal on macOS), and that import

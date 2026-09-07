@@ -17,6 +17,9 @@ pub enum SourceKind {
     Image,
     Color,
     Drawing,
+    /// A line of text drawn by this application rather than captured from
+    /// anywhere — a caption, a name plate, a clock.
+    Text,
 }
 
 impl SourceKind {
@@ -30,6 +33,7 @@ impl SourceKind {
             Self::Image => "image",
             Self::Color => "color",
             Self::Drawing => "drawing",
+            Self::Text => "text",
         }
     }
 
@@ -43,6 +47,7 @@ impl SourceKind {
             "image" => Some(Self::Image),
             "color" => Some(Self::Color),
             "drawing" => Some(Self::Drawing),
+            "text" => Some(Self::Text),
             _ => None,
         }
     }
@@ -52,6 +57,75 @@ impl SourceKind {
 pub struct ColorSourceSettings {
     pub size: [f32; 2],
     pub rgba: [u8; 4],
+}
+
+/// Where a line of text sits in the box it is drawn into.
+///
+/// A box rather than a rectangle that hugs the glyphs, because the surface
+/// the engine pushes is fixed when the Source opens — see `text::open`. So
+/// the string's own width changes underneath it, and this is what decides
+/// which edge stays put while it does. Right for a clock, whose last digit
+/// is the one that must not walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlignment {
+    #[default]
+    Left,
+    Centre,
+    Right,
+}
+
+impl TextAlignment {
+    pub const ALL: [Self; 3] = [Self::Left, Self::Centre, Self::Right];
+
+    pub(crate) fn storage_name(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Centre => "centre",
+            Self::Right => "right",
+        }
+    }
+
+    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "left" => Some(Self::Left),
+            "centre" => Some(Self::Centre),
+            "right" => Some(Self::Right),
+            _ => None,
+        }
+    }
+}
+
+/// The glyph height a Text Source starts at, in the box's own pixels.
+///
+/// Read at 1920x1080 from across a room, which is what a caption is for.
+pub const DEFAULT_FONT_SIZE: f32 = 72.0;
+
+/// A line of text, and how to draw it.
+///
+/// Kept as a string and a style rather than as pixels, for the reason
+/// [`DrawingSourceSettings`] keeps strokes: rasterizing is the engine's job
+/// and happens once per change, so the file stays small and the glyphs stay
+/// sharp at whatever size the box turns out to be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextSourceSettings {
+    /// The box glyphs are drawn into, which is also the layer's own size.
+    ///
+    /// Fixed while the Source runs — the upload element refuses a frame of a
+    /// different size — so changing it reopens the Source, exactly as a
+    /// Drawing's surface does.
+    pub size: [f32; 2],
+    pub text: String,
+    /// The font file to draw with, or `None` for the one this application
+    /// already found for its own interface — see `crate::i18n::font`.
+    ///
+    /// A path rather than the bytes: a project file that carried a font in it
+    /// would be a licence question, and the file is the same one every time
+    /// the project opens.
+    pub font: Option<PathBuf>,
+    /// Pixel height of the glyphs, in the box's own coordinates.
+    pub font_size: f32,
+    pub rgba: [u8; 4],
+    pub alignment: TextAlignment,
 }
 
 /// One continuous mark, from the pointer going down to it coming up.
@@ -394,6 +468,7 @@ pub enum SourceSettings {
     WindowCapture(WindowCaptureSettings),
     MediaFile(MediaFileSettings),
     Image(ImageSourceSettings),
+    Text(TextSourceSettings),
 }
 
 impl SourceSettings {
@@ -420,7 +495,7 @@ impl SourceSettings {
             Self::MediaFile(settings) => settings.size_hint,
             Self::Rtsp(settings) => settings.size_hint,
             Self::Image(settings) => settings.size_hint,
-            Self::Color(_) | Self::Drawing(_) => None,
+            Self::Color(_) | Self::Drawing(_) | Self::Text(_) => None,
         }
     }
 
@@ -428,6 +503,7 @@ impl SourceSettings {
         match self {
             Self::Color(settings) => settings.size,
             Self::Drawing(settings) => settings.size,
+            Self::Text(settings) => settings.size,
             Self::DisplayCapture(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {

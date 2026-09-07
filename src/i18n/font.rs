@@ -3,6 +3,18 @@ use std::sync::Arc;
 
 use eframe::egui;
 
+/// The font file this application draws its own interface with, when one was
+/// found.
+///
+/// Exposed because a Text Source draws with it too by default — see
+/// `engine::source::text`. One answer to "where are the fonts" for both, so a
+/// caption can say anything a menu can.
+pub fn interface_font_path() -> Option<PathBuf> {
+    system_cjk_font_paths()
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
 pub fn install_locale_fonts(ctx: &egui::Context) {
     let Some(bytes) = system_cjk_font_paths()
         .into_iter()

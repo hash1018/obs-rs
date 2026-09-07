@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -267,6 +267,40 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 18;",
+        )?;
+    }
+    if current_version < 19 {
+        // A Text Source.
+        //
+        // `width`/`height` are the box glyphs are drawn into rather than
+        // anything the text measures out to: the surface is fixed when the
+        // Source opens, and a string whose width changed on every tick would
+        // otherwise reopen the pipeline once a second. `alignment` is what
+        // decides which edge stays put as the string underneath it changes
+        // length.
+        //
+        // `font` is a path and is nullable, which means "the font this
+        // application already found for its own interface" rather than "no
+        // font" — see `crate::i18n::font`. Storing the bytes would put a
+        // licence question inside the project file for no gain, since the
+        // file is the same one each time the project opens.
+        transaction.execute_batch(
+            "CREATE TABLE text_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                width     INTEGER NOT NULL CHECK (width > 0),
+                height    INTEGER NOT NULL CHECK (height > 0),
+                text      TEXT NOT NULL,
+                font      TEXT,
+                font_size REAL NOT NULL CHECK (font_size > 0),
+                red       INTEGER NOT NULL CHECK (red BETWEEN 0 AND 255),
+                green     INTEGER NOT NULL CHECK (green BETWEEN 0 AND 255),
+                blue      INTEGER NOT NULL CHECK (blue BETWEEN 0 AND 255),
+                alpha     INTEGER NOT NULL CHECK (alpha BETWEEN 0 AND 255),
+                alignment TEXT NOT NULL
+                          CHECK (alignment IN ('left', 'centre', 'right'))
+            );
+
+            PRAGMA user_version = 19;",
         )?;
     }
     transaction.commit()?;

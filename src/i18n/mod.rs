@@ -1,4 +1,4 @@
-mod font;
+pub(crate) mod font;
 mod key;
 mod locale;
 mod manager;

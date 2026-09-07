@@ -1,8 +1,8 @@
 use crate::domain::{
     AudioSourceId, ChromaKeySettings, Crop, DisplayCaptureSettings, FilterId, FilterKind,
     ImageSourceSettings, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId,
-    SceneItemId, SourceKind, Stroke, Transform, VideoCaptureMode, VideoCaptureSettings,
-    WindowCaptureSettings,
+    SceneItemId, SourceKind, Stroke, TextAlignment, Transform, VideoCaptureMode,
+    VideoCaptureSettings, WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +37,7 @@ pub enum AudioCommand {
 pub enum SourceCommand {
     AddColor(SceneId),
     AddDrawing(SceneId),
+    AddText(SceneId),
     AddDisplayCapture {
         scene_id: SceneId,
         settings: DisplayCaptureSettings,
@@ -162,6 +163,22 @@ pub enum SourceCommand {
     /// is negotiated when the device is opened, so the Source is reopened to
     /// apply it.
     SetVideoCaptureMode(SceneItemId, Option<VideoCaptureMode>),
+    /// What a Text Source says. Recorded when the field loses focus or the
+    /// return key is pressed, not on every keystroke — the picture follows
+    /// each one meanwhile through `UiAction::DragSourceText`, which is the
+    /// same two-part split a Color Source's picker makes.
+    SetText(SceneItemId, String),
+    /// The font file to draw with, or `None` for this application's own.
+    SetTextFont(SceneItemId, Option<std::path::PathBuf>),
+    SetTextFontSize(SceneItemId, f32),
+    SetTextColour(SceneItemId, [u8; 4]),
+    SetTextAlignment(SceneItemId, TextAlignment),
+    /// The box glyphs are drawn into.
+    ///
+    /// Unlike everything else here this cannot take effect where it is: the
+    /// surface is fixed when the pipeline is built, so the Source is
+    /// reopened to apply it — as a Drawing's surface would be.
+    SetTextSize(SceneItemId, [u32; 2]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

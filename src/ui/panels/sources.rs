@@ -137,6 +137,7 @@ enum AddSourceKind {
     #[default]
     Color,
     Drawing,
+    Text,
 }
 
 impl AddSourceKind {
@@ -690,6 +691,7 @@ fn source_kind_key(kind: SourceKind) -> TextKey {
         SourceKind::Rtsp => TextKey::SourceKindRtsp,
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
+        SourceKind::Text => TextKey::SourceKindText,
     }
 }
 
@@ -864,6 +866,15 @@ fn show_add_dialog(
                 if response.double_clicked() {
                     add_requested = true;
                 }
+
+                let text_label = i18n.text(TextKey::SourceKindText);
+                let response = list_row(ui, &text_label, state.add_kind == AddSourceKind::Text);
+                if response.clicked() {
+                    state.add_kind = AddSourceKind::Text;
+                }
+                if response.double_clicked() {
+                    add_requested = true;
+                }
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -892,6 +903,14 @@ fn show_add_dialog(
                 if let Some(scene_id) = snapshot.scene_id {
                     actions.push(UiAction::Project(ProjectCommand::Source(
                         SourceCommand::AddDrawing(scene_id),
+                    )));
+                    state.select_new_item = true;
+                }
+            }
+            AddSourceKind::Text => {
+                if let Some(scene_id) = snapshot.scene_id {
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::AddText(scene_id),
                     )));
                     state.select_new_item = true;
                 }

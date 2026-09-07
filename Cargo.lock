@@ -2419,6 +2419,7 @@ dependencies = [
 name = "obs-rs"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "arc-swap",
  "ash",
  "ashpd",

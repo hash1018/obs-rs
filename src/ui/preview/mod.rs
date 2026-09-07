@@ -1219,6 +1219,7 @@ fn overflow_fill(ui: &egui::Ui, item: &SceneItemSnapshot) -> egui::Color32 {
         // A Drawing is transparent wherever nothing was drawn, so the
         // placeholder is the same neutral one an unopened capture gets.
         SourceSettings::Drawing(_)
+        | SourceSettings::Text(_)
         | SourceSettings::DisplayCapture(_)
         | SourceSettings::WindowCapture(_)
         | SourceSettings::MediaFile(_)

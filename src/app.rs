@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use eframe::egui;
@@ -52,6 +53,12 @@ pub struct ObsApp {
     /// second. Refreshing on device change is what a hotplug notification
     /// would be for, and neither backend offers one here yet.
     audio_devices: Arc<Vec<AudioDeviceTarget>>,
+    /// A running font dialog and the Text Source that asked for it.
+    ///
+    /// Held here rather than in the Properties dock because the dialog
+    /// outlives the pass that opened it, and the dock keeps nothing between
+    /// passes — everything it draws it reads from a snapshot.
+    font_picker: Option<(crate::domain::SceneItemId, mpsc::Receiver<Option<PathBuf>>)>,
 }
 
 /// What the engine's wake asks egui to wait before repainting — which is
@@ -188,6 +195,7 @@ impl ObsApp {
             settings_store,
             ui_actions: Vec::new(),
             audio_devices: Arc::new(crate::capture::audio_devices()),
+            font_picker: None,
             audio,
             exiting: false,
             // Filled in on the first pass, which happens before anything can
@@ -475,6 +483,63 @@ impl ObsApp {
         }
     }
 
+    /// Puts the system's font dialog on screen for one Text Source.
+    ///
+    /// Detached on a thread of its own, as the Settings dialog's folder
+    /// picker is: `pick_file` blocks until it is answered, and the interface
+    /// has a Preview to keep drawing meanwhile.
+    fn open_font_picker(&mut self, item_id: crate::domain::SceneItemId, ctx: &egui::Context) {
+        if self.font_picker.is_some() {
+            return;
+        }
+        let filter = self
+            .localization
+            .text(crate::i18n::TextKey::PropertiesFontFilter)
+            .into_owned();
+        let (sender, receiver) = mpsc::channel();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("font-picker".to_owned())
+            .spawn(move || {
+                let picked = rfd::FileDialog::new()
+                    .add_filter(filter, &["ttf", "otf", "ttc", "otc"])
+                    .pick_file();
+                if sender.send(picked).is_ok() {
+                    ctx.request_repaint();
+                }
+            });
+        if let Err(error) = spawned {
+            eprintln!("could not open the font picker: {error}");
+            return;
+        }
+        self.font_picker = Some((item_id, receiver));
+    }
+
+    /// Takes the font dialog's answer, if it has one.
+    ///
+    /// A cancelled dialog is an answer too — it ends the wait — which is what
+    /// `Some(None)` is here.
+    fn poll_font_picker(&mut self) {
+        let Some((item_id, receiver)) = &self.font_picker else {
+            return;
+        };
+        let item_id = *item_id;
+        match receiver.try_recv() {
+            Ok(picked) => {
+                if let Some(path) = picked
+                    && let Some(manager) = &self.project_manager
+                {
+                    manager.dispatch(crate::project::ProjectCommand::Source(
+                        crate::project::SourceCommand::SetTextFont(item_id, Some(path)),
+                    ));
+                }
+                self.font_picker = None;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => self.font_picker = None,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
     fn handle_ui_action(&mut self, ctx: &egui::Context, action: UiAction) {
         match action {
             UiAction::Exit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -538,6 +603,25 @@ impl ObsApp {
                     engine.set_source_colour(item_id, rgba);
                 }
             }
+            UiAction::DragSourceText(item_id, settings) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_source_text(item_id, settings.clone());
+                }
+                // And into the snapshot the dock reads back, for the reason
+                // `DragFilterSettings` does it: the project is not told until
+                // the field is let go, and a field reading the old value
+                // would undo every keystroke as it was typed.
+                if let Some(item) = self
+                    .snapshots
+                    .sources
+                    .items
+                    .iter_mut()
+                    .find(|item| item.id == item_id)
+                {
+                    item.settings = crate::domain::SourceSettings::Text(settings);
+                }
+            }
+            UiAction::PickTextFont(item_id) => self.open_font_picker(item_id, ctx),
             UiAction::SeekMediaFile(item_id, target) => {
                 if let Some(engine) = &self.engine {
                     engine.seek_media_file(item_id, target);
@@ -657,6 +741,7 @@ impl eframe::App for ObsApp {
         self.poll_media_levels();
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();
+        self.poll_font_picker();
     }
 
     fn on_exit(&mut self) {

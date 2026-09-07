@@ -163,6 +163,26 @@ fn handle_source_command(
             SourceStore::add_drawing(transaction, scene_id)?;
             Ok(())
         }
+        SourceCommand::AddText(scene_id) => {
+            SourceStore::add_text(transaction, scene_id)?;
+            Ok(())
+        }
+        SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
+        SourceCommand::SetTextFont(item_id, font) => {
+            SourceStore::set_text_font(transaction, item_id, font.as_deref())
+        }
+        SourceCommand::SetTextFontSize(item_id, font_size) => {
+            SourceStore::set_text_font_size(transaction, item_id, font_size)
+        }
+        SourceCommand::SetTextColour(item_id, rgba) => {
+            SourceStore::set_text_colour(transaction, item_id, rgba)
+        }
+        SourceCommand::SetTextAlignment(item_id, alignment) => {
+            SourceStore::set_text_alignment(transaction, item_id, alignment)
+        }
+        SourceCommand::SetTextSize(item_id, size) => {
+            SourceStore::set_text_size(transaction, item_id, size)
+        }
         SourceCommand::AddStroke(item_id, stroke) => {
             SourceStore::add_stroke(transaction, item_id, &stroke)
         }

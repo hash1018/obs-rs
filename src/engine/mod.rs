@@ -101,6 +101,10 @@ enum EngineCommand {
     /// reason `Drawing` exists: the picture has to follow the pointer, and
     /// the project is told once when it is let go.
     Colour(SceneItemId, [u8; 4]),
+    /// A Text Source's settings while its field is still being typed into,
+    /// for the same reason `Colour` exists. Carries all of them, because
+    /// what is redrawn is drawn from all of them.
+    Text(SceneItemId, crate::domain::TextSourceSettings),
     /// A media file Source's gain while the fader is still held — the audio
     /// counterpart of `Colour`, and on this thread rather than the audio one
     /// because a file's fader belongs to its own pipeline.
@@ -403,6 +407,12 @@ impl EngineManager {
     /// reason [`Self::set_drawing_strokes`] exists.
     pub fn set_source_colour(&self, item: SceneItemId, rgba: [u8; 4]) {
         let _ = self.commands.send(EngineCommand::Colour(item, rgba));
+    }
+
+    /// Redraws a Text Source while its field is still being typed into, for
+    /// the same reason [`Self::set_drawing_strokes`] exists.
+    pub fn set_source_text(&self, item: SceneItemId, settings: crate::domain::TextSourceSettings) {
+        let _ = self.commands.send(EngineCommand::Text(item, settings));
     }
 
     /// Moves one layer while the pointer is still down.
@@ -938,6 +948,12 @@ fn apply_command(
         EngineCommand::Colour(item_id, rgba) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
                 push_content(source, PushedContent::Color(rgba));
+            }
+            false
+        }
+        EngineCommand::Text(item_id, settings) => {
+            if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
+                push_content(source, PushedContent::Text(settings));
             }
             false
         }

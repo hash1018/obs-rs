@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    ColorSourceSettings, Crop, DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings,
-    ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings,
-    RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind,
-    SourceSettings, Stroke, Transform, VideoCaptureMode, VideoCaptureSettings,
-    WindowCaptureSettings, WindowCaptureTarget,
+    ColorSourceSettings, Crop, DEFAULT_FONT_SIZE, DisplayCaptureSettings, DisplayCaptureTarget,
+    DrawingSourceSettings, ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings,
+    RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source,
+    SourceId, SourceKind, SourceSettings, Stroke, TextAlignment, TextSourceSettings, Transform,
+    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::{FilterStore, PersistenceResult};
@@ -139,7 +139,17 @@ impl SourceStore {
                 video_capture_settings.mode_rate_numerator,
                 video_capture_settings.mode_rate_denominator,
                 video_capture_settings.width,
-                video_capture_settings.height
+                video_capture_settings.height,
+                text_source_settings.width,
+                text_source_settings.height,
+                text_source_settings.text,
+                text_source_settings.font,
+                text_source_settings.font_size,
+                text_source_settings.red,
+                text_source_settings.green,
+                text_source_settings.blue,
+                text_source_settings.alpha,
+                text_source_settings.alignment
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -158,6 +168,8 @@ impl SourceStore {
                 ON rtsp_source_settings.source_id = sources.id
              LEFT JOIN video_capture_settings
                 ON video_capture_settings.source_id = sources.id
+             LEFT JOIN text_source_settings
+                ON text_source_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -208,6 +220,26 @@ impl SourceStore {
                     SourceKind::Drawing => SourceSettings::Drawing(DrawingSourceSettings {
                         size: [row.get::<_, i64>(29)? as f32, row.get::<_, i64>(30)? as f32],
                         strokes: Vec::new(),
+                    }),
+                    SourceKind::Text => SourceSettings::Text(TextSourceSettings {
+                        size: [row.get::<_, i64>(66)? as f32, row.get::<_, i64>(67)? as f32],
+                        text: row.get(68)?,
+                        font: row.get::<_, Option<String>>(69)?.map(PathBuf::from),
+                        font_size: row.get(70)?,
+                        rgba: [
+                            row.get::<_, i64>(71)? as u8,
+                            row.get::<_, i64>(72)? as u8,
+                            row.get::<_, i64>(73)? as u8,
+                            row.get::<_, i64>(74)? as u8,
+                        ],
+                        alignment: TextAlignment::from_storage_name(&row.get::<_, String>(75)?)
+                            .ok_or_else(|| {
+                                rusqlite::Error::InvalidColumnType(
+                                    75,
+                                    "alignment".into(),
+                                    rusqlite::types::Type::Text,
+                                )
+                            })?,
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -438,6 +470,113 @@ impl SourceStore {
             params![source_id.0, canvas.width as i64, canvas.height as i64],
         )?;
         add_to_scene(transaction, scene_id, source_id, canvas)
+    }
+
+    /// A new Text Source, with something visible in it from the first frame.
+    ///
+    /// Its box is a fraction of the Canvas rather than all of it: a caption
+    /// is not a full-screen layer, and a box that starts the size of the
+    /// Canvas would put the item's handles off the edge of the preview.
+    pub(crate) fn add_text(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, "Text")?;
+        let source_id = create(transaction, &name, SourceKind::Text)?;
+        let canvas = SceneCanvas::DEFAULT;
+        let size = SceneCanvas {
+            width: (canvas.width / 2.0).round(),
+            height: (canvas.height / 6.0).round(),
+        };
+        transaction.execute(
+            "INSERT INTO text_source_settings
+                (source_id, width, height, text, font, font_size,
+                 red, green, blue, alpha, alignment)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, 255, 255, 255, 255, ?6)",
+            params![
+                source_id.0,
+                size.width as i64,
+                size.height as i64,
+                "Text",
+                DEFAULT_FONT_SIZE,
+                TextAlignment::default().storage_name(),
+            ],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, size)
+    }
+
+    /// What a Text Source says.
+    pub(crate) fn set_text(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        text: &str,
+    ) -> PersistenceResult<()> {
+        set_text_column(transaction, scene_item_id, "text", text)
+    }
+
+    /// The font file a Text Source draws with, or `None` for this
+    /// application's own — see `crate::i18n::font`.
+    pub(crate) fn set_text_font(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        font: Option<&std::path::Path>,
+    ) -> PersistenceResult<()> {
+        let font = font.map(|path| path.to_string_lossy().into_owned());
+        set_text_column(transaction, scene_item_id, "font", font)
+    }
+
+    pub(crate) fn set_text_font_size(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        font_size: f32,
+    ) -> PersistenceResult<()> {
+        set_text_column(transaction, scene_item_id, "font_size", font_size)
+    }
+
+    pub(crate) fn set_text_alignment(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        alignment: TextAlignment,
+    ) -> PersistenceResult<()> {
+        set_text_column(
+            transaction,
+            scene_item_id,
+            "alignment",
+            alignment.storage_name(),
+        )
+    }
+
+    pub(crate) fn set_text_colour(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        rgba: [u8; 4],
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE text_source_settings
+                SET red = ?1, green = ?2, blue = ?3, alpha = ?4
+              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?5)",
+            params![rgba[0], rgba[1], rgba[2], rgba[3], scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// The box glyphs are drawn into.
+    ///
+    /// Reopens the Source rather than taking effect where it is: the upload
+    /// element's size is fixed when the pipeline is built, exactly as a
+    /// Drawing's surface is.
+    pub(crate) fn set_text_size(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        size: [u32; 2],
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE text_source_settings
+                SET width = ?1, height = ?2
+              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?3)",
+            params![size[0], size[1], scene_item_id.0],
+        )?;
+        Ok(())
     }
 
     /// Puts one stroke on the end of a Drawing.
@@ -1176,7 +1315,9 @@ fn set_negotiated_size(
         SourceKind::VideoCapture => "video_capture_settings",
         SourceKind::MediaFile => "media_file_settings",
         SourceKind::Rtsp => "rtsp_source_settings",
-        SourceKind::Image | SourceKind::Color | SourceKind::Drawing => return Ok(()),
+        SourceKind::Image | SourceKind::Color | SourceKind::Drawing | SourceKind::Text => {
+            return Ok(());
+        }
     };
     transaction.execute(
         &format!(
@@ -1201,6 +1342,23 @@ fn set_media_column<T: rusqlite::ToSql>(
     transaction.execute(
         &format!(
             "UPDATE media_file_settings
+             SET {column} = ?1
+             WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)"
+        ),
+        params![value, scene_item_id.0],
+    )?;
+    Ok(())
+}
+
+fn set_text_column<T: rusqlite::ToSql>(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    column: &'static str,
+    value: T,
+) -> PersistenceResult<()> {
+    transaction.execute(
+        &format!(
+            "UPDATE text_source_settings
              SET {column} = ?1
              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)"
         ),

@@ -1,0 +1,652 @@
+//! A Text Source: a line this application draws rather than captures.
+//!
+//! Structurally a [`Drawing`](super::drawing) — glyph coverage instead of
+//! stroke coverage, blended into a transparent BGRA frame and pushed through
+//! an `AppSource`. It carries transparency for the same reason and reaches
+//! both compositors the same way: BGRA, with no converter in front of it, so
+//! everything the glyphs did not cover lets the Scene beneath show through.
+//!
+//! # Why the box is fixed
+//!
+//! An upload element's size is settled when the pipeline is built and it
+//! refuses a frame of any other, so the surface here is a box the text is
+//! drawn *into* rather than a rectangle that hugs the glyphs. That is not a
+//! concession: a string's own width changes whenever the string does, and a
+//! surface that followed it would rebuild the pipeline every time a clock
+//! ticked from `9` to `10`. The box stays, and
+//! [`TextAlignment`] decides which edge the text keeps against while its
+//! width moves underneath it.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
+use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline, pool::UnboundObjectPool};
+
+use crate::domain::{SourceSettings, TextAlignment, TextSourceSettings};
+use crate::snapshots::SceneItemSnapshot;
+
+use super::super::backend::{BackendError, Layer, RunningSource};
+use super::{OpenSource, PushedContent, PushedSurface, input_name};
+
+/// The most pixels one rasterized string is allowed to occupy.
+///
+/// A guard against a font size and a string that multiply into gigabytes.
+/// The box is bounded by what the user dragged, but the tight raster this is
+/// measured against is not: it is as wide as the text is long.
+const MAX_TEXT_PIXELS: usize = 64 * 1024 * 1024;
+
+/// Parsed fonts, by the file they came from.
+///
+/// A font is parsed once per path for the life of the process rather than per
+/// push. That matters because of what pushes: a clock redraws every second,
+/// and the CJK font this falls back to on Linux is some twenty megabytes.
+/// `FontArc` is a handle, so a cache hit is a refcount.
+fn fonts() -> &'static Mutex<HashMap<PathBuf, FontArc>> {
+    static FONTS: OnceLock<Mutex<HashMap<PathBuf, FontArc>>> = OnceLock::new();
+    FONTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The font a Text Source draws with.
+///
+/// `None` means this application's own: the same file the interface found to
+/// show Korean with, which is already resolved per platform — see
+/// [`crate::i18n::font`]. Reusing it is what keeps a Text Source able to say
+/// anything the rest of the window can say, without this having a second
+/// opinion about where fonts live.
+fn font(path: Option<&Path>) -> Result<FontArc, BackendError> {
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => {
+            crate::i18n::font::interface_font_path().ok_or("no font was found to draw text with")?
+        }
+    };
+    let mut cache = fonts().lock().expect("font cache poisoned");
+    if let Some(font) = cache.get(&path) {
+        return Ok(font.clone());
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("could not read the font {}: {error}", path.display()))?;
+    // `try_from_vec` indexes a font collection at zero, which is what the
+    // `.ttc` files this falls back to on Linux and macOS need.
+    let font = FontArc::try_from_vec(bytes)
+        .map_err(|_| format!("{} is not a font this can draw with", path.display()))?;
+    cache.insert(path, font.clone());
+    Ok(font)
+}
+
+/// A rasterized string: one coverage byte per pixel, tightly bounding the
+/// glyphs.
+///
+/// Coverage rather than colour, as `media-pp`'s own text layer keeps it: the
+/// colour is uniform over the whole string, so carrying it per pixel would be
+/// three redundant bytes each.
+struct Raster {
+    width: u32,
+    height: u32,
+    /// `width * height` bytes, row-major. Zero is untouched by any glyph.
+    coverage: Vec<u8>,
+    /// Where the baseline sits within `height`, so a line can be placed by
+    /// what it sits on rather than by its bounding box — two strings of the
+    /// same size line up even when one has no descender.
+    ascent: f32,
+}
+
+/// Lays one line out and draws it into its own tight coverage plane.
+///
+/// One line: newlines are dropped with the rest of the control characters,
+/// which is what the settings promise. Kerning is applied, because a caption
+/// at ninety pixels shows its absence.
+fn rasterize(font: &FontArc, size_px: f32, text: &str) -> Option<Raster> {
+    let scaled = font.as_scaled(PxScale::from(size_px));
+    let mut caret = ab_glyph::point(0.0, scaled.ascent());
+    let mut previous = None;
+    let mut glyphs = Vec::new();
+    for character in text.chars() {
+        if character.is_control() {
+            continue;
+        }
+        let mut glyph = scaled.scaled_glyph(character);
+        if let Some(previous) = previous {
+            caret.x += scaled.kern(previous, glyph.id);
+        }
+        glyph.position = caret;
+        caret.x += scaled.h_advance(glyph.id);
+        previous = Some(glyph.id);
+        glyphs.push(glyph);
+    }
+
+    let outlined: Vec<_> = glyphs
+        .into_iter()
+        .filter_map(|glyph| font.outline_glyph(glyph))
+        .collect();
+    if outlined.is_empty() {
+        return None;
+    }
+
+    // The advance width rather than the ink's own: a trailing space is part
+    // of what was typed, and right-aligned text that ignored it would jump
+    // when one is added.
+    let width = caret.x.ceil().max(1.0);
+    let height = scaled.height().ceil().max(1.0);
+    if !width.is_finite() || !height.is_finite() {
+        return None;
+    }
+    let (width, height) = (width as u32, height as u32);
+    let pixels = (width as usize).checked_mul(height as usize)?;
+    if pixels > MAX_TEXT_PIXELS {
+        return None;
+    }
+    let mut coverage = Vec::new();
+    coverage.try_reserve_exact(pixels).ok()?;
+    coverage.resize(pixels, 0u8);
+    for outlined in outlined {
+        let bounds = outlined.px_bounds();
+        outlined.draw(|x, y, value| {
+            let x = bounds.min.x as i32 + x as i32;
+            let y = bounds.min.y as i32 + y as i32;
+            if x < 0 || y < 0 || x as u32 >= width || y as u32 >= height {
+                return;
+            }
+            let at = y as usize * width as usize + x as usize;
+            // Glyphs overlap — kerning tucks them together and accents sit
+            // over their letters — so the strongest coverage wins rather
+            // than the last one drawn.
+            let alpha = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+            coverage[at] = coverage[at].max(alpha);
+        });
+    }
+    Some(Raster {
+        width,
+        height,
+        coverage,
+        ascent: scaled.ascent(),
+    })
+}
+
+/// Draws a Text Source into a BGRA frame the compositor can take.
+///
+/// Transparent where no glyph reached, which is what lets a caption sit over
+/// a capture without a rectangle around it. Straight alpha rather than
+/// premultiplied, because that is what both compositors read — see
+/// [`drawing_bgra`](super::drawing::drawing_bgra), which this follows.
+///
+/// A string too long for its box is clipped rather than scaled: scaling would
+/// change the glyph height a word at a time, and a caption that shrank as it
+/// was typed would be worse than one that runs out of room visibly.
+pub(in crate::engine) fn text_bgra(
+    width: u32,
+    height: u32,
+    settings: &TextSourceSettings,
+) -> Result<MediaBuffer, BackendError> {
+    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
+    let stride = frame.stride(0);
+    // A new frame is allocated, not cleared, and everything below writes only
+    // where a glyph reached — so without this a caption arrives surrounded by
+    // whatever was last in that memory. `drawing_bgra` clears for the same
+    // reason and it is the same mistake to make twice.
+    frame.data_mut(0).fill(0);
+
+    let font = font(settings.font.as_deref())?;
+    if let Some(raster) = rasterize(&font, settings.font_size, &settings.text) {
+        // Horizontally by the alignment, vertically on the baseline: the box
+        // is centred on where the line sits rather than on its bounding box,
+        // so text with no descender is not pushed up by the space one would
+        // have taken.
+        let left = match settings.alignment {
+            TextAlignment::Left => 0.0,
+            TextAlignment::Centre => (width as f32 - raster.width as f32) / 2.0,
+            TextAlignment::Right => width as f32 - raster.width as f32,
+        };
+        let top = height as f32 / 2.0 - raster.ascent;
+        let (left, top) = (left.round() as i32, top.round() as i32);
+
+        let [red, green, blue, alpha] = settings.rgba;
+        let data = frame.data_mut(0);
+        for y in 0..raster.height {
+            let row = top + y as i32;
+            if row < 0 || row as u32 >= height {
+                continue;
+            }
+            for x in 0..raster.width {
+                let column = left + x as i32;
+                if column < 0 || column as u32 >= width {
+                    continue;
+                }
+                let coverage = raster.coverage[(y * raster.width + x) as usize];
+                if coverage == 0 {
+                    continue;
+                }
+                // The glyph's coverage and the chosen colour's own alpha are
+                // both in this: a translucent caption is the colour picker's
+                // alpha, and the anti-aliased edge is the coverage.
+                let at = row as usize * stride + column as usize * 4;
+                let combined = (u32::from(coverage) * u32::from(alpha) / 255) as u8;
+                data[at..at + 4].copy_from_slice(&[blue, green, red, combined]);
+            }
+        }
+    }
+
+    // As `drawing_bgra` explains: this frame has no pool behind it and never
+    // returns to one, which an unbound pool of zero expresses.
+    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
+    let mut slot = pool.get();
+    *slot = frame;
+    Ok(MediaBuffer::Video(Arc::new(slot)))
+}
+
+/// The box this Source draws into, and what it draws.
+///
+/// Even dimensions, as a Drawing's are: the compositor blends into an NV12
+/// canvas whose chroma is shared between pairs of pixels, so an odd-sized
+/// layer would be placed at an even position and rounded anyway.
+fn surface(item: &SceneItemSnapshot) -> Result<([u32; 2], TextSourceSettings), BackendError> {
+    let SourceSettings::Text(settings) = &item.settings else {
+        return Err("scene item is not a text source".into());
+    };
+    Ok((
+        [
+            (settings.size[0].round() as u32).max(2) & !1,
+            (settings.size[1].round() as u32).max(2) & !1,
+        ],
+        settings.clone(),
+    ))
+}
+
+/// What both implementations return, so the difference between them stays the
+/// pipeline and nothing else.
+fn opened(
+    name: String,
+    source: RunningSource,
+    layer: Layer,
+    pusher: media_pp::elements::AppSourceHandle,
+    size: [u32; 2],
+    settings: TextSourceSettings,
+) -> OpenSource {
+    OpenSource {
+        media_file: None,
+        // Its box is its own rather than something a device answered with,
+        // so there is nothing to correct.
+        negotiated_size: None,
+        source,
+        layer,
+        name,
+        refreshed_token: None,
+        filters: Vec::new(),
+        filter_rack: None,
+        showing: true,
+        running: true,
+        pushed: Some(PushedSurface {
+            pusher,
+            size,
+            content: PushedContent::Text(settings),
+        }),
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(in crate::engine) fn open(
+    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    handle: &media_pp::elements::D3d11VideoCompositorHandle,
+    item: &SceneItemSnapshot,
+    layer: media_pp::elements::VideoLayer,
+) -> Result<OpenSource, BackendError> {
+    use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
+
+    let ([width, height], settings) = surface(item)?;
+    let name = input_name(item);
+    let frame = text_bgra(width, height, &settings)?;
+    // One frame of capacity, as a Drawing has: only the newest string
+    // matters, and a deeper queue would put the picture behind the field
+    // being typed into.
+    let (source, pusher) = AppSource::new(name.clone(), 1);
+    let upload = D3d11Upload::new(format!("{name}-upload"), device, width, height);
+
+    let D3d11VideoCompositorInput { sink, layer } = handle
+        .add_source(name.clone(), layer)?
+        .ok_or("the compositor is no longer running")?;
+    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+        let branch = context.branch().pipe(upload).to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    pipeline.run()?;
+    pusher.push(frame)?;
+
+    Ok(opened(
+        name,
+        RunningSource::Owned(pipeline),
+        layer,
+        pusher,
+        [width, height],
+        settings,
+    ))
+}
+
+#[cfg(target_os = "linux")]
+pub(in crate::engine) fn open(
+    device: &media_pp::elements::CudaDevice,
+    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    item: &SceneItemSnapshot,
+    layer: media_pp::elements::VideoLayer,
+) -> Result<OpenSource, BackendError> {
+    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
+
+    let ([width, height], settings) = surface(item)?;
+    let name = input_name(item);
+    let frame = text_bgra(width, height, &settings)?;
+    let (source, pusher) = AppSource::new(name.clone(), 1);
+    let upload = CudaUpload::new(
+        format!("{name}-upload"),
+        device,
+        CudaFrameFormat::Bgra,
+        width,
+        height,
+    )?;
+
+    // No converter, for the reason a Drawing has none: the alpha *is* the
+    // text, and NV12 has nowhere to keep one. Converting first would put an
+    // opaque black rectangle behind every caption.
+    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+        let branch = context.branch().pipe(upload).to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    pipeline.run()?;
+    pusher.push(frame)?;
+
+    Ok(opened(
+        name,
+        RunningSource(pipeline),
+        layer,
+        pusher,
+        [width, height],
+        settings,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every test here needs a font, and a machine with none is not a
+    /// failing one — it is a machine this feature cannot work on, which the
+    /// Source itself reports at open time.
+    fn a_font() -> Option<FontArc> {
+        font(None).ok()
+    }
+
+    fn settings(text: &str, alignment: TextAlignment) -> TextSourceSettings {
+        TextSourceSettings {
+            size: [400.0, 100.0],
+            text: text.to_owned(),
+            font: None,
+            font_size: 48.0,
+            rgba: [255, 255, 255, 255],
+            alignment,
+        }
+    }
+
+    /// The alpha plane of a frame, as columns that have any glyph in them.
+    fn covered_columns(buffer: &MediaBuffer, width: u32, height: u32) -> Vec<u32> {
+        let MediaBuffer::Video(frame) = buffer else {
+            panic!("a text source produced something that is not video");
+        };
+        let stride = frame.stride(0);
+        let data = frame.data(0);
+        (0..width)
+            .filter(|column| {
+                (0..height).any(|row| data[row as usize * stride + *column as usize * 4 + 3] > 0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn text_with_no_drawable_glyphs_leaves_the_frame_transparent() {
+        if a_font().is_none() {
+            return;
+        }
+        for text in ["", "   ", "\n\t"] {
+            let frame = text_bgra(400, 100, &settings(text, TextAlignment::Left)).unwrap();
+            assert!(
+                covered_columns(&frame, 400, 100).is_empty(),
+                "{text:?} drew something"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_lands_against_the_edge_it_is_aligned_to() {
+        if a_font().is_none() {
+            return;
+        }
+        let (width, height) = (400, 100);
+        let placed = |alignment| {
+            let frame = text_bgra(width, height, &settings("III", alignment)).unwrap();
+            let columns = covered_columns(&frame, width, height);
+            (*columns.first().unwrap(), *columns.last().unwrap())
+        };
+
+        let (left_first, left_last) = placed(TextAlignment::Left);
+        let (centre_first, centre_last) = placed(TextAlignment::Centre);
+        let (right_first, right_last) = placed(TextAlignment::Right);
+
+        assert!(left_first < 8, "left-aligned text is not against the edge");
+        assert!(
+            width - right_last < 8,
+            "right-aligned text is not against the edge"
+        );
+        // Centred rather than merely between the two: the gaps either side
+        // are what "centred" means, and equal ones are what a caption that
+        // grows in both directions needs.
+        let (before, after) = (centre_first, width - centre_last);
+        assert!(
+            before.abs_diff(after) < 8,
+            "centred text sits {before} from the left and {after} from the right"
+        );
+        assert!(left_first < centre_first && centre_first < right_first);
+        assert!(left_last < centre_last && centre_last < right_last);
+    }
+
+    /// Text wider than its box is clipped, not drawn past the edge — which
+    /// for a frame handed to an upload element would be a write out of
+    /// bounds rather than a cosmetic problem.
+    #[test]
+    fn a_line_too_long_for_its_box_stays_inside_it() {
+        if a_font().is_none() {
+            return;
+        }
+        let mut wide = settings(&"W".repeat(200), TextAlignment::Left);
+        wide.font_size = 96.0;
+        let frame = text_bgra(64, 64, &wide).unwrap();
+        let columns = covered_columns(&frame, 64, 64);
+        assert!(!columns.is_empty(), "nothing was drawn at all");
+        assert!(*columns.last().unwrap() < 64);
+    }
+
+    /// The whole way: a caption drawn here, uploaded as BGRA, blended onto
+    /// the compositor's own NV12 canvas, and read back in system memory.
+    ///
+    /// What this establishes is the claim the pipeline is built on — that a
+    /// layer with an alpha channel reaches the canvas *as* one. The unit
+    /// tests above prove the frame is drawn correctly; only this proves it
+    /// survives the trip, and that the transparent nine-tenths of a caption
+    /// does not arrive as a black rectangle over the Scene.
+    ///
+    /// ```text
+    /// AppSource(BGRA) ─ CudaUpload ─┐
+    ///                               ├─ CudaVideoCompositor ─ CudaDownload ─ AppSink
+    ///           (a red background) ─┘
+    /// ```
+    ///
+    /// Needs a CUDA device. Where the machine has none this says so and
+    /// returns rather than failing a build that never had a chance — the
+    /// same bargain `preview::platform`'s own hardware test makes.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_caption_reaches_the_canvas_without_a_rectangle_around_it() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use media_pp::color::Color;
+        use media_pp::elements::{
+            AppSink, AppSource, CudaDevice, CudaDownload, CudaFrameFormat, CudaUpload,
+            CudaVideoCompositor, CudaVideoCompositorInput, VideoCompositorOptions, VideoLayer,
+            VideoRect,
+        };
+
+        if a_font().is_none() {
+            eprintln!("skipped: no font on this machine to draw with");
+            return;
+        }
+        if media_pp::init().is_err() {
+            eprintln!("skipped: ffmpeg would not initialize");
+            return;
+        }
+        let Ok(cuda) = CudaDevice::new() else {
+            eprintln!("skipped: no CUDA device on this machine");
+            return;
+        };
+
+        let (width, height) = (256u32, 128u32);
+        // Red, so a caption that arrived with its background opaque would
+        // black out what it covers and be impossible to miss. Black would
+        // hide exactly the defect this is here for.
+        let (compositor, handle) = CudaVideoCompositor::new(
+            "text-test",
+            &cuda,
+            VideoCompositorOptions {
+                width,
+                height,
+                frame_rate: ffmpeg::Rational::new(30, 1),
+                background: Color::new(255, 0, 0),
+            },
+        )
+        .expect("compositor");
+
+        let mut caption = settings("H", TextAlignment::Centre);
+        caption.size = [width as f32, height as f32];
+        caption.font_size = 64.0;
+        let frame = text_bgra(width, height, &caption).expect("draw the caption");
+
+        let (source, pusher) = AppSource::new("caption", 1);
+        let upload = CudaUpload::new(
+            "caption-upload",
+            &cuda,
+            CudaFrameFormat::Bgra,
+            width,
+            height,
+        )
+        .expect("upload");
+        let CudaVideoCompositorInput { sink, .. } = handle
+            .add_source(
+                "caption",
+                VideoLayer::new(VideoRect::new(0, 0, width, height)),
+            )
+            .expect("add the caption layer");
+        let feeding = Pipeline::new("caption-in", source, move |source, context| {
+            let branch = context.branch().pipe(upload).to(sink)?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("source pipeline");
+        feeding.run().expect("run the source");
+        pusher.push(frame).expect("push the caption");
+
+        let (composed, arrived) = mpsc::channel();
+        let download = CudaDownload::new("download", &cuda, CudaFrameFormat::Nv12, width, height);
+        let sink = AppSink::new("out", move |buffer: MediaBuffer| {
+            if let MediaBuffer::Video(frame) = &buffer {
+                // The luma plane alone, which is all the two colours here
+                // differ in enough to tell apart. Copied out because the
+                // frame goes back to its pool when this returns.
+                let stride = frame.stride(0);
+                let data = frame.data(0);
+                let luma: Vec<u8> = (0..height as usize)
+                    .flat_map(|row| data[row * stride..row * stride + width as usize].to_vec())
+                    .collect();
+                let _ = composed.send(luma);
+            }
+            Ok(())
+        });
+        let composing = Pipeline::new("compose", compositor, move |source, context| {
+            let branch = context.branch().pipe(download).to(Box::new(sink))?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("compositor pipeline");
+        composing.run().expect("run the compositor");
+
+        // The first frame can be composed before the pushed one has been
+        // uploaded, in which case it is background alone. What is being
+        // tested is that the caption arrives at all, so this waits for a
+        // frame that has it rather than asserting on whichever came first.
+        let mut with_caption = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let Ok(luma) = arrived.recv_timeout(Duration::from_secs(5)) else {
+                break;
+            };
+            if luma.iter().any(|value| *value > 150) {
+                with_caption = Some(luma);
+                break;
+            }
+        }
+        feeding.stop();
+        composing.stop();
+        let luma = with_caption.expect("no composited frame carried the caption");
+
+        // BT.709 limited-range red is Y=63, and white glyphs are Y=235. The
+        // corners are the assertion that matters: they are where an opaque
+        // caption would have painted its own background over the red.
+        let at = |row: u32, column: u32| luma[(row * width + column) as usize];
+        for (row, column) in [
+            (0, 0),
+            (0, width - 1),
+            (height - 1, 0),
+            (height - 1, width - 1),
+        ] {
+            assert_eq!(
+                at(row, column),
+                63,
+                "the caption painted over the background at {row},{column}"
+            );
+        }
+        let lit = luma.iter().filter(|value| **value > 150).count();
+        assert!(
+            lit > 50,
+            "the glyph did not reach the canvas ({lit} pixels)"
+        );
+    }
+
+    /// The colour picker's alpha reaches the frame, so a caption can be
+    /// translucent without the strokes' own anti-aliasing being lost.
+    #[test]
+    fn the_chosen_alpha_scales_the_glyph_coverage() {
+        if a_font().is_none() {
+            return;
+        }
+        let peak = |alpha| {
+            let mut chosen = settings("H", TextAlignment::Left);
+            chosen.rgba = [255, 255, 255, alpha];
+            let MediaBuffer::Video(frame) = text_bgra(400, 100, &chosen).unwrap() else {
+                panic!("not video");
+            };
+            let stride = frame.stride(0);
+            let data = frame.data(0);
+            (0..100usize)
+                .flat_map(|row| (0..400usize).map(move |column| (row, column)))
+                .map(|(row, column)| data[row * stride + column * 4 + 3])
+                .max()
+                .unwrap()
+        };
+        assert_eq!(peak(255), 255);
+        let half = peak(128);
+        assert!(
+            (120..=135).contains(&half),
+            "a half-transparent caption peaked at {half}"
+        );
+    }
+}
