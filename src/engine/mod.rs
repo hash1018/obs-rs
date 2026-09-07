@@ -84,6 +84,14 @@ enum EngineCommand {
     Opened(Box<Opened>),
     /// One item's Transform mid-gesture, which the project does not hold yet.
     Dragging(SceneItemId, Transform, Crop),
+    /// One filter's settings mid-gesture, for the same reason `Dragging`
+    /// exists: a threshold is tuned by watching the picture, and a project
+    /// told once per frame would write a transaction per frame of the drag.
+    FilterSettings(
+        SceneItemId,
+        crate::domain::FilterId,
+        crate::domain::FilterSettings,
+    ),
     /// A Drawing's strokes mid-gesture, for the same reason `Dragging` exists:
     /// the mark has to appear under the pointer, and the project is not told
     /// until the pointer comes up. Carries the whole list rather than the one
@@ -572,6 +580,21 @@ impl EngineManager {
         let _ = self.commands.send(EngineCommand::MediaGain(item, gain_db));
     }
 
+    /// One filter's settings while its slider is still held.
+    ///
+    /// Reaches the running element and nothing else; the project is told
+    /// once, when the pointer comes up.
+    pub fn set_filter_settings(
+        &self,
+        item: SceneItemId,
+        filter: crate::domain::FilterId,
+        settings: crate::domain::FilterSettings,
+    ) {
+        let _ = self
+            .commands
+            .send(EngineCommand::FilterSettings(item, filter, settings));
+    }
+
     /// Asks for one Source to be opened again, whatever that costs.
     ///
     /// This is the only way a `Disconnected` Source comes back, and it exists
@@ -921,6 +944,14 @@ fn apply_command(
         EngineCommand::MediaGain(item_id, gain_db) => {
             if let Some(SourceState::Open(source)) = open.get(&item_id) {
                 source::set_media_gain_db(source, gain_db);
+            }
+            false
+        }
+        EngineCommand::FilterSettings(item_id, filter_id, settings) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id)
+                && let Some(filter) = source.filters.iter().find(|open| open.id == filter_id)
+            {
+                filter.retune(&settings);
             }
             false
         }

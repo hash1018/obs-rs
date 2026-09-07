@@ -85,7 +85,8 @@ impl ObsApp {
         install_locale_fonts(&cc.egui_ctx);
         // The docks and the Preview zoom come back as they were left; nothing
         // else about the session does.
-        let ui_state = UiState::restored(&settings.workspace.docks, &settings.workspace.preview);
+        let mut ui_state =
+            UiState::restored(&settings.workspace.docks, &settings.workspace.preview);
         if let Err(error) = settings_store.save(&settings) {
             eprintln!("could not save app settings: {error}");
         }
@@ -100,8 +101,24 @@ impl ObsApp {
         // Built before the struct so the engine can be handed a dispatcher:
         // opening a capture Source can produce a fresher restore token, and
         // that belongs in the project rather than in this run's memory.
-        let project_manager =
-            ProjectManager::spawn(move || project_repaint_ctx.request_repaint()).ok();
+        // Kept rather than discarded. Without a project this application
+        // still opens, still shows a Scene, and still lets a Source be added
+        // — and remembers none of it. That is worth a sentence to the user,
+        // and it used to be an `.ok()`: the one time it mattered, a database
+        // this build refused to migrate turned into an empty window with
+        // nothing said, and the reason was only discoverable by reading the
+        // schema by hand.
+        let (project_manager, project_error) =
+            match ProjectManager::spawn(move || project_repaint_ctx.request_repaint()) {
+                Ok(manager) => (Some(manager), None),
+                Err(error) => {
+                    eprintln!("the project could not be opened: {error}");
+                    (None, Some(error.to_string()))
+                }
+            };
+        if let Some(error) = project_error {
+            ui_state.report_project_error(error);
+        }
         let project_dispatcher = project_manager.as_ref().map(ProjectManager::dispatcher);
         let recording_settings = settings.recording.clone();
         // Taken before the struct owns them, since the fields below are
@@ -524,6 +541,28 @@ impl ObsApp {
             UiAction::SeekMediaFile(item_id, target) => {
                 if let Some(engine) = &self.engine {
                     engine.seek_media_file(item_id, target);
+                }
+            }
+            UiAction::DragFilterSettings(item_id, filter_id, settings) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_filter_settings(item_id, filter_id, settings.clone());
+                }
+                // And into the snapshot the dock reads back, for the reason
+                // `DragMediaGain` does it: the project is not told until the
+                // slider is let go, and a control reading the old value would
+                // spring back under the pointer.
+                if let Some(item) = self
+                    .snapshots
+                    .sources
+                    .items
+                    .iter_mut()
+                    .find(|item| item.id == item_id)
+                    && let Some(filter) = item
+                        .filters
+                        .iter_mut()
+                        .find(|filter| filter.id == filter_id)
+                {
+                    filter.settings = settings;
                 }
             }
             UiAction::DragMediaGain(item_id, gain_db) => {

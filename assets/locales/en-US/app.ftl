@@ -232,3 +232,7 @@ filters-chroma-key-smoothing = Smoothness
 filters-chroma-key-green = Green
 filters-chroma-key-blue = Blue
 filters-chroma-key-custom-method = Custom
+
+project-unavailable-title = Project could not be opened
+project-unavailable-body = obs-rs is running without a project. Scenes, sources and settings from this session will not be saved.
+project-unavailable-dismiss = Carry on anyway

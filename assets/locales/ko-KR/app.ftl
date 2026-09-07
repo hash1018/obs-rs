@@ -232,3 +232,7 @@ filters-chroma-key-smoothing = 부드러움
 filters-chroma-key-green = 초록
 filters-chroma-key-blue = 파랑
 filters-chroma-key-custom-method = 사용자 지정
+
+project-unavailable-title = 프로젝트를 열 수 없습니다
+project-unavailable-body = 프로젝트 없이 실행 중입니다. 이번 세션에서 만든 장면·소스·설정은 저장되지 않습니다.
+project-unavailable-dismiss = 그래도 계속

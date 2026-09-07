@@ -12,6 +12,12 @@ pub struct UiState {
     /// Whether the "a recording is running" question is up — see
     /// `shell::confirm_exit`.
     pub(super) exit_confirm_open: bool,
+    /// Why the project could not be opened, until the user has been told.
+    ///
+    /// `Some` means nothing this session does will be remembered, which is
+    /// not something to leave a user to work out — see
+    /// `shell::report_project_error`.
+    pub(super) project_error: Option<String>,
     pub(super) dock_layout: DockLayout,
     pub(super) fullscreen: bool,
     pub(super) scenes: ScenesPanelState,
@@ -44,6 +50,12 @@ impl UiState {
     /// The Preview zoom as it stands, for the settings file.
     pub fn preview_zoom(&self) -> crate::ui::PreviewZoom {
         self.preview.zoom()
+    }
+
+    /// Says the project could not be opened, so the user is told before
+    /// building a Scene that will not be there next time.
+    pub fn report_project_error(&mut self, error: String) {
+        self.project_error = Some(error);
     }
 
     /// Asks whether to quit while a recording is running.

@@ -86,9 +86,20 @@ impl OpenFilter {
     /// through one of these, and the two that cannot are exactly the two
     /// that make [`crate::engine`] reopen the Source instead.
     pub(in crate::engine) fn apply(&self, filter: &Filter) {
-        match (&self.handle, &filter.settings) {
+        match &self.handle {
+            FilterHandle::ChromaKey(handle) => handle.set_enabled(filter.enabled),
+        }
+        self.retune(&filter.settings);
+    }
+
+    /// The settings alone, for a slider still under the pointer.
+    ///
+    /// The project is not told until the gesture ends — see the mixer's own
+    /// fader, which splits the same way and for the same reason — so this is
+    /// how the picture follows the pointer meanwhile.
+    pub(in crate::engine) fn retune(&self, settings: &FilterSettings) {
+        match (&self.handle, settings) {
             (FilterHandle::ChromaKey(handle), FilterSettings::ChromaKey(settings)) => {
-                handle.set_enabled(filter.enabled);
                 handle.set_options(chroma_key_options(settings));
             }
         }

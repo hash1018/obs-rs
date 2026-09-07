@@ -84,7 +84,7 @@ pub(in crate::ui) fn show(
         return;
     };
     ui.separator();
-    show_settings(ui, selected, i18n, actions);
+    show_settings(ui, item, selected, i18n, actions);
 }
 
 /// What the panel remembers between frames, which is only which row is open
@@ -186,6 +186,7 @@ fn show_toolbar(
 
 fn show_settings(
     ui: &mut egui::Ui,
+    item: &SceneItemSnapshot,
     filter: &Filter,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
@@ -193,6 +194,8 @@ fn show_settings(
     let FilterSettings::ChromaKey(settings) = filter.settings;
     let mut edited = settings;
 
+    // Collected so the pushes below can ask what the gesture was.
+    let mut sliders: Vec<egui::Response> = Vec::new();
     egui::Grid::new("filter-settings")
         .num_columns(2)
         .spacing([10.0, 6.0])
@@ -225,22 +228,35 @@ fn show_settings(
             ui.end_row();
 
             ui.label(i18n.text(TextKey::FiltersChromaKeyThreshold).as_ref());
-            ui.add(egui::Slider::new(&mut edited.threshold, 0.0..=1.0));
+            sliders.push(ui.add(egui::Slider::new(&mut edited.threshold, 0.0..=1.0)));
             ui.end_row();
 
             ui.label(i18n.text(TextKey::FiltersChromaKeySmoothing).as_ref());
-            ui.add(egui::Slider::new(&mut edited.smoothing, 0.0..=1.0));
+            sliders.push(ui.add(egui::Slider::new(&mut edited.smoothing, 0.0..=1.0)));
             ui.end_row();
         });
 
-    // One command per frame in which anything moved. Every field here reaches
-    // the running element through its handle, so a drag costs a store and not
-    // a rebuilt chain — see `engine::refresh_filters`.
-    if edited != settings {
-        actions.push(command(SourceCommand::SetChromaKeySettings(
-            filter.id, edited,
-        )));
+    if edited == settings {
+        return;
     }
+
+    // Two destinations, the split the mixer's fader already documents: the
+    // picture has to follow the pointer, and the project should hear one edit
+    // rather than one per frame of the drag. Both reach the running element
+    // through its handle either way, so neither rebuilds the chain — what
+    // differs is how many rows get written.
+    let dragging = sliders.iter().any(egui::Response::dragged);
+    if dragging {
+        actions.push(UiAction::DragFilterSettings(
+            item.id,
+            filter.id,
+            FilterSettings::ChromaKey(edited),
+        ));
+        return;
+    }
+    actions.push(command(SourceCommand::SetChromaKeySettings(
+        filter.id, edited,
+    )));
 }
 
 fn command(command: SourceCommand) -> UiAction {

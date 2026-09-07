@@ -13,6 +13,15 @@ pub enum UiAction {
     /// compositor and not to the project: a drag is one edit, recorded when it
     /// ends, but the picture has to follow the pointer meanwhile.
     DragSceneItem(SceneItemId, Transform, Crop),
+    /// One filter's settings while its slider is still held, for the reason
+    /// `DragSceneItem` exists: keying is tuned by watching the picture, and
+    /// the project hears one edit when the pointer comes up rather than one
+    /// per frame of the drag.
+    DragFilterSettings(
+        SceneItemId,
+        crate::domain::FilterId,
+        crate::domain::FilterSettings,
+    ),
     /// A Drawing's strokes while the pointer is still down, for the same
     /// reason `DragSceneItem` exists: the mark has to be under the pointer,
     /// and the stroke is recorded once when the gesture ends.
