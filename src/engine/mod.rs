@@ -34,7 +34,6 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwapOption;
 use eframe::egui_wgpu::RenderState;
 use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
-use time::OffsetDateTime;
 
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceKind, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
@@ -1137,11 +1136,12 @@ fn start_recording(
     let path = crate::paths::recording_file_in(
         &settings.directory_or_default(),
         settings.prefix_or_default(),
-        // A recording is named for the user's own wall clock. `now_local`
-        // refuses to answer in a process with more than one thread on some
-        // platforms, which this is; UTC is then a worse name rather than no
-        // recording.
-        OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
+        // A recording is named for the user's own wall clock, which is what
+        // makes the stamp mean anything to the person looking for the file.
+        // Through `clock` rather than `now_local`, which refuses to answer
+        // in a process with more than one thread and so was answering `Err`
+        // here every time — naming every recording in UTC.
+        crate::clock::now_local(),
         settings.format,
     );
     let running = recording::Recording::start(

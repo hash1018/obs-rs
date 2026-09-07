@@ -6,7 +6,6 @@
 //! so while a recording is running rather than pretending otherwise.
 
 use eframe::egui;
-use time::OffsetDateTime;
 
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{
@@ -265,7 +264,9 @@ pub(super) fn show(
 /// drift from what actually happens — including the fallbacks an empty field
 /// takes.
 fn example_path(settings: &crate::settings::RecordingSettings) -> String {
-    let started = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    // The same clock the engine names a recording with, so the example is
+    // the truth rather than a second opinion — see `crate::clock`.
+    let started = crate::clock::now_local();
     crate::paths::recording_file_in(
         &settings.directory_or_default(),
         settings.prefix_or_default(),

@@ -64,3 +64,55 @@ pub fn now_local() -> OffsetDateTime {
 pub fn now_micros() -> i64 {
     (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000) as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whatever offset was captured — and under a test harness, which is
+    /// multithreaded before the first test runs, it is usually none — the
+    /// two must describe the same *instant*. An offset applied by adding
+    /// hours to a UTC reading rather than by relabelling it would put every
+    /// recording's name nine hours into the future here, which is a worse
+    /// bug than the one this module exists to fix.
+    #[test]
+    fn the_local_reading_is_the_same_instant_as_the_utc_one() {
+        let before = OffsetDateTime::now_utc();
+        let local = now_local();
+        let after = OffsetDateTime::now_utc();
+        assert!(
+            (before..=after).contains(&local),
+            "{local} is not between {before} and {after}"
+        );
+    }
+
+    /// And in the offset that was captured, where one was. This is what a
+    /// clock on the Canvas reads and what a file is named for, so the two
+    /// halves — right instant, right offset — are asserted apart.
+    #[test]
+    fn the_local_reading_carries_the_captured_offset() {
+        capture_local_offset();
+        let Some(captured) = LOCAL_OFFSET.get() else {
+            // The harness is already multithreaded, so the capture fails
+            // here exactly as it would from a late caller in the
+            // application. UTC is then what everything reads, which is the
+            // documented fallback rather than a failure.
+            assert_eq!(now_local().offset(), UtcOffset::UTC);
+            return;
+        };
+        assert_eq!(now_local().offset(), *captured);
+    }
+
+    /// Microseconds, not milliseconds or nanoseconds: a stopwatch stored in
+    /// the wrong unit reads a thousand times fast, and nothing else in the
+    /// arithmetic would notice.
+    #[test]
+    fn the_stopwatch_clock_is_in_microseconds() {
+        let micros = now_micros();
+        let seconds = OffsetDateTime::now_utc().unix_timestamp();
+        assert!(
+            (micros / 1_000_000 - seconds).abs() <= 1,
+            "{micros} µs is not {seconds} s"
+        );
+    }
+}
