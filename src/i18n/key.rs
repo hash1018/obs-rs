@@ -1,511 +1,296 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextKey {
-    MenuFile,
-    MenuExit,
-    MenuView,
-    MenuFullscreen,
-    MenuDocks,
-    MenuTheme,
-    ThemeSystem,
-    ThemeLight,
-    ThemeDark,
-    MenuLanguage,
-    LanguageEnglish,
-    LanguageKorean,
-    MenuHelp,
-    MenuAbout,
-    AboutDescription,
-    DockScenes,
-    DockSources,
-    DockAudioMixer,
-    DockControls,
-    DockProperties,
-    DockFilters,
-    ProjectUnavailableTitle,
-    ProjectUnavailableBody,
-    ProjectUnavailableDismiss,
-    FiltersNoSelection,
-    FiltersUnsupportedKind,
-    FiltersOnTheSource,
-    FiltersEmpty,
-    FiltersAdd,
-    FiltersRemove,
-    FiltersMoveUp,
-    FiltersMoveDown,
-    FiltersChromaKey,
-    FiltersChromaKeyColour,
-    FiltersChromaKeyCustom,
-    FiltersChromaKeyThreshold,
-    FiltersChromaKeySmoothing,
-    FiltersChromaKeyGreen,
-    FiltersChromaKeyBlue,
-    FiltersChromaKeyCustomMethod,
-    PropertiesNoSelection,
-    PropertiesName,
-    PropertiesKind,
-    PropertiesPosition,
-    PropertiesSize,
-    PropertiesRotation,
-    PropertiesVisible,
-    PropertiesLocked,
-    PropertiesYes,
-    PropertiesNo,
-    PropertiesColour,
-    PropertiesOpacity,
-    PropertiesStrokes,
-    PropertiesSurface,
-    PropertiesText,
-    PropertiesTextMode,
-    PropertiesTextModeStatic,
-    PropertiesTextModeClock,
-    PropertiesTextModeTimer,
-    PropertiesTextFormat,
-    PropertiesTimer,
-    PropertiesTimerStart,
-    PropertiesTimerStop,
-    PropertiesTimerReset,
-    PropertiesFont,
-    PropertiesFontDefault,
-    PropertiesFontBrowse,
-    PropertiesFontFilter,
-    PropertiesFontSize,
-    PropertiesAlignment,
-    PropertiesAlignLeft,
-    PropertiesAlignCentre,
-    PropertiesAlignRight,
-    PropertiesMonitor,
-    PropertiesPortalRemembered,
-    PropertiesPortalAsks,
-    PropertiesStream,
-    PropertiesDesktopPosition,
-    PropertiesDesktopSize,
-    PropertiesProcess,
-    PropertiesTitle,
-    PropertiesWindow,
-    PropertiesFile,
-    PropertiesCrop,
-    PropertiesCropLeft,
-    PropertiesCropTop,
-    PropertiesCropRight,
-    PropertiesCropBottom,
-    PropertiesCamera,
-    PropertiesCameraMode,
-    PropertiesCameraModeAutomatic,
-    PropertiesUrl,
-    PropertiesTransport,
-    PropertiesReconnect,
-    PropertiesReconnectOff,
-    PropertiesReconnectSeconds,
-    PropertiesLoop,
-    PropertiesPlayback,
-    PropertiesPlay,
-    PropertiesPause,
-    AudioEmpty,
-    AudioMute,
-    AudioUnmute,
-    AudioMonitorOff,
-    AudioMonitorOn,
-    AudioMonitorUnavailable,
-    AudioKindOutput,
-    AudioKindInput,
-    AudioDeviceDefault,
-    AudioNoDevices,
-    AudioClipped,
-    ControlStartRecording,
-    ControlPauseRecording,
-    ControlResumeRecording,
-    ControlStopRecording,
-    ControlSettings,
-    SettingsTitle,
-    SettingsPageGeneral,
-    SettingsPageRecording,
-    SettingsPageHotkeys,
-    HotkeyToggleRecording,
-    HotkeyTogglePause,
-    HotkeyFullscreen,
-    HotkeyOpenSettings,
-    HotkeyPressAKey,
-    HotkeyNone,
-    HotkeyConflict,
-    HotkeyHint,
-    SettingsPageVideo,
-    SettingsAudioOpusNeeds48k,
-    SettingsAudioWhileRecording,
-    SettingsAudioStereo,
-    SettingsAudioMono,
-    SettingsAudioChannels,
-    SettingsAudioMonitorDevice,
-    SettingsAudioMonitorNone,
-    SettingsAudioMonitorFeedback,
-    SettingsAudioSampleRate,
-    SettingsPageAudio,
-    SettingsVideoCanvas,
-    SettingsVideoCanvasFixed,
-    SettingsVideoOutput,
-    SettingsVideoFps,
-    SettingsLanguage,
-    SettingsTheme,
-    SettingsRecordingDirectory,
-    SettingsRecordingNamePrefix,
-    SettingsRecordingNameExample,
-    SettingsRecordingEncoder,
-    SettingsEncoderUnavailable,
-    SettingsEncoderSoftwareCost,
-    SettingsRecordingBitRate,
-    SettingsRecordingKeyframes,
-    SettingsRecordingAudioCodec,
-    SettingsRecordingAudioBitRate,
-    SettingsRecordingFormat,
-    SettingsRecordingSplit,
-    SettingsRecordingSplitOff,
-    SettingsRecordingSplitTime,
-    SettingsRecordingSplitSize,
-    SettingsRecordingSplitHls,
-    SettingsRecordingWhileRunning,
-    SettingsFpsWhileRecording,
-    ActionApply,
-    ActionBrowse,
-    ActionOk,
-    ExitWhileRecordingTitle,
-    ExitWhileRecordingBody,
-    ExitStopAndQuit,
-    ExitKeepRecording,
-    /// Beside the clock while a recording is running.
-    StatusRecording,
-    StatusRecordingFailed,
-    StatusRecordingPaused,
-    StatusReady,
-    StatusGpuProcess,
-    StatusGpuDevice,
-    StatusGpuUnavailable,
-    SceneNameEmpty,
-    SceneNameDuplicate,
-    SceneAdd,
-    SceneRemove,
-    SceneDuplicate,
-    SceneMoveUp,
-    SceneMoveDown,
-    SourceSelectedScene,
-    SourceEmpty,
-    SourceAdd,
-    SourceRemove,
-    SourceNameEmpty,
-    SourceNameDuplicate,
-    SourceMoveUp,
-    SourceMoveDown,
-    SourceAddTitle,
-    SourceType,
-    SourceCameraTitle,
-    SourceCameraPrompt,
-    SourceCameraNone,
-    SourceDisplayTitle,
-    SourceDisplayPrompt,
-    SourceDisplayMonitor,
-    SourceDisplayMonitorPrimary,
-    MenuSettings,
-    MenuShowRecordings,
-    StatusMemory,
-    StatusMemoryResident,
-    StatusMemoryBoth,
-    SourceDisplayNone,
-    SourceWindowTitle,
-    SourceWindowPrompt,
-    SourceWindowRow,
-    SourceWindowNone,
-    SourceKindColor,
-    SourceKindDrawing,
-    SourceKindText,
-    SourceKindMediaFile,
-    SourceMediaFileFilter,
-    SourceImageFilter,
-    SourceEnded,
-    AudioKindMediaFile,
-    DrawingToolSelect,
-    DrawingToolPen,
-    DrawingToolHighlighter,
-    DrawingToolEraser,
-    DrawingWidth,
-    DrawingWidthThin,
-    DrawingWidthMedium,
-    DrawingWidthThick,
-    DrawingUndo,
-    DrawingClear,
-    /// Shown beside a Source that is not producing a picture.
-    SourceDisconnected,
-    /// The offer to open a disconnected Source again.
-    SourceReopen,
-    SourceKindDisplayCapture,
-    SourceKindWindowCapture,
-    SourceStreamTitle,
-    SourceStreamPrompt,
-    SourceStreamTrying,
-    SourceKindRtsp,
-    SourceKindVideoCapture,
-    SourceKindImage,
-    ActionAdd,
-    ActionCancel,
-    ActionBack,
-    PreviewNoFrame,
-    PreviewScaleDecrease,
-    PreviewScaleIncrease,
-    PreviewScaleFit,
-    PreviewFitWorkspace,
-    PreviewResetView,
-    PreviewScaleOptions,
+//! Every string the interface can show, named once.
+//!
+//! # Why a macro
+//!
+//! A key is three things: an enum variant, the identifier the language packs
+//! use, and membership of the list [`TextKey::ALL`] that
+//! `every_key_is_translated_in_every_locale` walks. Written out by hand those
+//! are three lists of the same two hundred and fifty items, kept in step by
+//! whoever remembers to. The macro makes them one list — a key that is
+//! declared is a key that has an identifier and is in `ALL`, and there is no
+//! way to add one that is not.
+//!
+//! What that buys is the test at the bottom of `manager`: a key with no
+//! translation shows its own identifier in the interface rather than failing,
+//! so nothing but a walk of every key finds a missing one.
+
+macro_rules! text_keys {
+    ($($variant:ident => $id:literal;)*) => {
+        /// Every string the interface can show.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum TextKey {
+            $($variant,)*
+        }
+
+        impl TextKey {
+            /// Every key there is, for whoever has to check them all.
+            ///
+            /// Only the tests walk it today, and this crate is built with
+            /// `-D warnings`, so outside them it is deliberately unused
+            /// rather than absent: what it exists for is to be complete, and
+            /// a list that is only built when someone remembers to would not
+            /// be.
+            #[cfg_attr(not(test), allow(dead_code))]
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
+
+            /// What the language packs call this one.
+            pub const fn id(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $id,)*
+                }
+            }
+        }
+    };
 }
 
-impl TextKey {
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::MenuFile => "menu-file",
-            Self::MenuExit => "menu-exit",
-            Self::MenuView => "menu-view",
-            Self::MenuFullscreen => "menu-fullscreen",
-            Self::MenuDocks => "menu-docks",
-            Self::MenuTheme => "menu-theme",
-            Self::ThemeSystem => "theme-system",
-            Self::ThemeLight => "theme-light",
-            Self::ThemeDark => "theme-dark",
-            Self::MenuLanguage => "menu-language",
-            Self::LanguageEnglish => "language-english",
-            Self::LanguageKorean => "language-korean",
-            Self::MenuHelp => "menu-help",
-            Self::MenuAbout => "menu-about",
-            Self::AboutDescription => "about-description",
-            Self::DockScenes => "dock-scenes",
-            Self::DockSources => "dock-sources",
-            Self::DockAudioMixer => "dock-audio-mixer",
-            Self::DockControls => "dock-controls",
-            Self::DockProperties => "dock-properties",
-            Self::DockFilters => "dock-filters",
-            Self::ProjectUnavailableTitle => "project-unavailable-title",
-            Self::ProjectUnavailableBody => "project-unavailable-body",
-            Self::ProjectUnavailableDismiss => "project-unavailable-dismiss",
-            Self::FiltersNoSelection => "filters-no-selection",
-            Self::FiltersUnsupportedKind => "filters-unsupported-kind",
-            Self::FiltersOnTheSource => "filters-on-the-source",
-            Self::FiltersEmpty => "filters-empty",
-            Self::FiltersAdd => "filters-add",
-            Self::FiltersRemove => "filters-remove",
-            Self::FiltersMoveUp => "filters-move-up",
-            Self::FiltersMoveDown => "filters-move-down",
-            Self::FiltersChromaKey => "filters-chroma-key",
-            Self::FiltersChromaKeyColour => "filters-chroma-key-colour",
-            Self::FiltersChromaKeyCustom => "filters-chroma-key-custom",
-            Self::FiltersChromaKeyThreshold => "filters-chroma-key-threshold",
-            Self::FiltersChromaKeySmoothing => "filters-chroma-key-smoothing",
-            Self::FiltersChromaKeyGreen => "filters-chroma-key-green",
-            Self::FiltersChromaKeyBlue => "filters-chroma-key-blue",
-            Self::FiltersChromaKeyCustomMethod => "filters-chroma-key-custom-method",
-            Self::PropertiesNoSelection => "properties-no-selection",
-            Self::PropertiesName => "properties-name",
-            Self::PropertiesKind => "properties-kind",
-            Self::PropertiesPosition => "properties-position",
-            Self::PropertiesSize => "properties-size",
-            Self::PropertiesRotation => "properties-rotation",
-            Self::PropertiesVisible => "properties-visible",
-            Self::PropertiesLocked => "properties-locked",
-            Self::PropertiesYes => "properties-yes",
-            Self::PropertiesNo => "properties-no",
-            Self::PropertiesColour => "properties-colour",
-            Self::PropertiesOpacity => "properties-opacity",
-            Self::PropertiesStrokes => "properties-strokes",
-            Self::PropertiesSurface => "properties-surface",
-            Self::PropertiesText => "properties-text",
-            Self::PropertiesTextMode => "properties-text-mode",
-            Self::PropertiesTextModeStatic => "properties-text-mode-static",
-            Self::PropertiesTextModeClock => "properties-text-mode-clock",
-            Self::PropertiesTextModeTimer => "properties-text-mode-timer",
-            Self::PropertiesTextFormat => "properties-text-format",
-            Self::PropertiesTimer => "properties-timer",
-            Self::PropertiesTimerStart => "properties-timer-start",
-            Self::PropertiesTimerStop => "properties-timer-stop",
-            Self::PropertiesTimerReset => "properties-timer-reset",
-            Self::PropertiesFont => "properties-font",
-            Self::PropertiesFontDefault => "properties-font-default",
-            Self::PropertiesFontBrowse => "properties-font-browse",
-            Self::PropertiesFontFilter => "properties-font-filter",
-            Self::PropertiesFontSize => "properties-font-size",
-            Self::PropertiesAlignment => "properties-alignment",
-            Self::PropertiesAlignLeft => "properties-align-left",
-            Self::PropertiesAlignCentre => "properties-align-centre",
-            Self::PropertiesAlignRight => "properties-align-right",
-            Self::PropertiesMonitor => "properties-monitor",
-            Self::PropertiesPortalRemembered => "properties-portal-remembered",
-            Self::PropertiesPortalAsks => "properties-portal-asks",
-            Self::PropertiesStream => "properties-stream",
-            Self::PropertiesDesktopPosition => "properties-desktop-position",
-            Self::PropertiesDesktopSize => "properties-desktop-size",
-            Self::PropertiesProcess => "properties-process",
-            Self::PropertiesTitle => "properties-title",
-            Self::PropertiesWindow => "properties-window",
-            Self::PropertiesFile => "properties-file",
-            Self::PropertiesCrop => "properties-crop",
-            Self::PropertiesCropLeft => "properties-crop-left",
-            Self::PropertiesCropTop => "properties-crop-top",
-            Self::PropertiesCropRight => "properties-crop-right",
-            Self::PropertiesCropBottom => "properties-crop-bottom",
-            Self::PropertiesCamera => "properties-camera",
-            Self::PropertiesCameraMode => "properties-camera-mode",
-            Self::PropertiesCameraModeAutomatic => "properties-camera-mode-automatic",
-            Self::PropertiesUrl => "properties-url",
-            Self::PropertiesTransport => "properties-transport",
-            Self::PropertiesReconnect => "properties-reconnect",
-            Self::PropertiesReconnectOff => "properties-reconnect-off",
-            Self::PropertiesReconnectSeconds => "properties-reconnect-seconds",
-            Self::PropertiesLoop => "properties-loop",
-            Self::PropertiesPlayback => "properties-playback",
-            Self::PropertiesPlay => "properties-play",
-            Self::PropertiesPause => "properties-pause",
-            Self::AudioEmpty => "audio-empty",
-            Self::AudioMute => "audio-mute",
-            Self::AudioUnmute => "audio-unmute",
-            Self::AudioMonitorOff => "audio-monitor-off",
-            Self::AudioMonitorOn => "audio-monitor-on",
-            Self::AudioMonitorUnavailable => "audio-monitor-unavailable",
-            Self::AudioKindOutput => "audio-kind-output",
-            Self::AudioKindInput => "audio-kind-input",
-            Self::AudioDeviceDefault => "audio-device-default",
-            Self::AudioNoDevices => "audio-no-devices",
-            Self::AudioClipped => "audio-clipped",
-            Self::ControlStartRecording => "control-start-recording",
-            Self::ControlPauseRecording => "control-pause-recording",
-            Self::ControlResumeRecording => "control-resume-recording",
-            Self::ControlStopRecording => "control-stop-recording",
-            Self::ControlSettings => "control-settings",
-            Self::SettingsTitle => "settings-title",
-            Self::SettingsPageGeneral => "settings-page-general",
-            Self::SettingsPageRecording => "settings-page-recording",
-            Self::SettingsPageHotkeys => "settings-page-hotkeys",
-            Self::HotkeyToggleRecording => "hotkey-toggle-recording",
-            Self::HotkeyTogglePause => "hotkey-toggle-pause",
-            Self::HotkeyFullscreen => "hotkey-fullscreen",
-            Self::HotkeyOpenSettings => "hotkey-open-settings",
-            Self::HotkeyPressAKey => "hotkey-press-a-key",
-            Self::HotkeyNone => "hotkey-none",
-            Self::HotkeyConflict => "hotkey-conflict",
-            Self::HotkeyHint => "hotkey-hint",
-            Self::SettingsPageVideo => "settings-page-video",
-            Self::SettingsPageAudio => "settings-page-audio",
-            Self::SettingsAudioSampleRate => "settings-audio-sample-rate",
-            Self::SettingsAudioChannels => "settings-audio-channels",
-            Self::SettingsAudioMonitorDevice => "settings-audio-monitor-device",
-            Self::SettingsAudioMonitorNone => "settings-audio-monitor-none",
-            Self::SettingsAudioMonitorFeedback => "settings-audio-monitor-feedback",
-            Self::SettingsAudioMono => "settings-audio-mono",
-            Self::SettingsAudioStereo => "settings-audio-stereo",
-            Self::SettingsAudioWhileRecording => "settings-audio-while-recording",
-            Self::SettingsAudioOpusNeeds48k => "settings-audio-opus-needs-48k",
-            Self::SettingsVideoCanvas => "settings-video-canvas",
-            Self::SettingsVideoCanvasFixed => "settings-video-canvas-fixed",
-            Self::SettingsVideoOutput => "settings-video-output",
-            Self::SettingsVideoFps => "settings-video-fps",
-            Self::SettingsLanguage => "settings-language",
-            Self::SettingsTheme => "settings-theme",
-            Self::SettingsRecordingDirectory => "settings-recording-directory",
-            Self::SettingsRecordingNamePrefix => "settings-recording-name-prefix",
-            Self::SettingsRecordingNameExample => "settings-recording-name-example",
-            Self::SettingsRecordingEncoder => "settings-recording-encoder",
-            Self::SettingsEncoderUnavailable => "settings-encoder-unavailable",
-            Self::SettingsEncoderSoftwareCost => "settings-encoder-software-cost",
-            Self::SettingsRecordingBitRate => "settings-recording-bit-rate",
-            Self::SettingsRecordingKeyframes => "settings-recording-keyframes",
-            Self::SettingsRecordingAudioCodec => "settings-recording-audio-codec",
-            Self::SettingsRecordingAudioBitRate => "settings-recording-audio-bit-rate",
-            Self::SettingsRecordingFormat => "settings-recording-format",
-            Self::SettingsRecordingSplit => "settings-recording-split",
-            Self::SettingsRecordingSplitOff => "settings-recording-split-off",
-            Self::SettingsRecordingSplitTime => "settings-recording-split-time",
-            Self::SettingsRecordingSplitSize => "settings-recording-split-size",
-            Self::SettingsRecordingSplitHls => "settings-recording-split-hls",
-            Self::SettingsRecordingWhileRunning => "settings-recording-while-running",
-            Self::SettingsFpsWhileRecording => "settings-fps-while-recording",
-            Self::ActionApply => "action-apply",
-            Self::ActionBrowse => "action-browse",
-            Self::ActionOk => "action-ok",
-            Self::ExitWhileRecordingTitle => "exit-while-recording-title",
-            Self::ExitWhileRecordingBody => "exit-while-recording-body",
-            Self::ExitStopAndQuit => "exit-stop-and-quit",
-            Self::ExitKeepRecording => "exit-keep-recording",
-            Self::StatusRecording => "status-recording",
-            Self::StatusRecordingFailed => "status-recording-failed",
-            Self::StatusRecordingPaused => "status-recording-paused",
-            Self::StatusReady => "status-ready",
-            Self::SceneNameEmpty => "scene-name-empty",
-            Self::SceneNameDuplicate => "scene-name-duplicate",
-            Self::SceneAdd => "scene-add",
-            Self::SceneRemove => "scene-remove",
-            Self::SceneDuplicate => "scene-duplicate",
-            Self::SceneMoveUp => "scene-move-up",
-            Self::SceneMoveDown => "scene-move-down",
-            Self::SourceSelectedScene => "source-selected-scene",
-            Self::SourceEmpty => "source-empty",
-            Self::SourceAdd => "source-add",
-            Self::SourceRemove => "source-remove",
-            Self::SourceNameEmpty => "source-name-empty",
-            Self::SourceNameDuplicate => "source-name-duplicate",
-            Self::SourceMoveUp => "source-move-up",
-            Self::SourceMoveDown => "source-move-down",
-            Self::SourceAddTitle => "source-add-title",
-            Self::SourceType => "source-type",
-            Self::SourceCameraTitle => "source-camera-title",
-            Self::SourceCameraPrompt => "source-camera-prompt",
-            Self::SourceCameraNone => "source-camera-none",
-            Self::SourceDisplayTitle => "source-display-title",
-            Self::SourceDisplayPrompt => "source-display-prompt",
-            Self::SourceDisplayMonitor => "source-display-monitor",
-            Self::SourceDisplayMonitorPrimary => "source-display-monitor-primary",
-            Self::MenuSettings => "menu-settings",
-            Self::MenuShowRecordings => "menu-show-recordings",
-            Self::StatusMemory => "status-memory",
-            Self::StatusMemoryResident => "status-memory-resident",
-            Self::StatusMemoryBoth => "status-memory-both",
-            Self::SourceDisplayNone => "source-display-none",
-            Self::SourceWindowTitle => "source-window-title",
-            Self::SourceWindowPrompt => "source-window-prompt",
-            Self::SourceWindowRow => "source-window-row",
-            Self::SourceWindowNone => "source-window-none",
-            Self::SourceKindColor => "source-kind-color",
-            Self::SourceKindDrawing => "source-kind-drawing",
-            Self::SourceKindText => "source-kind-text",
-            Self::SourceKindMediaFile => "source-kind-media-file",
-            Self::SourceMediaFileFilter => "source-media-file-filter",
-            Self::SourceImageFilter => "source-image-filter",
-            Self::SourceEnded => "source-ended",
-            Self::AudioKindMediaFile => "audio-kind-media-file",
-            Self::DrawingToolSelect => "drawing-tool-select",
-            Self::DrawingToolPen => "drawing-tool-pen",
-            Self::DrawingToolHighlighter => "drawing-tool-highlighter",
-            Self::DrawingToolEraser => "drawing-tool-eraser",
-            Self::DrawingWidth => "drawing-width",
-            Self::DrawingWidthThin => "drawing-width-thin",
-            Self::DrawingWidthMedium => "drawing-width-medium",
-            Self::DrawingWidthThick => "drawing-width-thick",
-            Self::DrawingUndo => "drawing-undo",
-            Self::DrawingClear => "drawing-clear",
-            Self::SourceDisconnected => "source-disconnected",
-            Self::SourceReopen => "source-reopen",
-            Self::SourceKindDisplayCapture => "source-kind-display-capture",
-            Self::SourceKindWindowCapture => "source-kind-window-capture",
-            Self::SourceStreamTitle => "source-stream-title",
-            Self::SourceStreamPrompt => "source-stream-prompt",
-            Self::SourceStreamTrying => "source-stream-trying",
-            Self::SourceKindRtsp => "source-kind-rtsp",
-            Self::SourceKindVideoCapture => "source-kind-video-capture",
-            Self::SourceKindImage => "source-kind-image",
-            Self::ActionAdd => "action-add",
-            Self::ActionCancel => "action-cancel",
-            Self::ActionBack => "action-back",
-            Self::PreviewNoFrame => "preview-no-frame",
-            Self::PreviewScaleDecrease => "preview-scale-decrease",
-            Self::PreviewScaleIncrease => "preview-scale-increase",
-            Self::PreviewScaleFit => "preview-scale-fit",
-            Self::PreviewFitWorkspace => "preview-fit-workspace",
-            Self::PreviewResetView => "preview-reset-view",
-            Self::PreviewScaleOptions => "preview-scale-options",
-            Self::StatusGpuProcess => "status-gpu-process",
-            Self::StatusGpuDevice => "status-gpu-device",
-            Self::StatusGpuUnavailable => "status-gpu-unavailable",
-        }
-    }
+text_keys! {
+    MenuFile                      => "menu-file";
+    MenuExit                      => "menu-exit";
+    MenuView                      => "menu-view";
+    MenuFullscreen                => "menu-fullscreen";
+    MenuDocks                     => "menu-docks";
+    MenuTheme                     => "menu-theme";
+    ThemeSystem                   => "theme-system";
+    ThemeLight                    => "theme-light";
+    ThemeDark                     => "theme-dark";
+    MenuLanguage                  => "menu-language";
+    LanguageEnglish               => "language-english";
+    LanguageKorean                => "language-korean";
+    MenuHelp                      => "menu-help";
+    MenuAbout                     => "menu-about";
+    AboutDescription              => "about-description";
+    DockScenes                    => "dock-scenes";
+    DockSources                   => "dock-sources";
+    DockAudioMixer                => "dock-audio-mixer";
+    DockControls                  => "dock-controls";
+    DockProperties                => "dock-properties";
+    DockFilters                   => "dock-filters";
+    ProjectUnavailableTitle       => "project-unavailable-title";
+    ProjectUnavailableBody        => "project-unavailable-body";
+    ProjectUnavailableDismiss     => "project-unavailable-dismiss";
+    FiltersNoSelection            => "filters-no-selection";
+    FiltersUnsupportedKind        => "filters-unsupported-kind";
+    FiltersOnTheSource            => "filters-on-the-source";
+    FiltersEmpty                  => "filters-empty";
+    FiltersAdd                    => "filters-add";
+    FiltersRemove                 => "filters-remove";
+    FiltersMoveUp                 => "filters-move-up";
+    FiltersMoveDown               => "filters-move-down";
+    FiltersChromaKey              => "filters-chroma-key";
+    FiltersChromaKeyColour        => "filters-chroma-key-colour";
+    FiltersChromaKeyCustom        => "filters-chroma-key-custom";
+    FiltersChromaKeyThreshold     => "filters-chroma-key-threshold";
+    FiltersChromaKeySmoothing     => "filters-chroma-key-smoothing";
+    FiltersChromaKeyGreen         => "filters-chroma-key-green";
+    FiltersChromaKeyBlue          => "filters-chroma-key-blue";
+    FiltersChromaKeyCustomMethod  => "filters-chroma-key-custom-method";
+    PropertiesNoSelection         => "properties-no-selection";
+    PropertiesName                => "properties-name";
+    PropertiesKind                => "properties-kind";
+    PropertiesPosition            => "properties-position";
+    PropertiesSize                => "properties-size";
+    PropertiesRotation            => "properties-rotation";
+    PropertiesVisible             => "properties-visible";
+    PropertiesLocked              => "properties-locked";
+    PropertiesYes                 => "properties-yes";
+    PropertiesNo                  => "properties-no";
+    PropertiesColour              => "properties-colour";
+    PropertiesOpacity             => "properties-opacity";
+    PropertiesStrokes             => "properties-strokes";
+    PropertiesSurface             => "properties-surface";
+    PropertiesText                => "properties-text";
+    PropertiesTextMode            => "properties-text-mode";
+    PropertiesTextModeStatic      => "properties-text-mode-static";
+    PropertiesTextModeClock       => "properties-text-mode-clock";
+    PropertiesTextModeTimer       => "properties-text-mode-timer";
+    PropertiesTextFormat          => "properties-text-format";
+    PropertiesTimer               => "properties-timer";
+    PropertiesTimerStart          => "properties-timer-start";
+    PropertiesTimerStop           => "properties-timer-stop";
+    PropertiesTimerReset          => "properties-timer-reset";
+    PropertiesFont                => "properties-font";
+    PropertiesFontDefault         => "properties-font-default";
+    PropertiesFontBrowse          => "properties-font-browse";
+    PropertiesFontFilter          => "properties-font-filter";
+    PropertiesFontSize            => "properties-font-size";
+    PropertiesAlignment           => "properties-alignment";
+    PropertiesAlignLeft           => "properties-align-left";
+    PropertiesAlignCentre         => "properties-align-centre";
+    PropertiesAlignRight          => "properties-align-right";
+    PropertiesMonitor             => "properties-monitor";
+    PropertiesPortalRemembered    => "properties-portal-remembered";
+    PropertiesPortalAsks          => "properties-portal-asks";
+    PropertiesStream              => "properties-stream";
+    PropertiesDesktopPosition     => "properties-desktop-position";
+    PropertiesDesktopSize         => "properties-desktop-size";
+    PropertiesProcess             => "properties-process";
+    PropertiesTitle               => "properties-title";
+    PropertiesWindow              => "properties-window";
+    PropertiesFile                => "properties-file";
+    PropertiesCrop                => "properties-crop";
+    PropertiesCropLeft            => "properties-crop-left";
+    PropertiesCropTop             => "properties-crop-top";
+    PropertiesCropRight           => "properties-crop-right";
+    PropertiesCropBottom          => "properties-crop-bottom";
+    PropertiesCamera              => "properties-camera";
+    PropertiesCameraMode          => "properties-camera-mode";
+    PropertiesCameraModeAutomatic => "properties-camera-mode-automatic";
+    PropertiesUrl                 => "properties-url";
+    PropertiesTransport           => "properties-transport";
+    PropertiesReconnect           => "properties-reconnect";
+    PropertiesReconnectOff        => "properties-reconnect-off";
+    PropertiesReconnectSeconds    => "properties-reconnect-seconds";
+    PropertiesLoop                => "properties-loop";
+    PropertiesPlayback            => "properties-playback";
+    PropertiesPlay                => "properties-play";
+    PropertiesPause               => "properties-pause";
+    AudioEmpty                    => "audio-empty";
+    AudioMute                     => "audio-mute";
+    AudioUnmute                   => "audio-unmute";
+    AudioMonitorOff               => "audio-monitor-off";
+    AudioMonitorOn                => "audio-monitor-on";
+    AudioMonitorUnavailable       => "audio-monitor-unavailable";
+    AudioKindOutput               => "audio-kind-output";
+    AudioKindInput                => "audio-kind-input";
+    AudioDeviceDefault            => "audio-device-default";
+    AudioNoDevices                => "audio-no-devices";
+    AudioClipped                  => "audio-clipped";
+    ControlStartRecording         => "control-start-recording";
+    ControlPauseRecording         => "control-pause-recording";
+    ControlResumeRecording        => "control-resume-recording";
+    ControlStopRecording          => "control-stop-recording";
+    ControlSettings               => "control-settings";
+    SettingsTitle                 => "settings-title";
+    SettingsPageGeneral           => "settings-page-general";
+    SettingsPageRecording         => "settings-page-recording";
+    SettingsPageHotkeys           => "settings-page-hotkeys";
+    HotkeyToggleRecording         => "hotkey-toggle-recording";
+    HotkeyTogglePause             => "hotkey-toggle-pause";
+    HotkeyFullscreen              => "hotkey-fullscreen";
+    HotkeyOpenSettings            => "hotkey-open-settings";
+    HotkeyPressAKey               => "hotkey-press-a-key";
+    HotkeyNone                    => "hotkey-none";
+    HotkeyConflict                => "hotkey-conflict";
+    HotkeyHint                    => "hotkey-hint";
+    SettingsPageVideo             => "settings-page-video";
+    SettingsAudioOpusNeeds48k     => "settings-audio-opus-needs-48k";
+    SettingsAudioWhileRecording   => "settings-audio-while-recording";
+    SettingsAudioStereo           => "settings-audio-stereo";
+    SettingsAudioMono             => "settings-audio-mono";
+    SettingsAudioChannels         => "settings-audio-channels";
+    SettingsAudioMonitorDevice    => "settings-audio-monitor-device";
+    SettingsAudioMonitorNone      => "settings-audio-monitor-none";
+    SettingsAudioMonitorFeedback  => "settings-audio-monitor-feedback";
+    SettingsAudioSampleRate       => "settings-audio-sample-rate";
+    SettingsPageAudio             => "settings-page-audio";
+    SettingsVideoCanvas           => "settings-video-canvas";
+    SettingsVideoCanvasFixed      => "settings-video-canvas-fixed";
+    SettingsVideoOutput           => "settings-video-output";
+    SettingsVideoFps              => "settings-video-fps";
+    SettingsLanguage              => "settings-language";
+    SettingsTheme                 => "settings-theme";
+    SettingsRecordingDirectory    => "settings-recording-directory";
+    SettingsRecordingNamePrefix   => "settings-recording-name-prefix";
+    SettingsRecordingNameExample  => "settings-recording-name-example";
+    SettingsRecordingEncoder      => "settings-recording-encoder";
+    SettingsEncoderUnavailable    => "settings-encoder-unavailable";
+    SettingsEncoderSoftwareCost   => "settings-encoder-software-cost";
+    SettingsRecordingBitRate      => "settings-recording-bit-rate";
+    SettingsRecordingKeyframes    => "settings-recording-keyframes";
+    SettingsRecordingAudioCodec   => "settings-recording-audio-codec";
+    SettingsRecordingAudioBitRate => "settings-recording-audio-bit-rate";
+    SettingsRecordingFormat       => "settings-recording-format";
+    SettingsRecordingSplit        => "settings-recording-split";
+    SettingsRecordingSplitOff     => "settings-recording-split-off";
+    SettingsRecordingSplitTime    => "settings-recording-split-time";
+    SettingsRecordingSplitSize    => "settings-recording-split-size";
+    SettingsRecordingSplitHls     => "settings-recording-split-hls";
+    SettingsRecordingWhileRunning => "settings-recording-while-running";
+    SettingsFpsWhileRecording     => "settings-fps-while-recording";
+    ActionApply                   => "action-apply";
+    ActionBrowse                  => "action-browse";
+    ActionOk                      => "action-ok";
+    ExitWhileRecordingTitle       => "exit-while-recording-title";
+    ExitWhileRecordingBody        => "exit-while-recording-body";
+    ExitStopAndQuit               => "exit-stop-and-quit";
+    ExitKeepRecording             => "exit-keep-recording";
+    StatusRecording               => "status-recording";
+    StatusRecordingFailed         => "status-recording-failed";
+    StatusRecordingPaused         => "status-recording-paused";
+    StatusReady                   => "status-ready";
+    StatusGpuProcess              => "status-gpu-process";
+    StatusGpuDevice               => "status-gpu-device";
+    StatusGpuUnavailable          => "status-gpu-unavailable";
+    SceneNameEmpty                => "scene-name-empty";
+    SceneNameDuplicate            => "scene-name-duplicate";
+    SceneAdd                      => "scene-add";
+    SceneRemove                   => "scene-remove";
+    SceneDuplicate                => "scene-duplicate";
+    SceneMoveUp                   => "scene-move-up";
+    SceneMoveDown                 => "scene-move-down";
+    SourceSelectedScene           => "source-selected-scene";
+    SourceEmpty                   => "source-empty";
+    SourceAdd                     => "source-add";
+    SourceRemove                  => "source-remove";
+    SourceNameEmpty               => "source-name-empty";
+    SourceNameDuplicate           => "source-name-duplicate";
+    SourceMoveUp                  => "source-move-up";
+    SourceMoveDown                => "source-move-down";
+    SourceAddTitle                => "source-add-title";
+    SourceType                    => "source-type";
+    SourceCameraTitle             => "source-camera-title";
+    SourceCameraPrompt            => "source-camera-prompt";
+    SourceCameraNone              => "source-camera-none";
+    SourceDisplayTitle            => "source-display-title";
+    SourceDisplayPrompt           => "source-display-prompt";
+    SourceDisplayMonitor          => "source-display-monitor";
+    SourceDisplayMonitorPrimary   => "source-display-monitor-primary";
+    MenuSettings                  => "menu-settings";
+    MenuShowRecordings            => "menu-show-recordings";
+    StatusMemory                  => "status-memory";
+    StatusMemoryResident          => "status-memory-resident";
+    StatusMemoryBoth              => "status-memory-both";
+    SourceDisplayNone             => "source-display-none";
+    SourceWindowTitle             => "source-window-title";
+    SourceWindowPrompt            => "source-window-prompt";
+    SourceWindowRow               => "source-window-row";
+    SourceWindowNone              => "source-window-none";
+    SourceKindColor               => "source-kind-color";
+    SourceKindDrawing             => "source-kind-drawing";
+    SourceKindText                => "source-kind-text";
+    SourceKindMediaFile           => "source-kind-media-file";
+    SourceMediaFileFilter         => "source-media-file-filter";
+    SourceImageFilter             => "source-image-filter";
+    SourceEnded                   => "source-ended";
+    AudioKindMediaFile            => "audio-kind-media-file";
+    DrawingToolSelect             => "drawing-tool-select";
+    DrawingToolPen                => "drawing-tool-pen";
+    DrawingToolHighlighter        => "drawing-tool-highlighter";
+    DrawingToolEraser             => "drawing-tool-eraser";
+    DrawingWidth                  => "drawing-width";
+    DrawingWidthThin              => "drawing-width-thin";
+    DrawingWidthMedium            => "drawing-width-medium";
+    DrawingWidthThick             => "drawing-width-thick";
+    DrawingUndo                   => "drawing-undo";
+    DrawingClear                  => "drawing-clear";
+    SourceDisconnected            => "source-disconnected";
+    SourceReopen                  => "source-reopen";
+    SourceKindDisplayCapture      => "source-kind-display-capture";
+    SourceKindWindowCapture       => "source-kind-window-capture";
+    SourceStreamTitle             => "source-stream-title";
+    SourceStreamPrompt            => "source-stream-prompt";
+    SourceStreamTrying            => "source-stream-trying";
+    SourceKindRtsp                => "source-kind-rtsp";
+    SourceKindVideoCapture        => "source-kind-video-capture";
+    SourceKindImage               => "source-kind-image";
+    ActionAdd                     => "action-add";
+    ActionCancel                  => "action-cancel";
+    ActionBack                    => "action-back";
+    PreviewNoFrame                => "preview-no-frame";
+    PreviewScaleDecrease          => "preview-scale-decrease";
+    PreviewScaleIncrease          => "preview-scale-increase";
+    PreviewScaleFit               => "preview-scale-fit";
+    PreviewFitWorkspace           => "preview-fit-workspace";
+    PreviewResetView              => "preview-reset-view";
+    PreviewScaleOptions           => "preview-scale-options";
 }
