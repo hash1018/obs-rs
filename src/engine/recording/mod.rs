@@ -40,6 +40,10 @@
 //! is not a reason to refuse a recording, so the track list is decided here,
 //! per recording, from what is actually running.
 
+mod session;
+
+pub(in crate::engine) use session::{RecordingState, describe, start_recording};
+
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
 mod platform;

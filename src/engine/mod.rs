@@ -16,6 +16,7 @@ mod audio;
 mod backend;
 mod preview;
 mod recording;
+mod status;
 
 pub use preview::CompositeFrame;
 mod source;
@@ -35,9 +36,10 @@ use arc_swap::ArcSwapOption;
 use eframe::egui_wgpu::RenderState;
 use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 
-use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceKind, SourceSettings, Transform};
+use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
+use recording::{RecordingState, describe, start_recording};
 
 use backend::{Backend, BackendError};
 use source::{
@@ -138,69 +140,6 @@ struct EngineSetup {
     size: [u32; 2],
     project: Option<ProjectDispatcher>,
     recording: RecordingState,
-}
-
-/// Everything a recording is opened from, and the one that is open.
-///
-/// Grouped because they are only ever reached together, and because
-/// `apply_command` had collected as many parameters as it can carry.
-struct RecordingState {
-    /// What the *next* recording is written as. Loaded from disk before the
-    /// engine existed — see `ObsApp::new` — and replaced whenever the
-    /// Settings dialog is applied.
-    settings: crate::settings::RecordingSettings,
-    /// The mixer, taken once at startup because it lives on a thread this one
-    /// cannot ask. `None` when it never started, which records video only and
-    /// plays media files without their sound.
-    ///
-    /// Two things attach to it from here: a recording's audio track, on the
-    /// `Tee`, and a media file Source's own audio, as one more mixer input.
-    /// It sits on this struct because a recording was the first of them; the
-    /// second arriving is not on its own a reason to move it.
-    mixer: Option<(
-        media_pp::elements::TeeHandle,
-        media_pp::elements::MixerHandle,
-    )>,
-    /// The mix that is played back, read fresh every pass rather than taken
-    /// once like the one above.
-    ///
-    /// It comes and goes: there is none until a monitoring endpoint is
-    /// chosen, and none again when one is taken away. A handle held from
-    /// startup would be a mix nothing plays.
-    monitor: Arc<ArcSwapOption<media_pp::elements::MixerHandle>>,
-    /// Which audio codecs the linked FFmpeg carries, probed once at startup
-    /// beside the video list. Kept so a stored codec that cannot open falls
-    /// back rather than failing the recording — see [`usable_settings`].
-    audio_codecs: Vec<crate::settings::RecordingAudioCodec>,
-    /// The recording that is running, if one is. It rather than the backend
-    /// holds the video branch too — see [`recording::Recording`].
-    running: Option<recording::Recording>,
-}
-
-impl RecordingState {
-    /// The mixer's own control, for whatever attaches an input to it.
-    fn mixer_handle(&self) -> Option<&media_pp::elements::MixerHandle> {
-        self.mixer.as_ref().map(|(_, mixer)| mixer)
-    }
-
-    /// The monitor mix as it stands right now, or `None` while nothing is
-    /// being played back.
-    fn monitor_handle(&self) -> Option<media_pp::elements::MixerHandle> {
-        self.monitor.load_full().map(|handle| (*handle).clone())
-    }
-
-    /// What the mixer is actually summing into, or the default when it never
-    /// started.
-    ///
-    /// Asked of the mixer rather than of the settings, because a format it
-    /// refused leaves the old one running and the audio encoder has to be
-    /// opened for what is really arriving.
-    fn mix_format(&self) -> media_pp::elements::MixFormat {
-        self.mixer
-            .as_ref()
-            .and_then(|(_, handle)| handle.mix_format())
-            .unwrap_or(audio::DEFAULT_MIX_FORMAT)
-    }
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -746,9 +685,9 @@ fn run(
                     continue;
                 }
                 looked_for_missing = Instant::now();
-                notice_closed_windows(&backend, &mut open, &scene);
-                notice_ended_media(&backend, &mut open, &scene);
-                notice_dropped_streams(&backend, &mut open, &scene);
+                status::notice_closed_windows(&backend, &mut open, &scene);
+                status::notice_ended_media(&backend, &mut open, &scene);
+                status::notice_dropped_streams(&backend, &mut open, &scene);
                 retry_missing(&engine, recording.mixer_handle(), &mut open, &scene);
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -757,8 +696,8 @@ fn run(
         // `continue`s above skip past: this is a comparison against what the
         // UI already holds, not something to do sixty times a second for an
         // answer that has not moved.
-        publish_source_status(&published, &open);
-        publish_media_meters(&published, &open);
+        status::publish_source_status(&published, &open);
+        status::publish_media_meters(&published, &open);
     }
 
     // Joined before the Sources are stopped and well before the backend is:
@@ -1116,125 +1055,6 @@ fn apply_command(
     }
 }
 
-/// Opens one recording, returning when it started rather than `()` — the
-/// clock the status bar counts from is the moment the file began taking
-/// frames, not the moment the button was pressed.
-fn start_recording(
-    backend: &Backend,
-    recording: &mut RecordingState,
-) -> Result<Instant, BackendError> {
-    if recording.running.is_some() {
-        return Err("a recording is already running".into());
-    }
-    // Probed here rather than taken from the list published at startup: the
-    // mix format can have moved since, and which encoders open depends on it.
-    // Two `avcodec_open2` calls, beside a video encoder and a muxer that are
-    // about to be opened anyway.
-    let audio_codecs = recording::available_audio_codecs(recording.mix_format());
-    let settings = usable_settings(backend, &audio_codecs, &recording.settings);
-    let settings = &settings;
-    let path = crate::paths::recording_file_in(
-        &settings.directory_or_default(),
-        settings.prefix_or_default(),
-        // A recording is named for the user's own wall clock, which is what
-        // makes the stamp mean anything to the person looking for the file.
-        // Through `clock` rather than `now_local`, which refuses to answer
-        // in a process with more than one thread and so was answering `Err`
-        // here every time — naming every recording in UTC.
-        crate::clock::now_local(),
-        settings.format,
-    );
-    let running = recording::Recording::start(
-        backend,
-        recording.mixer.as_ref(),
-        &path,
-        backend.frame_rate(),
-        settings,
-    )?;
-    recording.running = Some(running);
-    println!("recording to {}", path.display());
-    Ok(Instant::now())
-}
-
-/// The settings to record with, which are the stored ones unless the encoder
-/// they name cannot be opened here.
-///
-/// The default is `Nvenc`, and it is a good default — but it is wrong on
-/// every machine without an NVIDIA GPU, which is where the first Record press
-/// would otherwise fail with nothing on screen but an error. So the encoder
-/// falls through to the best one that did open.
-///
-/// The stored choice is not rewritten. Someone who picked NVENC on the
-/// machine that has it should still find it selected after recording once on
-/// a laptop that does not, rather than having their setting quietly replaced
-/// by whatever that laptop could manage.
-fn usable_settings(
-    backend: &Backend,
-    audio_codecs: &[crate::settings::RecordingAudioCodec],
-    settings: &crate::settings::RecordingSettings,
-) -> crate::settings::RecordingSettings {
-    let mut settings = settings.clone();
-
-    // The audio codec first, and on its own terms: a build without libopus
-    // should still record, with sound, on the codec it does have — and so
-    // should a mix at a rate libopus cannot take.
-    if !audio_codecs.contains(&settings.audio_codec)
-        && let Some(codec) = crate::settings::RecordingAudioCodec::best_of(audio_codecs)
-    {
-        eprintln!(
-            "{} cannot be opened here; recording audio with {} instead",
-            settings.audio_codec.label(),
-            codec.label()
-        );
-        settings.audio_codec = codec;
-    }
-
-    let settings = &settings;
-    let available = backend.available_encoders();
-    if available.contains(&settings.encoder) {
-        return settings.clone();
-    }
-    let Some(encoder) = crate::settings::RecordingEncoder::best_of(available) else {
-        // Nothing opened at all. Recording with what was asked for will fail
-        // and say why, which is better than failing with a substitution the
-        // caller did not make.
-        return settings.clone();
-    };
-    eprintln!(
-        "{} cannot be opened here; recording with {} instead",
-        settings.encoder.label(),
-        encoder.label()
-    );
-    crate::settings::RecordingSettings {
-        encoder,
-        ..settings.clone()
-    }
-}
-
-/// One line naming everything that went wrong, not only the outermost of it.
-///
-/// `media-pp`'s errors carry their cause as a `source`, and the outer message
-/// is often the general shape — "could not open the encoder" — while the one
-/// a person can act on is underneath: no NVENC on this adapter, a directory
-/// that cannot be written. So the chain is walked and joined.
-///
-/// A cause already quoted by its parent is not repeated: `thiserror`'s
-/// `#[error("... {0}")]` embeds one, and appending it again would say the
-/// same thing twice in the one line a status bar has.
-fn describe(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut text = error.to_string();
-    let mut next = error.source();
-    while let Some(cause) = next {
-        let message = cause.to_string();
-        if !text.contains(&message) {
-            text.push_str(": ");
-            text.push_str(&message);
-        }
-        next = cause.source();
-    }
-    text
-}
-
 /// Deliberately not boxed. The lint measures the space every variant costs,
 /// which here is a couple of hundred bytes times the number of SceneItems in
 /// one Scene — nothing — against an allocation per open Source and a
@@ -1440,89 +1260,12 @@ fn state_of(
     }
 }
 
-/// Tells the UI which Sources are not producing a picture, and why.
-///
-/// Stored only on a change: the Sources list reads this on every pass, and
-/// replacing the map each time would hand it a new allocation a second for an
-/// answer that is almost always the same one — usually empty.
-fn publish_source_status(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
-    let status: HashMap<SceneItemId, SourceStatus> = open
-        .iter()
-        .filter_map(|(id, state)| {
-            let status = match state {
-                SourceState::Open(_) => return None,
-                // Nothing has gone wrong yet. Reporting a Source as not
-                // showing while it is still being opened would put a badge
-                // beside every item for as long as its capture takes to
-                // start, which on most of them is one frame.
-                SourceState::Opening => return None,
-                SourceState::Ended => SourceStatus::Ended,
-                // Failed, Missing and Disconnected are one thing to a reader:
-                // it is not showing, and the engine is not going to fix it by
-                // itself. Which of the three it is decides what this side
-                // does next, not what the list says.
-                _ => SourceStatus::Disconnected,
-            };
-            Some((*id, status))
-        })
-        .collect();
-    let unchanged = match published.source_status.load_full() {
-        Some(current) => *current == status,
-        // Nothing published yet, which an empty map says as well as `None`
-        // does — and the first pass has nothing to correct.
-        None => status.is_empty(),
-    };
-    if unchanged {
-        return;
-    }
-    published.source_status.store(Some(Arc::new(status)));
-}
-
-/// Hands the UI the counters each playing media file writes to.
-///
-/// Published beside the status map and on the same occasions, because it
-/// moves for the same reasons: a Source opening or closing is the only thing
-/// that adds or removes a set of counters. What is inside one changes every
-/// buffer and is never republished — that is the whole point of an atomic
-/// here.
-///
-/// Compared by pointer rather than by key, because a Source that closed and
-/// opened again keeps its SceneItem's id but gets new counters. Matching on
-/// ids alone would leave the dock reading the dead ones, and its meter would
-/// sit at whatever the previous Source last measured.
-fn publish_media_meters(published: &Published, open: &HashMap<SceneItemId, SourceState>) {
-    let meters: HashMap<SceneItemId, Arc<source::MediaMeters>> = open
-        .iter()
-        .filter_map(|(id, state)| {
-            let SourceState::Open(source) = state else {
-                return None;
-            };
-            Some((*id, Arc::clone(&source.media_file.as_ref()?.meters)))
-        })
-        .collect();
-    let unchanged = match published.media_meters.load_full() {
-        Some(current) => {
-            current.len() == meters.len()
-                && meters.iter().all(|(id, held)| {
-                    current
-                        .get(id)
-                        .is_some_and(|current| Arc::ptr_eq(current, held))
-                })
-        }
-        None => meters.is_empty(),
-    };
-    if unchanged {
-        return;
-    }
-    published.media_meters.store(Some(Arc::new(meters)));
-}
-
 /// Whether opening this item's Source would interrupt whoever is at the
 /// screen, so that it must be asked for rather than attempted.
 ///
 /// Only a Window Capture can answer yes, and only where its target is one the
 /// portal owns — see `WindowCaptureTarget::can_be_reopened_silently`.
-fn needs_asking(item: &SceneItemSnapshot) -> bool {
+pub(super) fn needs_asking(item: &SceneItemSnapshot) -> bool {
     match &item.settings {
         SourceSettings::WindowCapture(settings) => !settings.target.can_be_reopened_silently(),
         // Not because looking costs a dialog, but because the user said not
@@ -1531,117 +1274,6 @@ fn needs_asking(item: &SceneItemSnapshot) -> bool {
         // offers a window whose picker cannot be reopened silently.
         SourceSettings::Rtsp(settings) => settings.reconnect.is_none(),
         _ => false,
-    }
-}
-
-/// Puts a live source that stopped arriving back where it can be reopened.
-///
-/// `RtspSource` does not reconnect: a read that fails ends it with an error
-/// and the pipeline finishes, which — since a pipeline is one-shot — means
-/// coming back is a new one. Nothing tells the engine that, so it asks, the
-/// same way it asks about a window that closed.
-///
-/// Where the Source may reconnect by itself this is `Missing` and
-/// `retry_missing` opens it again after its own interval; where it may not it
-/// is `Disconnected` and waits to be asked.
-fn notice_dropped_streams(
-    backend: &Backend,
-    open: &mut HashMap<SceneItemId, SourceState>,
-    snapshot: &SourcesSnapshot,
-) {
-    for item in &snapshot.items {
-        if !matches!(item.kind, SourceKind::Rtsp | SourceKind::VideoCapture) {
-            continue;
-        }
-        let Some(SourceState::Open(source)) = open.get(&item.id) else {
-            continue;
-        };
-        if !source.source.ended() {
-            continue;
-        }
-        eprintln!("\"{}\": the stream stopped arriving", item.name);
-        source.source.stop();
-        backend.remove_source(&source.name);
-        let state = if needs_asking(item) {
-            SourceState::Disconnected
-        } else {
-            SourceState::Missing(Instant::now())
-        };
-        open.insert(item.id, state);
-    }
-}
-
-/// Puts a Window Capture whose window has since closed back to `Missing`.
-///
-/// A window closing ends the capture: the Source stops, the compositor drops
-/// the layer, and the pipeline is finished. Nothing tells the engine that, so
-/// it asks — and once it knows, the Source is stopped and forgotten so that
-/// `retry_missing` can open it again when the window comes back. Only a
-/// Window Capture is asked: it is the one kind whose target is expected to
-/// come and go.
-fn notice_closed_windows(
-    backend: &Backend,
-    open: &mut HashMap<SceneItemId, SourceState>,
-    snapshot: &SourcesSnapshot,
-) {
-    for item in &snapshot.items {
-        if item.kind != SourceKind::WindowCapture {
-            continue;
-        }
-        let Some(SourceState::Open(source)) = open.get(&item.id) else {
-            continue;
-        };
-        if !source.source.ended() {
-            continue;
-        }
-        source.source.stop();
-        backend.remove_source(&source.name);
-        // Whether the engine may go looking by itself, or has to wait to be
-        // asked.
-        let state = if needs_asking(item) {
-            SourceState::Disconnected
-        } else {
-            SourceState::Missing(Instant::now())
-        };
-        open.insert(item.id, state);
-    }
-}
-
-/// Notices a media file that has played to its end.
-///
-/// Nothing tells the engine that either, so it asks, the same way it asks
-/// about a closed window — and only about media files, because every other
-/// kind here is live and its pipeline ending means something went wrong
-/// rather than something finished.
-///
-/// The Source is stopped once noticed. That is not tidying: `Stop` is what
-/// takes its input off the audio mixer, which an `Eos` alone leaves
-/// registered and silent, so a finished file would otherwise keep a channel
-/// in the Audio Mixer dock for as long as its SceneItem existed.
-///
-/// It is not reopened *here*. Playing once is what a file that is not
-/// looping was asked to do, and starting it again by itself would make the
-/// setting meaningless. Someone pressing play is a different thing: the
-/// Properties dock's transport asks for `ReopenSource`, which is the same
-/// request the Sources dock makes for a disconnected capture.
-fn notice_ended_media(
-    backend: &Backend,
-    open: &mut HashMap<SceneItemId, SourceState>,
-    snapshot: &SourcesSnapshot,
-) {
-    for item in &snapshot.items {
-        if item.kind != SourceKind::MediaFile {
-            continue;
-        }
-        let Some(SourceState::Open(source)) = open.get(&item.id) else {
-            continue;
-        };
-        if !source.source.ended() {
-            continue;
-        }
-        source.source.stop();
-        backend.remove_source(&source.name);
-        open.insert(item.id, SourceState::Ended);
     }
 }
 
@@ -1896,74 +1528,7 @@ impl FrameRate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WindowCaptureTarget;
-
-    #[derive(Debug)]
-    struct Layer {
-        message: &'static str,
-        cause: Option<Box<Layer>>,
-    }
-
-    impl std::fmt::Display for Layer {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str(self.message)
-        }
-    }
-
-    impl std::error::Error for Layer {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.cause
-                .as_deref()
-                .map(|cause| cause as &(dyn std::error::Error + 'static))
-        }
-    }
-
-    fn chain(messages: &[&'static str]) -> Layer {
-        let mut layers = messages.iter().rev();
-        let mut error = Layer {
-            message: layers.next().expect("a chain needs a layer"),
-            cause: None,
-        };
-        for message in layers {
-            error = Layer {
-                message,
-                cause: Some(Box::new(error)),
-            };
-        }
-        error
-    }
-
-    /// The outermost message is the shape of the failure; the one a person
-    /// can act on is usually underneath it.
-    #[test]
-    fn a_failure_is_described_by_its_whole_chain() {
-        let error = chain(&[
-            "could not open the encoder",
-            "avcodec_open2 failed",
-            "no NVENC capable devices found",
-        ]);
-
-        assert_eq!(
-            describe(&error),
-            "could not open the encoder: avcodec_open2 failed: no NVENC capable devices found"
-        );
-    }
-
-    /// `thiserror`'s `#[error("... {0}")]` already embeds its source, and a
-    /// status bar has one line — saying it twice would spend half of that
-    /// line repeating itself.
-    #[test]
-    fn a_cause_its_parent_already_quotes_is_not_repeated() {
-        let error = chain(&[
-            "opening the file failed: access is denied",
-            "access is denied",
-        ]);
-
-        assert_eq!(
-            describe(&error),
-            "opening the file failed: access is denied"
-        );
-    }
+    use crate::domain::{SourceKind, WindowCaptureTarget};
 
     fn window_item(id: i64, target: WindowCaptureTarget) -> SceneItemSnapshot {
         SceneItemSnapshot {
@@ -2149,7 +1714,7 @@ mod tests {
         let published = published();
         let mut open = HashMap::new();
 
-        publish_source_status(&published, &open);
+        status::publish_source_status(&published, &open);
         assert!(
             published.source_status.load_full().is_none(),
             "nothing has gone wrong yet, so there is nothing to say"
@@ -2163,7 +1728,7 @@ mod tests {
         // every item for as long as its capture takes to start would say
         // something is wrong on the way to everything working.
         open.insert(SceneItemId(4), SourceState::Opening);
-        publish_source_status(&published, &open);
+        status::publish_source_status(&published, &open);
         let first = published
             .source_status
             .load_full()
@@ -2178,7 +1743,7 @@ mod tests {
             "an opening Source must not be listed among the dark ones"
         );
 
-        publish_source_status(&published, &open);
+        status::publish_source_status(&published, &open);
         let again = published
             .source_status
             .load_full()
@@ -2191,7 +1756,7 @@ mod tests {
         open.remove(&SceneItemId(1));
         open.remove(&SceneItemId(2));
         open.remove(&SceneItemId(3));
-        publish_source_status(&published, &open);
+        status::publish_source_status(&published, &open);
         assert_eq!(
             *published
                 .source_status
