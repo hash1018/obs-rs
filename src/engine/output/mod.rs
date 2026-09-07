@@ -43,8 +43,9 @@
 mod session;
 mod streaming;
 
+pub(in crate::engine) use session::Broadcast;
 pub(in crate::engine) use session::{OutputState, describe, start_recording};
-pub(in crate::engine) use streaming::start_streaming;
+pub(in crate::engine) use streaming::{BroadcastRequest, connect};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
@@ -114,6 +115,31 @@ fn media_codec(codec: RecordingAudioCodec) -> AudioCodec {
 /// The three take the same `add_stream(name, parameters, time_base)`, so the
 /// tracks are described once and the choice below is only about which muxer
 /// hears them.
+/// Which of the two outputs a set of elements belongs to.
+///
+/// It names them, and that is the whole of what it is for: a failure inside
+/// either reaches the bus as the *queue's* error rather than the muxer's —
+/// a queue catches what its sink returned and reports it as its own — so the
+/// only thing that says which output has stopped is what the queue is
+/// called. Sharing one name between the two, which is what this replaced,
+/// made a failed recording and a dropped broadcast indistinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine) enum OutputKind {
+    Recording,
+    Broadcast,
+}
+
+impl OutputKind {
+    /// What every element of this output is named after. Read back by
+    /// `trouble::drain`, which is why the two live in one place.
+    pub(in crate::engine) const fn prefix(self) -> &'static str {
+        match self {
+            Self::Recording => "record",
+            Self::Broadcast => "stream",
+        }
+    }
+}
+
 /// What an output encodes with, whatever it does with the packets.
 ///
 /// Read off a `RecordingSettings` or a `StreamingSettings` — see their
@@ -263,6 +289,7 @@ impl Output {
     pub(in crate::engine) fn start(
         backend: &Backend,
         mixer: Option<&(TeeHandle, MixerHandle)>,
+        kind: OutputKind,
         fps: u32,
         encoding: &OutputEncoding,
         open_muxer: impl FnOnce(Vec<TrackDef>) -> Result<Vec<Box<dyn Sink>>, BackendError>,
@@ -270,7 +297,7 @@ impl Output {
         // Both encoders open before the file does. An encoder that cannot be
         // opened must not leave a zero-length mp4 behind, and the audio one
         // is the more likely of the two to refuse.
-        let video: PreparedOutput = backend.prepare_output(fps, encoding)?;
+        let video: PreparedOutput = backend.prepare_output(kind, fps, encoding)?;
         // The format the mixer is actually summing into, not what the settings
         // asked for: one it refused leaves the old one running, and a track
         // opened for a format nothing is producing is samples that do not fit
@@ -285,7 +312,7 @@ impl Output {
                 Ok((
                     tee,
                     SwAudioEncoder::new(
-                        "output-audio-encode",
+                        format!("{}-audio-encode", kind.prefix()),
                         SwAudioEncoderOptions {
                             codec: media_codec(encoding.audio_codec),
                             sample_rate: mix.sample_rate,
@@ -322,7 +349,7 @@ impl Output {
         let audio = match audio {
             Some((tee, encoder)) => {
                 let sink = sinks.remove(0);
-                let (gate, pause) = PauseGate::for_audio("output-audio-pause");
+                let (gate, pause) = PauseGate::for_audio(format!("{}-audio-pause", kind.prefix()));
                 let branch = tee
                     .branch()
                     .ok_or("the mixer's Tee is gone")?
@@ -331,7 +358,7 @@ impl Output {
                     // on the mixer's own thread, where a slow write would
                     // stall the mix everything else is listening to.
                     .queue_with_policy(
-                        "output-audio-queue",
+                        format!("{}-audio-queue", kind.prefix()),
                         OUTPUT_QUEUE_DEPTH,
                         OverflowPolicy::Block(OUTPUT_SEND_TIMEOUT),
                     )
@@ -340,7 +367,10 @@ impl Output {
                     // The mixer has been running since the application
                     // started and its timeline says so, exactly as the
                     // compositor's does.
-                    .pipe(TimestampOrigin::new("output-audio-origin"))
+                    .pipe(TimestampOrigin::new(format!(
+                        "{}-audio-origin",
+                        kind.prefix()
+                    )))
                     .to(sink)?;
                 Some(AudioTrack {
                     branch: tee.attach(branch)?,
@@ -354,7 +384,7 @@ impl Output {
         // Attached last, so a failure above leaves no track running: the
         // video branch is the one that cannot be un-attached without
         // finalizing the file.
-        let video = match backend.attach_output(video, video_sink) {
+        let video = match backend.attach_output(kind, video, video_sink) {
             Ok(video) => video,
             Err(error) => {
                 // Whatever was already writing has to be ended, or the file

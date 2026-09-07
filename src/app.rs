@@ -139,11 +139,15 @@ impl ObsApp {
         // audio track attaches and the mixer is what owns it. Without it the
         // mixer draws what the project holds and nothing is captured, which
         // is what this application did until now.
-        let audio = AudioManager::spawn(mix_format(&settings), move || {
+        let mut audio = AudioManager::spawn(mix_format(&settings), move || {
             audio_repaint_ctx.request_repaint()
         })
         .inspect_err(|error| eprintln!("could not start audio: {error}"))
         .ok();
+        // Taken before the engine is built, because the engine loop is the
+        // one thing that can act on what comes down it — and there is one
+        // receiver. See `engine::trouble`.
+        let audio_troubles = audio.as_mut().and_then(AudioManager::take_troubles);
         // The stored endpoint has to be sent as well as the format, which
         // `spawn` takes. Without this monitoring only came on after the
         // Settings dialog was opened and changed — the setting was read at
@@ -181,8 +185,11 @@ impl ObsApp {
                     // started before that would ignore everything the user had
                     // saved.
                     outputs,
-                    mixer,
-                    monitor,
+                    crate::engine::AudioLink {
+                        mixer,
+                        monitor,
+                        troubles: audio_troubles,
+                    },
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
                 .inspect_err(|error| eprintln!("could not start the engine: {error}"))
@@ -249,6 +256,7 @@ impl ObsApp {
         self.snapshots.status.recording_elapsed = engine.recording();
         self.snapshots.status.streaming_elapsed = engine.streaming();
         self.snapshots.status.streaming_error = engine.streaming_error();
+        self.snapshots.status.streaming_reconnecting = engine.streaming_reconnecting();
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
         self.snapshots.status.source_status = engine.source_status();

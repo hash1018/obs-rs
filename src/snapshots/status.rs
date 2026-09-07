@@ -39,6 +39,12 @@ pub struct StatusSnapshot {
     /// Why the last attempt to start a broadcast failed, if it did — kept
     /// for the reason `recording_error` is.
     pub streaming_error: Option<Arc<String>>,
+    /// Whether a dropped broadcast is waiting to be tried again.
+    ///
+    /// Beside the clock rather than in it: what the bar has to say is that
+    /// this is not simply off, and the elapsed time it would otherwise show
+    /// is a broadcast that is not happening.
+    pub streaming_reconnecting: bool,
     /// The SceneItems whose Source is not running, and why, from the engine.
     ///
     /// The Sources list says so beside them, which is the only thing that

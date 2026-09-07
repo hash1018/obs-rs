@@ -198,7 +198,11 @@ pub(super) struct AudioEngine {
 }
 
 struct RunningMixer {
-    _pipeline: Arc<Pipeline>,
+    /// Held for its bus as well as for its life: a recording's or a
+    /// broadcast's audio track is a branch off the `Tee` below, so a muxer
+    /// that fails while writing it reports here — see
+    /// [`AudioEngine::troubles`].
+    pipeline: Arc<Pipeline>,
     handle: MixerHandle,
     /// Where a recording's audio track attaches, and the reason the mixer
     /// fans out at all — see [`start_mixer`].
@@ -233,6 +237,33 @@ impl AudioEngine {
             sources: HashMap::new(),
             levels: Levels::default(),
         }
+    }
+
+    /// What has gone wrong on this thread's own pipelines since it was last
+    /// asked.
+    ///
+    /// The mix is where a recording's and a broadcast's audio tracks end, so
+    /// a muxer that fails while writing one reports on this bus and on no
+    /// other. The engine loop cannot read it — `BusReceiver` is not `Clone`
+    /// and the pipeline lives here — so this thread reads it and forwards
+    /// what the loop can act on. See `engine::trouble`.
+    pub(super) fn troubles(&self) -> Vec<crate::engine::Trouble> {
+        let mut troubles = Vec::new();
+        if let Some(mixer) = &self.mixer {
+            troubles.extend(crate::engine::trouble::drain(
+                mixer.pipeline.bus(),
+                "audio-mix",
+            ));
+        }
+        // The monitor mix as well, which writes to no output but can fail on
+        // its own — an endpoint pulled out mid-playback.
+        if let Some(monitor) = &self.monitor {
+            troubles.extend(crate::engine::trouble::drain(
+                monitor.pipeline.bus(),
+                "audio-monitor",
+            ));
+        }
+        troubles
     }
 
     pub(super) fn levels(&self) -> &Levels {
@@ -540,7 +571,7 @@ fn start_mixer(
     let tee = tee.expect("Pipeline::new runs the builder before returning");
     pipeline.run()?;
     Ok(RunningMixer {
-        _pipeline: pipeline,
+        pipeline,
         handle,
         tee,
     })

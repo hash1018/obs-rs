@@ -17,6 +17,7 @@ mod backend;
 mod output;
 mod preview;
 mod status;
+pub(in crate::engine) mod trouble;
 
 pub use preview::CompositeFrame;
 mod source;
@@ -25,6 +26,7 @@ pub use audio::AudioManager;
 /// What an output encodes with — read off the settings, and the only thing
 /// the encoders are told about which kind of output they serve.
 pub use output::OutputEncoding;
+pub use trouble::Trouble;
 
 use std::collections::HashMap;
 use std::sync::{
@@ -42,7 +44,7 @@ use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
-use output::{OutputState, describe, start_recording};
+use output::{Broadcast, BroadcastRequest, OutputState, describe, start_recording};
 
 use backend::{Backend, BackendError};
 use source::{
@@ -136,6 +138,10 @@ enum EngineCommand {
     RecordingSettings(Box<crate::settings::RecordingSettings>),
     StartStreaming,
     StopStreaming,
+    /// What a connect attempt came out as, from the thread that made it.
+    /// Boxed because an `Output` is large and this variant is rare — see
+    /// `Opened`, which is boxed for the same reason.
+    BroadcastOpened(Box<Result<output::Output, BackendError>>),
     StreamingSettings(Box<crate::settings::StreamingSettings>),
 }
 
@@ -146,6 +152,11 @@ struct EngineSetup {
     size: [u32; 2],
     project: Option<ProjectDispatcher>,
     recording: OutputState,
+    /// What the audio thread reports its own pipelines' failures on.
+    ///
+    /// `None` on a machine whose audio never started, which is also a
+    /// machine with no mix for an output's audio track to fail on.
+    audio_troubles: Option<mpsc::Receiver<Trouble>>,
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -165,6 +176,12 @@ struct Published {
     /// while paused it is what the elapsed time is measured *to*, so the
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
+    /// Whether a dropped broadcast is being retried.
+    ///
+    /// A flag beside the clock rather than a third instant: what the status
+    /// bar needs to say is that this is not simply off, and the interval it
+    /// is waiting out is the settings' and not news.
+    streaming_reconnecting: Arc<AtomicBool>,
     /// When the running broadcast started, or `None` when none is.
     ///
     /// Its own slot rather than a flag beside the recording's: the two run
@@ -211,6 +228,26 @@ struct Published {
 /// what clippy will look at without complaint — but the reason they are
 /// together is that they are the same thing said twice: what the next
 /// recording is written as, and what the next broadcast is published as.
+/// Everything the engine takes from the audio side at construction.
+///
+/// One argument rather than three, because they are one thing: the audio
+/// thread's mixer, its monitor mix, and the channel it reports failures on.
+/// All three are `Option` for the same reason — a machine whose audio never
+/// started has none of them, and records video only.
+pub struct AudioLink {
+    /// Where an output's audio track attaches — see `AudioManager::mixer`.
+    pub mixer: Option<(
+        media_pp::elements::TeeHandle,
+        media_pp::elements::MixerHandle,
+    )>,
+    /// The mix that is played back, which unlike the one above comes and
+    /// goes as a monitoring endpoint is chosen and taken away.
+    pub monitor: Arc<ArcSwapOption<media_pp::elements::MixerHandle>>,
+    /// What that thread reports its own pipelines' failures on — see
+    /// `trouble`.
+    pub troubles: Option<mpsc::Receiver<Trouble>>,
+}
+
 pub struct OutputSettings {
     pub recording: crate::settings::RecordingSettings,
     pub streaming: crate::settings::StreamingSettings,
@@ -231,6 +268,9 @@ pub struct EngineManager {
     /// When the running broadcast started — see `Published::streaming_since`.
     streaming_since: Arc<ArcSwapOption<Instant>>,
     streaming_error: Arc<ArcSwapOption<String>>,
+    /// Whether a dropped broadcast is being retried — see
+    /// `Published::streaming_reconnecting`.
+    streaming_reconnecting: Arc<AtomicBool>,
     /// The SceneItems drawing nothing — see `Published::source_status`.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
     /// What each playing media file measures — see `Published::media_meters`.
@@ -258,17 +298,14 @@ impl EngineManager {
         // afterwards, so an output started before the Settings dialog is
         // ever opened uses what the user saved rather than the defaults.
         outputs: OutputSettings,
-        // Where a recording's audio track attaches — see
-        // `AudioManager::mixer_tee`. `None` records without sound.
-        mixer: Option<(
-            media_pp::elements::TeeHandle,
-            media_pp::elements::MixerHandle,
-        )>,
-        // The monitor mix, which unlike the one above is read again on every
-        // pass — see `OutputState::monitor`.
-        monitor: Arc<ArcSwapOption<media_pp::elements::MixerHandle>>,
+        audio: AudioLink,
         wake_ui: impl Fn() + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
+        let AudioLink {
+            mixer,
+            monitor,
+            troubles: audio_troubles,
+        } = audio;
         let size = [canvas.width as u32, canvas.height as u32];
         let frame = Arc::new(ArcSwapOption::empty());
         let active_fps = Arc::new(AtomicU32::new(0));
@@ -278,6 +315,7 @@ impl EngineManager {
         let recording_error = Arc::new(ArcSwapOption::empty());
         let streaming_since = Arc::new(ArcSwapOption::empty());
         let streaming_error = Arc::new(ArcSwapOption::empty());
+        let streaming_reconnecting = Arc::new(AtomicBool::new(false));
         let source_status = Arc::new(ArcSwapOption::empty());
         let media_meters = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
@@ -292,6 +330,7 @@ impl EngineManager {
             let recording_error = Arc::clone(&recording_error);
             let streaming_since = Arc::clone(&streaming_since);
             let streaming_error = Arc::clone(&streaming_error);
+            let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
             let source_status = Arc::clone(&source_status);
             let media_meters = Arc::clone(&media_meters);
             let encoders = Arc::clone(&encoders);
@@ -309,6 +348,7 @@ impl EngineManager {
                     recording_error,
                     streaming_since,
                     streaming_error,
+                    streaming_reconnecting,
                     source_status,
                     media_meters,
                     encoders,
@@ -317,6 +357,7 @@ impl EngineManager {
                 let setup = EngineSetup {
                     size,
                     project,
+                    audio_troubles,
                     recording: OutputState {
                         settings: outputs.recording,
                         streaming: outputs.streaming,
@@ -325,7 +366,7 @@ impl EngineManager {
                         // Filled in once the probe has run — see `run`.
                         audio_codecs: Vec::new(),
                         running: None,
-                        broadcast: None,
+                        broadcast: Broadcast::Off,
                     },
                 };
                 if let Err(error) = run(
@@ -352,6 +393,7 @@ impl EngineManager {
             recording_error,
             streaming_since,
             streaming_error,
+            streaming_reconnecting,
             source_status,
             media_meters,
             encoders,
@@ -524,6 +566,11 @@ impl EngineManager {
         self.streaming_error.load_full()
     }
 
+    /// Whether a dropped broadcast is waiting to be tried again.
+    pub fn streaming_reconnecting(&self) -> bool {
+        self.streaming_reconnecting.load(Ordering::Acquire)
+    }
+
     /// Whether the running recording is paused.
     pub fn recording_paused(&self) -> bool {
         self.recording_paused_at.load().is_some()
@@ -656,6 +703,7 @@ fn run(
         size,
         project,
         mut recording,
+        audio_troubles,
     } = setup;
     // Shared rather than moved: both the sink that publishes a frame and the
     // loop that puts the branch to sleep have to ask for a repaint.
@@ -708,11 +756,13 @@ fn run(
 
     // Replies come back through the loop's own channel, so the opener needs a
     // way in — see [`SourceOpener`].
-    let opener = SourceOpener::spawn(Arc::clone(&backend), replies)?;
+    let opener = SourceOpener::spawn(Arc::clone(&backend), replies.clone())?;
+    let broadcasts = BroadcastOpener::spawn(Arc::clone(&backend), replies)?;
     let engine = Engine {
         backend: &backend,
         project: project.as_ref(),
         opener: &opener,
+        broadcasts: &broadcasts,
     };
 
     let mut open = HashMap::new();
@@ -757,6 +807,11 @@ fn run(
                 // string per clock and nothing at all until a second turns
                 // over.
                 redraw_clocks(&mut open, &scene);
+                // What the buses reported, and a retry whose wait is up.
+                // Before the interval below for the reason the clocks are:
+                // a broadcast that dropped a moment ago should not go on
+                // being reported as live for the rest of a second.
+                watch_outputs(&engine, &mut recording, &published, audio_troubles.as_ref());
                 if looked_for_missing.elapsed() < MISSING_RETRY {
                     continue;
                 }
@@ -781,6 +836,7 @@ fn run(
     // backend. `engine` borrows the opener and is not used past here, which
     // is what lets this drop run at all.
     drop(opener);
+    drop(broadcasts);
 
     for (_, state) in open.drain() {
         if let SourceState::Open(source) = state {
@@ -789,6 +845,147 @@ fn run(
     }
     backend.stop();
     Ok(())
+}
+
+/// Asks the opener thread to connect, and records that it was asked.
+///
+/// Idempotent against a connect already in flight: pressing Start twice, or
+/// a retry falling due while the previous attempt is still handshaking, must
+/// not open two broadcasts to the same server.
+fn request_broadcast(engine: &Engine<'_>, state: &mut OutputState, published: &Published) {
+    if matches!(state.broadcast, Broadcast::Connecting | Broadcast::Live(_)) {
+        return;
+    }
+    state.broadcast = Broadcast::Connecting;
+    published
+        .streaming_reconnecting
+        .store(false, Ordering::Release);
+    engine.broadcasts.request(BroadcastRequest {
+        settings: state.streaming.clone(),
+        fps: engine.backend.frame_rate(),
+        mixer: state.mixer.clone(),
+    });
+}
+
+/// Takes what the opener thread came back with.
+///
+/// A broadcast that arrives after Stop was pressed is stopped again rather
+/// than shown: the user's answer is the newer one, and `Broadcast::wanted`
+/// is what says so.
+fn finish_broadcast(
+    engine: &Engine<'_>,
+    state: &mut OutputState,
+    published: &Published,
+    opened: Result<output::Output, BackendError>,
+) {
+    match opened {
+        Ok(running) if state.broadcast.wanted() => {
+            state.broadcast = Broadcast::Live(running);
+            published
+                .streaming_since
+                .store(Some(Arc::new(Instant::now())));
+            published
+                .streaming_reconnecting
+                .store(false, Ordering::Release);
+            published.streaming_error.store(None);
+        }
+        Ok(running) => {
+            // Stopped while it was connecting. It has a live connection and
+            // two attached branches, so it has to be ended properly rather
+            // than dropped.
+            if let Err(error) = running.stop(engine.backend) {
+                eprintln!("could not stop the broadcast that arrived late: {error}");
+            }
+        }
+        Err(error) => {
+            let reason = describe(error.as_ref());
+            eprintln!("could not start streaming: {reason}");
+            published.streaming_error.store(Some(Arc::new(reason)));
+            broadcast_dropped(state, published);
+        }
+    }
+}
+
+/// Puts the broadcast into whichever state a failure leaves it in.
+///
+/// Retried where the settings ask for it, and given up where they do not.
+/// Called both when a connect fails and when a live one drops, because the
+/// two are the same thing to decide: there is no broadcast, and either
+/// something will try again or nothing will.
+fn broadcast_dropped(state: &mut OutputState, published: &Published) {
+    published.streaming_since.store(None);
+    match state.streaming.reconnect() {
+        Some(interval) if state.broadcast.wanted() => {
+            state.broadcast = Broadcast::Waiting {
+                retry_at: Instant::now() + interval,
+            };
+            published
+                .streaming_reconnecting
+                .store(true, Ordering::Release);
+        }
+        _ => {
+            state.broadcast = Broadcast::Off;
+            published
+                .streaming_reconnecting
+                .store(false, Ordering::Release);
+        }
+    }
+}
+
+/// Acts on what the buses reported, and retries a broadcast whose wait is up.
+///
+/// Both on the idle tick, because both are things nothing else will mention:
+/// a muxer that failed posted to a bus and carried on, and an interval that
+/// elapsed is not an event at all.
+fn watch_outputs(
+    engine: &Engine<'_>,
+    state: &mut OutputState,
+    published: &Published,
+    audio_troubles: Option<&mpsc::Receiver<Trouble>>,
+) {
+    let mut troubles = trouble::drain(engine.backend.preview.bus(), "compositor");
+    if let Some(audio) = audio_troubles {
+        troubles.extend(audio.try_iter());
+    }
+    for trouble in troubles {
+        match trouble {
+            Trouble::Broadcast(reason) => {
+                // Both RTMP tracks write through one connection, so one
+                // going takes both — and reports twice. The first report
+                // takes the broadcast out of `Live`; the second finds
+                // nothing to end, and must not be acted on again or it
+                // would restart the interval the first one set.
+                let Some(running) = state.broadcast.take_live() else {
+                    continue;
+                };
+                // Ended rather than abandoned: the branches are still
+                // attached to both `Tee`s and would go on feeding a muxer
+                // that has stopped accepting anything.
+                if let Err(error) = running.stop(engine.backend) {
+                    eprintln!("could not end the dropped broadcast: {error}");
+                }
+                published.streaming_error.store(Some(Arc::new(reason)));
+                broadcast_dropped(state, published);
+            }
+            Trouble::Recording(reason) => {
+                published.recording_since.store(None);
+                published.recording_paused_at.store(None);
+                if let Some(running) = state.running.take()
+                    && let Err(error) = running.stop(engine.backend)
+                {
+                    eprintln!("could not end the failed recording: {error}");
+                }
+                eprintln!("the recording stopped: {reason}");
+                published.recording_error.store(Some(Arc::new(reason)));
+            }
+        }
+    }
+
+    if let Broadcast::Waiting { retry_at } = state.broadcast
+        && Instant::now() >= retry_at
+    {
+        request_broadcast(engine, state, published);
+    }
 }
 
 /// Redraws every Source that follows the clock rather than an edit.
@@ -894,6 +1091,61 @@ impl SourceOpener {
     }
 }
 
+/// Connects broadcasts on a thread of its own.
+///
+/// A second thread rather than a queue on [`SourceOpener`], because what
+/// each waits for is unbounded and unrelated. A portal picker left standing
+/// would hold a reconnect behind it for as long as nobody answered it — and
+/// a reconnect against a server that is down would hold up every camera in
+/// the Scene for ten seconds at a time. Neither should be able to delay the
+/// other, and the only thing that guarantees it is not sharing a queue.
+struct BroadcastOpener {
+    requests: mpsc::Sender<BroadcastRequest>,
+    /// Not joined on drop, for the reason [`SourceOpener`] is not.
+    worker: Option<JoinHandle<()>>,
+}
+
+impl BroadcastOpener {
+    fn spawn(backend: Arc<Backend>, replies: mpsc::Sender<EngineCommand>) -> std::io::Result<Self> {
+        let (requests, incoming) = mpsc::channel::<BroadcastRequest>();
+        let worker = thread::Builder::new()
+            .name("broadcast-opener".to_owned())
+            .spawn(move || {
+                while let Ok(request) = incoming.recv() {
+                    let result = output::connect(&backend, request);
+                    // A closed channel means the engine has gone. Whatever
+                    // was opened is dropped with the reply, which ends the
+                    // connection — there is nothing left to attach it to.
+                    if replies
+                        .send(EngineCommand::BroadcastOpened(Box::new(result)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            requests,
+            worker: Some(worker),
+        })
+    }
+
+    /// Asks for a connection. A closed channel means the thread is gone,
+    /// which the loop learns from the reply that never arrives — it stays in
+    /// `Connecting` and the Stop button still works.
+    fn request(&self, request: BroadcastRequest) {
+        let _ = self.requests.send(request);
+    }
+}
+
+impl Drop for BroadcastOpener {
+    fn drop(&mut self) {
+        let (dead, _) = mpsc::channel();
+        let _ = std::mem::replace(&mut self.requests, dead);
+        drop(self.worker.take());
+    }
+}
+
 impl Drop for SourceOpener {
     /// Closes the request channel and leaves the thread to finish on its
     /// own.
@@ -922,6 +1174,7 @@ struct Engine<'a> {
     backend: &'a Backend,
     project: Option<&'a ProjectDispatcher>,
     opener: &'a SourceOpener,
+    broadcasts: &'a BroadcastOpener,
 }
 
 /// Applies one change, reporting whether the running Sources may have moved
@@ -1117,29 +1370,34 @@ fn apply_command(
             false
         }
         EngineCommand::StartStreaming => {
-            // The same order the recording's start uses, and for the same
-            // reasons: the error describes this attempt, and the instant is
-            // published only once there is a broadcast to describe.
+            // Cleared before the attempt, so what is shown describes this
+            // one — the same order the recording's start uses.
             published.streaming_error.store(None);
-            match output::start_streaming(engine.backend, recording) {
-                Ok(started) => published.streaming_since.store(Some(Arc::new(started))),
-                Err(error) => {
-                    let reason = describe(error.as_ref());
-                    eprintln!("could not start streaming: {reason}");
-                    published.streaming_error.store(Some(Arc::new(reason)));
-                }
-            }
+            request_broadcast(engine, recording, published);
+            false
+        }
+        EngineCommand::BroadcastOpened(opened) => {
+            finish_broadcast(engine, recording, published, *opened);
             false
         }
         EngineCommand::StopStreaming => {
+            // Asked for by the user, so this also cancels a connect that is
+            // still in flight and any retry that was pending — `Off` is what
+            // `Broadcast::wanted` reads as "no longer".
             published.streaming_since.store(None);
-            match recording.broadcast.take() {
-                Some(running) => {
+            published
+                .streaming_reconnecting
+                .store(false, Ordering::Release);
+            match std::mem::replace(&mut recording.broadcast, Broadcast::Off) {
+                Broadcast::Live(running) => {
                     if let Err(error) = running.stop(engine.backend) {
                         eprintln!("could not stop streaming cleanly: {error}");
                     }
                 }
-                None => eprintln!("no broadcast is running"),
+                Broadcast::Connecting => eprintln!("the broadcast was still connecting"),
+                Broadcast::Off | Broadcast::Waiting { .. } => {
+                    eprintln!("no broadcast is running");
+                }
             }
             false
         }
@@ -1670,6 +1928,7 @@ mod tests {
             recording_error: Arc::new(ArcSwapOption::empty()),
             streaming_since: Arc::new(ArcSwapOption::empty()),
             streaming_error: Arc::new(ArcSwapOption::empty()),
+            streaming_reconnecting: Arc::new(AtomicBool::new(false)),
         }
     }
 

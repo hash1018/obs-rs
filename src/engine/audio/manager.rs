@@ -86,6 +86,14 @@ pub struct AudioManager {
     /// `None` until a monitoring endpoint is chosen, and `None` again when
     /// one is taken away.
     monitor: Arc<ArcSwapOption<MixerHandle>>,
+    /// What has failed on this thread's pipelines, on its way to the engine
+    /// loop.
+    ///
+    /// A channel rather than a published slot, because these are events and
+    /// not a state: two failures between one read and the next are two
+    /// things that happened, and a slot would keep only the second. Taken
+    /// once, by whoever builds the engine — see [`Self::take_troubles`].
+    troubles: Option<mpsc::Receiver<crate::engine::Trouble>>,
     /// Where a recording attaches its audio track, taken once here rather
     /// than asked for later: the recording is opened on the *video* thread,
     /// which cannot reach into this one to fetch it. `None` when the mixer
@@ -103,6 +111,7 @@ impl AudioManager {
         let levels = Arc::new(ArcSwapOption::empty());
         let devices = Arc::new(ArcSwapOption::empty());
         let monitor: Arc<ArcSwapOption<MixerHandle>> = Arc::new(ArcSwapOption::empty());
+        let (troubles_tx, troubles) = mpsc::channel::<crate::engine::Trouble>();
         // The engine is built on its own thread and stays there — it holds
         // FFmpeg state that is not `Send`, so it cannot be made here and
         // moved. Only the mixer's `Tee` comes back, over this channel: a
@@ -226,6 +235,16 @@ impl AudioManager {
                     {
                         engine.apply(project, &known_devices);
                     }
+                    // Whatever the mix and monitor pipelines reported since
+                    // the last pass. Before the early return below, because
+                    // a failed muxer is exactly the thing a bare health tick
+                    // exists to notice — and the only thing on this thread
+                    // that nothing else would ever mention.
+                    for trouble in engine.troubles() {
+                        // A closed channel means the engine is gone, which is
+                        // not this thread's problem to solve.
+                        let _ = troubles_tx.send(trouble);
+                    }
                     // A bare health tick that found everything running has no
                     // counters to republish and no reason to wake the UI.
                     if ticked && !project_changed && !devices_changed && gains.is_empty() {
@@ -250,6 +269,7 @@ impl AudioManager {
             levels,
             devices,
             monitor,
+            troubles: Some(troubles),
             // Waits only for the mixer to be built, which is the worker's
             // first act. An `Err` means it never got that far, which is the
             // same answer as a mixer that failed: record without audio.
@@ -267,6 +287,14 @@ impl AudioManager {
     /// Dropped if the source is not open. A gain arriving for something with
     /// no capture behind it has nothing to set, and the next `apply` carries
     /// the value anyway.
+    /// Takes the channel this thread reports failures on.
+    ///
+    /// Once, by whoever builds the engine: there is one receiver, and the
+    /// engine loop is the only thing that can act on what comes down it.
+    pub fn take_troubles(&mut self) -> Option<mpsc::Receiver<crate::engine::Trouble>> {
+        self.troubles.take()
+    }
+
     pub fn set_gain_db(&self, id: AudioSourceId, gain_db: f32) {
         if let Some(commands) = &self.commands {
             let _ = commands.send(AudioCommand::Gain(id, gain_db));

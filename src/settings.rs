@@ -319,6 +319,10 @@ pub struct StreamingSettings {
     pub keyframe_seconds: u32,
     pub audio_codec: RecordingAudioCodec,
     pub audio_bit_rate_kbps: u32,
+    /// How long to wait before connecting again after a broadcast drops, or
+    /// `None` to leave it to the user — the same choice an RTSP Source's
+    /// `reconnect` offers, and stored the same way.
+    pub reconnect_seconds: Option<u32>,
     /// How far the broadcast is scaled down from the Canvas, as a height in
     /// pixels; zero is the Canvas's own. Separate from the recording's:
     /// publishing at 720p while recording at 1080p is the ordinary case.
@@ -335,6 +339,7 @@ impl Default for StreamingSettings {
             keyframe_seconds: DEFAULT_STREAM_KEYFRAME_SECONDS,
             audio_codec: RecordingAudioCodec::default(),
             audio_bit_rate_kbps: DEFAULT_AUDIO_BIT_RATE_KBPS,
+            reconnect_seconds: Some(DEFAULT_STREAM_RECONNECT_SECONDS),
             output_height: 0,
         }
     }
@@ -366,6 +371,12 @@ impl StreamingSettings {
     pub fn is_addressable(&self) -> bool {
         let server = self.server.trim();
         !server.is_empty() && !self.stream_key.trim().is_empty() && server.contains("://")
+    }
+
+    /// How long to wait before connecting again, if it should at all.
+    pub fn reconnect(&self) -> Option<std::time::Duration> {
+        self.reconnect_seconds
+            .map(|seconds| std::time::Duration::from_secs(seconds.max(1) as u64))
     }
 
     /// What a broadcast encodes with, resolved against the Canvas — the
@@ -400,6 +411,15 @@ pub const DEFAULT_STREAM_BIT_RATE_MBPS: u32 = 6;
 /// See [`StreamingSettings::keyframe_seconds`] — this is how long a viewer
 /// waits to see anything, so it is short.
 pub const DEFAULT_STREAM_KEYFRAME_SECONDS: u32 = 2;
+
+/// Long enough not to hammer a server that is refusing, short enough that a
+/// blip does not cost the audience.
+pub const DEFAULT_STREAM_RECONNECT_SECONDS: u32 = 5;
+
+/// What the reconnect list offers. `None` is "leave it to me", which is what
+/// someone debugging a server wants and nobody else does.
+pub const STREAM_RECONNECT_CHOICES: [Option<u32>; 5] =
+    [None, Some(5), Some(10), Some(30), Some(60)];
 
 /// How far a recording can be scaled down from the Scene Canvas, as
 /// divisors of it.

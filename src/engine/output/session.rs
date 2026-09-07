@@ -23,7 +23,7 @@ use arc_swap::ArcSwapOption;
 
 use super::super::audio;
 use super::super::backend::{Backend, BackendError};
-use super::Output;
+use super::{Output, OutputKind};
 
 /// Everything a recording is opened from, and the one that is open.
 ///
@@ -63,13 +63,13 @@ pub(in crate::engine) struct OutputState {
     /// The recording that is running, if one is. It rather than the backend
     /// holds the video branch too — see [`Output`].
     pub(in crate::engine) running: Option<Output>,
-    /// The broadcast that is running, if one is.
+    /// The broadcast, in whichever of its four states it is in.
     ///
     /// Beside the recording rather than instead of it: both hang off the
     /// same two `Tee`s, which take as many branches as are asked of them, so
-    /// recording while streaming is not a mode — it is simply both fields
-    /// being `Some`, each with its own encoder at its own bit rate.
-    pub(in crate::engine) broadcast: Option<Output>,
+    /// recording while streaming is not a mode — it is simply both being
+    /// under way, each with its own encoder at its own bit rate.
+    pub(in crate::engine) broadcast: Broadcast,
 }
 
 impl OutputState {
@@ -129,6 +129,7 @@ pub(in crate::engine) fn start_recording(
     let running = Output::start(
         backend,
         recording.mixer.as_ref(),
+        OutputKind::Recording,
         backend.frame_rate(),
         &settings.encoding(backend.size),
         |tracks| super::open_muxer(&path, settings, tracks),
@@ -215,6 +216,68 @@ pub(in crate::engine) fn describe(error: &(dyn std::error::Error + 'static)) -> 
         next = cause.source();
     }
     text
+}
+
+/// Where a broadcast is in its life.
+///
+/// Four states rather than an `Option`, because connecting is not being
+/// live and waiting to try again is neither. Each is a different thing to
+/// show and a different thing to do next, and collapsing them was what made
+/// the first version report a broadcast as live while its connection was
+/// gone.
+///
+/// ```text
+///                  Stop ─────────────────┐
+///                                        ▼
+///   Off ──Start──▶ Connecting ──ok──▶ Live ──dropped──▶ Waiting
+///                       │                                  │
+///                       └──────failed──────────────────────┘
+///                                                    (retry when due)
+/// ```
+pub(in crate::engine) enum Broadcast {
+    /// Nothing asked for, or the user stopped it.
+    Off,
+    /// A thread is connecting. The handshake is up to ten seconds of DNS,
+    /// TCP and a reply, which is why it is not done on the engine loop —
+    /// see `streaming::start_streaming`.
+    Connecting,
+    /// Publishing.
+    Live(Output),
+    /// The connection went, and another attempt is due at this instant.
+    ///
+    /// Only reached when the settings ask for reconnecting. Without that a
+    /// dropped broadcast goes to `Off`, which is what "leave it to me"
+    /// means.
+    Waiting { retry_at: std::time::Instant },
+}
+
+impl Broadcast {
+    /// Whether this is a state the user asked to be in — which is what
+    /// decides whether a connection that arrives late is kept or discarded.
+    ///
+    /// `Connecting` is wanted; `Off` is not. A broadcast that connects after
+    /// Stop was pressed has to be stopped again rather than shown as live.
+    pub(in crate::engine) fn wanted(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    /// Takes the running output out of a `Live`, leaving `Connecting`
+    /// behind; answers `None` from every other state, which it leaves
+    /// exactly as it found.
+    ///
+    /// `Connecting` rather than `Off` because of what the caller does next:
+    /// it decides whether to retry, and that decision reads
+    /// [`Self::wanted`]. A broadcast that was live is one the user asked
+    /// for, and leaving `Off` here would silently answer "no" for them.
+    pub(in crate::engine) fn take_live(&mut self) -> Option<Output> {
+        match std::mem::replace(self, Self::Connecting) {
+            Self::Live(running) => Some(running),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -274,3 +274,7 @@ settings-streaming-bit-rate-note = Limited by your upload speed, not your disk.
 settings-streaming-keyframes = Keyframe interval
 settings-streaming-audio-codec = Audio codec
 settings-streaming-audio-bit-rate = Audio bit rate
+settings-streaming-reconnect = Reconnect
+settings-streaming-reconnect-never = Never
+settings-streaming-reconnect-after = After { $seconds } s
+status-streaming-reconnecting = The broadcast dropped; reconnecting

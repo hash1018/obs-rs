@@ -19,7 +19,7 @@ use eframe::egui;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{
     AUDIO_BIT_RATE_KBPS_RANGE, AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE,
-    RecordingAudioCodec, RecordingEncoder,
+    RecordingAudioCodec, RecordingEncoder, STREAM_RECONNECT_CHOICES,
 };
 
 /// How long the key field stays revealed once the eye is clicked.
@@ -188,5 +188,31 @@ pub(super) fn show(
                     .suffix(" kbps"),
             );
             ui.end_row();
+            ui.label(i18n.text(TextKey::SettingsStreamingReconnect));
+            egui::ComboBox::from_id_salt("settings_stream_reconnect")
+                .selected_text(reconnect_label(draft.streaming.reconnect_seconds, i18n))
+                .show_ui(ui, |ui| {
+                    for choice in STREAM_RECONNECT_CHOICES {
+                        let label = reconnect_label(choice, i18n);
+                        ui.selectable_value(&mut draft.streaming.reconnect_seconds, choice, label);
+                    }
+                });
+            ui.end_row();
         });
+}
+
+/// How the reconnect choices read. `None` is not "zero seconds" but "leave
+/// it to me", so it is worded rather than numbered.
+fn reconnect_label(seconds: Option<u32>, i18n: &LocalizationManager) -> String {
+    match seconds {
+        None => i18n
+            .text(TextKey::SettingsStreamingReconnectNever)
+            .into_owned(),
+        Some(seconds) => {
+            let mut args = fluent_bundle::FluentArgs::new();
+            args.set("seconds", seconds);
+            i18n.text_with(TextKey::SettingsStreamingReconnectAfter, &args)
+                .into_owned()
+        }
+    }
 }

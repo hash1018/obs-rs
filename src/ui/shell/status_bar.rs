@@ -55,11 +55,14 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     // a broadcast starts, which is a moment nobody wants to
                     // spend re-reading the whole strip.
                     let live = format_elapsed("LIVE", status.streaming_elapsed);
-                    if status.streaming_elapsed.is_some() {
-                        ui.monospace(egui::RichText::new(live).color(RECORDING_COLOR))
-                            .on_hover_text(i18n.text(TextKey::StatusStreaming));
-                    } else {
-                        ui.monospace(live);
+                    match streaming_mark(ui.visuals(), status) {
+                        Some((colour, reason)) => {
+                            ui.monospace(egui::RichText::new(live).color(colour))
+                                .on_hover_text(i18n.text(reason));
+                        }
+                        None => {
+                            ui.monospace(live);
+                        }
                     }
                 });
             });
@@ -88,6 +91,25 @@ fn recording_mark(
     } else {
         (RECORDING_COLOR, TextKey::StatusRecording)
     })
+}
+
+/// What the broadcast clock is coloured, and the line that says why.
+///
+/// Three states, not two. Live is the recording red, which is what the
+/// dashes are held at width for. **Reconnecting is the warning colour over
+/// the dashes** — the clock has stopped because nothing is being published,
+/// and a bar that showed only dashes would say "off", which is not what is
+/// happening and not what someone whose stream just dropped needs to read.
+fn streaming_mark(
+    visuals: &egui::Visuals,
+    status: &StatusSnapshot,
+) -> Option<(egui::Color32, TextKey)> {
+    if status.streaming_elapsed.is_some() {
+        return Some((RECORDING_COLOR, TextKey::StatusStreaming));
+    }
+    status
+        .streaming_reconnecting
+        .then_some((visuals.warn_fg_color, TextKey::StatusStreamingReconnecting))
 }
 
 /// The recording red, and the same one the mixer paints a clipped channel

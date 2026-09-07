@@ -274,3 +274,7 @@ settings-streaming-bit-rate-note = 디스크가 아니라 업로드 속도가 �
 settings-streaming-keyframes = 키프레임 간격
 settings-streaming-audio-codec = 오디오 코덱
 settings-streaming-audio-bit-rate = 오디오 비트레이트
+settings-streaming-reconnect = 재접속
+settings-streaming-reconnect-never = 안 함
+settings-streaming-reconnect-after = { $seconds }초 후
+status-streaming-reconnecting = 송출이 끊겼습니다. 재접속 중

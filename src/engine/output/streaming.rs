@@ -3,26 +3,20 @@
 //!
 //! Everything up to the muxer is [`Output`]'s and is shared verbatim — the
 //! compositor's `Tee` through a video encoder, the mixer's through an audio
-//! one. What is here is the part that differs: opening the connection, and
-//! the two ways that can go wrong that a file has no equivalent of.
+//! one. What is here is the part that differs: opening the connection.
 //!
-//! # A file opens, a broadcast negotiates
+//! # Why this happens on a thread
 //!
 //! `FileMuxer::create` fails only if the path is unwritable, and it fails at
-//! once. `RtmpMuxer::create` performs the RTMP handshake, which means a DNS
-//! lookup, a TCP connection and a reply — up to ten seconds of waiting, on
-//! whichever thread asked. That thread is the engine loop, which is also
-//! what moves every layer and reads every command.
+//! once. `RtmpMuxer::create` performs the RTMP handshake — a DNS lookup, a
+//! TCP connection and a reply, up to ten seconds of waiting.
 //!
-//! It is done there anyway, and deliberately. The alternative is starting a
-//! broadcast on a thread of its own and reporting back, which is what
-//! `SourceOpener` does for a camera — and a camera is worth it because a
-//! Scene may hold six of them and one dialog must not stop the others. A
-//! broadcast is one thing, started by one press, whose whole purpose is to
-//! be running a moment later. Freezing the picture for the length of a
-//! handshake is visible; the machinery to avoid it is not free, and what it
-//! would buy is a Preview that keeps moving while the user waits for the
-//! very thing they just asked for.
+//! Ten seconds once, on a press the user just made, would be tolerable. But
+//! a broadcast that drops is retried, and a server that is down refuses every
+//! attempt: on the engine loop that is ten seconds of frozen Preview every
+//! few seconds, for as long as the outage lasts. So connecting is done where
+//! a Source is opened, on a thread that answers back through the loop's own
+//! queue — see `SourceOpener`, whose shape this follows exactly.
 //!
 //! # What is never shown
 //!
@@ -32,37 +26,48 @@
 //! Nothing here logs it, and `media-pp` reports through
 //! `RtmpMuxer::redacted_url` for the same reason.
 
-use std::time::Instant;
+use std::sync::Arc;
 
-use media_pp::{element::Sink, elements::RtmpMuxer};
+use media_pp::element::Sink;
+use media_pp::elements::{MixerHandle, RtmpMuxer, TeeHandle};
+
+use crate::settings::StreamingSettings;
 
 use super::super::backend::{Backend, BackendError};
-use super::{Output, OutputState, TrackDef};
+use super::{Output, OutputKind, TrackDef};
 
-/// Opens the broadcast this state's settings describe, and starts both
-/// tracks publishing to it.
+/// One broadcast to open, as it was asked for.
+pub(in crate::engine) struct BroadcastRequest {
+    pub(in crate::engine) settings: StreamingSettings,
+    pub(in crate::engine) fps: u32,
+    /// Cloned rather than borrowed: the mixer outlives one connect, and the
+    /// thread cannot hold a reference into the engine loop's own state.
+    pub(in crate::engine) mixer: Option<(TeeHandle, MixerHandle)>,
+}
+
+/// Connects and starts both tracks publishing, on whichever thread calls.
 ///
-/// Answers with the instant it began, which is what the clock in the status
-/// bar counts from — the same shape `start_recording` has, for the same
-/// reason: the loop publishes one instant and everything else derives from
-/// it, so nothing can disagree about whether a broadcast exists.
-pub(in crate::engine) fn start_streaming(
-    backend: &Backend,
-    state: &mut OutputState,
-) -> Result<Instant, BackendError> {
-    if state.broadcast.is_some() {
-        return Err("a broadcast is already running".into());
-    }
-    let settings = state.streaming.clone();
+/// Never the engine loop: this blocks for the handshake. See this module's
+/// own docs, and `BroadcastOpener`, which is what calls it.
+pub(in crate::engine) fn connect(
+    backend: &Arc<Backend>,
+    request: BroadcastRequest,
+) -> Result<Output, BackendError> {
+    let mut settings = request.settings;
     if !settings.is_addressable() {
         return Err("set a server address and a stream key first".into());
     }
 
-    // Probed here rather than taken from the list published at startup, for
-    // the reason `start_recording` gives: the mix format can have moved
-    // since, and which encoders open depends on it.
-    let audio_codecs = super::available_audio_codecs(state.mix_format());
-    let mut settings = settings;
+    // Probed against what this machine can actually open, rather than
+    // trusted from the settings: a stored encoder or codec that will not
+    // open here should broadcast with something else instead of refusing.
+    let audio_codecs = super::available_audio_codecs(
+        request
+            .mixer
+            .as_ref()
+            .and_then(|(_, handle)| handle.mix_format())
+            .unwrap_or(super::super::audio::DEFAULT_MIX_FORMAT),
+    );
     if !audio_codecs.contains(&settings.audio_codec) {
         let Some(fallback) = audio_codecs.first().copied() else {
             return Err("this build has no audio codec a broadcast can carry".into());
@@ -86,16 +91,16 @@ pub(in crate::engine) fn start_streaming(
 
     let running = Output::start(
         backend,
-        state.mixer.as_ref(),
-        backend.frame_rate(),
+        request.mixer.as_ref(),
+        OutputKind::Broadcast,
+        request.fps,
         &settings.encoding(backend.size),
         |tracks| open_rtmp_muxer(&settings.publish_url(), tracks),
     )?;
-    state.broadcast = Some(running);
     // The address without its key, which is the only form of it that leaves
     // this function.
     println!("broadcasting to {}", redacted(&settings.server));
-    Ok(Instant::now())
+    Ok(running)
 }
 
 /// Connects, declares the tracks, and writes the FLV header.

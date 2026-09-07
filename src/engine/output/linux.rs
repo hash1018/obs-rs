@@ -21,7 +21,7 @@ use crate::engine::backend::{
 };
 use crate::settings::{RecordingEncoder, RecordingSettings};
 
-use super::OutputEncoding;
+use super::{OutputEncoding, OutputKind};
 
 /// A video encoder opened and ready, waiting only for the muxer sink it
 /// writes into.
@@ -68,6 +68,7 @@ enum RecordEncoder {
 impl Backend {
     pub(in crate::engine) fn prepare_output(
         &self,
+        kind: OutputKind,
         fps: u32,
         encoding: &OutputEncoding,
     ) -> Result<PreparedOutput, BackendError> {
@@ -77,7 +78,7 @@ impl Backend {
         // compositor rather than from the setting so that a rate it refused
         // cannot produce a file claiming frames nothing is making.
         Ok(PreparedOutput {
-            encoder: self.open_encoder(fps, encoding)?,
+            encoder: self.open_encoder(kind, fps, encoding)?,
             time_base: ffmpeg::Rational::new(1, fps as i32),
             size: encoding.size,
         })
@@ -123,6 +124,7 @@ impl Backend {
     ///   at `--:--:--`, and the next attempt clears it.
     pub(in crate::engine) fn attach_output(
         &self,
+        kind: OutputKind,
         prepared: PreparedOutput,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<VideoTrack, BackendError> {
@@ -134,13 +136,13 @@ impl Backend {
             .branch()
             .ok_or("the compositor's Tee is gone")?
             .queue_with_policy(
-                "output-queue",
+                format!("{}-queue", kind.prefix()),
                 OUTPUT_QUEUE_DEPTH,
                 OverflowPolicy::Block(OUTPUT_SEND_TIMEOUT),
             );
         // The gate first, so a paused span is gone before anything downstream
         // has to reason about it.
-        let (gate, pause) = PauseGate::new("output-pause");
+        let (gate, pause) = PauseGate::new(format!("{}-pause", kind.prefix()));
         branch = branch.pipe(gate);
         // Only when the file is smaller than the canvas.
         if size != self.size {
@@ -182,7 +184,7 @@ impl Backend {
             // The compositor has been running since the application started, and
             // its timeline says so. Without this the file is written as
             // beginning that far in, and a player shows the lead-in as empty.
-            .pipe(TimestampOrigin::new("output-origin"))
+            .pipe(TimestampOrigin::new(format!("{}-origin", kind.prefix())))
             .to(sink)?;
         Ok(VideoTrack {
             branch: self.tee.attach(branch)?,
@@ -193,6 +195,7 @@ impl Backend {
     /// Opens whichever encoder the output asks for.
     fn open_encoder(
         &self,
+        kind: OutputKind,
         fps: u32,
         encoding: &OutputEncoding,
     ) -> Result<RecordEncoder, BackendError> {
@@ -203,7 +206,7 @@ impl Backend {
         let gop_size = fps * encoding.keyframe_seconds.max(1);
         match encoding.encoder {
             RecordingEncoder::Nvenc => Ok(RecordEncoder::Hardware(CudaEncoder::new(
-                "output-encode",
+                format!("{}-encode", kind.prefix()),
                 &self.device,
                 CudaEncoderOptions {
                     codec: CudaCodec::H264,
@@ -218,7 +221,7 @@ impl Backend {
                 },
             )?)),
             other => Ok(RecordEncoder::Software(SwEncoder::new(
-                "output-encode",
+                format!("{}-encode", kind.prefix()),
                 SwEncoderOptions {
                     codec: software_codec(other),
                     width,
@@ -257,7 +260,8 @@ impl Backend {
                         ..RecordingSettings::default()
                     }
                     .encoding(self.size);
-                    self.open_encoder(PROBE_FPS, &probe).is_ok()
+                    self.open_encoder(OutputKind::Recording, PROBE_FPS, &probe)
+                        .is_ok()
                 })
                 .collect()
         })

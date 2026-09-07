@@ -309,4 +309,8 @@ text_keys! {
     SettingsStreamingKeyframes      => "settings-streaming-keyframes";
     SettingsStreamingAudioCodec     => "settings-streaming-audio-codec";
     SettingsStreamingAudioBitRate   => "settings-streaming-audio-bit-rate";
+    SettingsStreamingReconnect        => "settings-streaming-reconnect";
+    SettingsStreamingReconnectNever   => "settings-streaming-reconnect-never";
+    SettingsStreamingReconnectAfter   => "settings-streaming-reconnect-after";
+    StatusStreamingReconnecting       => "status-streaming-reconnecting";
 }
