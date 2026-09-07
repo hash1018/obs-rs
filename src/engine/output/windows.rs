@@ -215,9 +215,19 @@ impl Backend {
                         // they delay is packets out, not frames in — 1080p60
                         // BGRA takes ~2ms a frame to submit whether they are
                         // on or off, and the frame comes straight back to its
-                        // pool either way. The first packet arrives 15 frames
-                        // in rather than 3, which a file does not care about;
-                        // a live send would, and that is not this branch.
+                        // pool either way.
+                        //
+                        // Kept for a live send too, now that this opens the
+                        // streaming encoder as well. Reordering costs two or
+                        // three frames steadily — 33 to 50ms at 60fps — and
+                        // the first packet arrives 15 frames in rather than
+                        // 3, once, at connect. Both disappear into what an
+                        // ingest adds: a platform is seconds behind live
+                        // whatever this does. Turning them off would be
+                        // tuning latency, which `output`'s own HLS notes say
+                        // this application does not do, and would cost
+                        // quality at the same bitrate against the encoder
+                        // everyone compares it to.
                         max_b_frames: None,
                     },
                 )?))

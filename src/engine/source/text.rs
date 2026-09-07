@@ -694,6 +694,168 @@ mod tests {
         );
     }
 
+    /// The Windows twin of the test above, and the same claim: a layer with
+    /// an alpha channel reaches the canvas *as* one, so the transparent
+    /// nine-tenths of a caption does not arrive as a rectangle over the
+    /// Scene.
+    ///
+    /// ```text
+    /// AppSource(BGRA) ─ D3d11Upload ─┐
+    ///                                ├─ D3d11VideoCompositor ─ D3d11Download ─ AppSink
+    ///            (a red background) ─┘
+    /// ```
+    ///
+    /// It reads what its twin cannot. The CUDA compositor hands back NV12,
+    /// so the Linux half has to settle for the luma plane and compare
+    /// against BT.709 limited-range values; this one composites in BGRA and
+    /// keeps it all the way to system memory, so the assertion is the colour
+    /// itself. `D3d11Download` refusing anything but a BGRA texture is part
+    /// of the check rather than an obstacle to it: a compositor that started
+    /// producing NV12 would fail here rather than quietly changing what the
+    /// numbers below mean.
+    ///
+    /// Needs a Direct3D 11 device. Where the machine has none this says so
+    /// and returns, the same bargain the CUDA half makes.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_caption_reaches_the_canvas_without_a_rectangle_around_it() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use media_pp::color::Color;
+        use media_pp::elements::{
+            AppSink, AppSource, D3d11Download, D3d11Upload, D3d11VideoCompositor,
+            D3d11VideoCompositorInput, VideoCompositorOptions, VideoLayer, VideoRect,
+        };
+
+        if a_font().is_none() {
+            eprintln!("skipped: no font on this machine to draw with");
+            return;
+        }
+        if media_pp::init().is_err() {
+            eprintln!("skipped: ffmpeg would not initialize");
+            return;
+        }
+        let Ok((device, context)) = crate::engine::backend::create_device() else {
+            eprintln!("skipped: no Direct3D 11 device on this machine");
+            return;
+        };
+
+        let (width, height) = (256u32, 128u32);
+        // Red, so a caption that arrived with its background opaque would
+        // black out what it covers and be impossible to miss. Black would
+        // hide exactly the defect this is here for.
+        let (compositor, handle) = D3d11VideoCompositor::new(
+            "text-test",
+            &device,
+            context.clone(),
+            VideoCompositorOptions {
+                width,
+                height,
+                frame_rate: ffmpeg::Rational::new(30, 1),
+                background: Color::new(255, 0, 0),
+            },
+        )
+        .expect("compositor");
+
+        let mut caption = settings("H", TextAlignment::Centre);
+        caption.size = [width as f32, height as f32];
+        caption.font_size = 64.0;
+        let frame = text_bgra(width, height, &caption).expect("draw the caption");
+
+        let (source, pusher) = AppSource::new("caption", 1);
+        let upload = D3d11Upload::new("caption-upload", &device, width, height);
+        let D3d11VideoCompositorInput { sink, .. } = handle
+            .add_source(
+                "caption",
+                VideoLayer::new(VideoRect::new(0, 0, width, height)),
+            )
+            .expect("add the caption layer")
+            .expect("the compositor is running");
+        let feeding = Pipeline::new("caption-in", source, move |source, context| {
+            let branch = context.branch().pipe(upload).to(sink)?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("source pipeline");
+        feeding.run().expect("run the source");
+        pusher.push(frame).expect("push the caption");
+
+        let (composed, arrived) = mpsc::channel();
+        let download = D3d11Download::new("download", &device, context.clone(), width, height)
+            .expect("download");
+        let sink = AppSink::new("out", move |buffer: MediaBuffer| {
+            if let MediaBuffer::Video(frame) = &buffer {
+                // Copied out because the frame goes back to its pool when
+                // this returns. Four bytes a pixel, B G R A in that order.
+                let stride = frame.stride(0);
+                let data = frame.data(0);
+                let pixels: Vec<u8> = (0..height as usize)
+                    .flat_map(|row| data[row * stride..row * stride + width as usize * 4].to_vec())
+                    .collect();
+                let _ = composed.send(pixels);
+            }
+            Ok(())
+        });
+        let composing = Pipeline::new("compose", compositor, move |source, context| {
+            let branch = context.branch().pipe(download).to(Box::new(sink))?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("compositor pipeline");
+        composing.run().expect("run the compositor");
+
+        // The first frame can be composed before the pushed one has been
+        // uploaded, in which case it is background alone. What is being
+        // tested is that the caption arrives at all, so this waits for a
+        // frame that has it rather than asserting on whichever came first.
+        // Green, because the background has none and a white glyph is all
+        // of it.
+        let mut with_caption = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let Ok(pixels) = arrived.recv_timeout(Duration::from_secs(5)) else {
+                break;
+            };
+            if pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[1] > 150) {
+                with_caption = Some(pixels);
+                break;
+            }
+        }
+        feeding.stop();
+        composing.stop();
+        let pixels = with_caption.expect("no composited frame carried the caption");
+
+        // The corners are the assertion that matters: they are where an
+        // opaque caption would have painted its own background over the red.
+        let at = |row: u32, column: u32| {
+            let start = ((row * width + column) * 4) as usize;
+            [pixels[start], pixels[start + 1], pixels[start + 2]]
+        };
+        for (row, column) in [
+            (0, 0),
+            (0, width - 1),
+            (height - 1, 0),
+            (height - 1, width - 1),
+        ] {
+            assert_eq!(
+                at(row, column),
+                [0, 0, 255],
+                "the caption painted over the background at {row},{column}"
+            );
+        }
+        let lit = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[1] > 150)
+            .count();
+        assert!(
+            lit > 50,
+            "the glyph did not reach the canvas ({lit} pixels)"
+        );
+    }
+
     /// A static caption is the string that was typed and nothing else, so
     /// nothing about it changes as time passes — which is what keeps the
     /// engine's tick from redrawing every Text Source in the Scene.

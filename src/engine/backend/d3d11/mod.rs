@@ -328,7 +328,12 @@ const FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 2] = [D3D_FEATURE_LEVEL_11_1, D3D_FEAT
 /// Nothing about this is vendor-specific — `D3D_DRIVER_TYPE_HARDWARE` takes
 /// whichever adapter the machine has, and desktop duplication is a Windows
 /// API rather than one GPU maker's.
-fn create_device() -> Result<(ID3D11Device, Arc<Mutex<ID3D11DeviceContext>>), BackendError> {
+/// Visible to the engine, not only to this module, because
+/// `source::text`'s composition test has to compose on the same kind of
+/// device the application does — one with BGRA support at feature level
+/// 11_0, which is exactly what this settles.
+pub(in crate::engine) fn create_device()
+-> Result<(ID3D11Device, Arc<Mutex<ID3D11DeviceContext>>), BackendError> {
     let mut device = None;
     let mut context = None;
     // SAFETY: creates the documented device and context on the default

@@ -66,6 +66,14 @@ mod platform;
 
 pub(in crate::engine) use platform::{Backend, Layer, RunningSource};
 
+/// The device the D3D11 backend composites on, for the one test outside this
+/// module that has to compose something — see `source::text`.
+///
+/// Gated on `test` as well as on the platform because nothing in a shipped
+/// build reaches for it: the backend makes its own and keeps it.
+#[cfg(all(test, target_os = "windows"))]
+pub(in crate::engine) use platform::create_device;
+
 pub(in crate::engine) type BackendError = Box<dyn Error + Send + Sync>;
 
 /// Whether `pipeline` has finished, however it got there.
