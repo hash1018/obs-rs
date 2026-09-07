@@ -180,6 +180,27 @@ fn handle_source_command(
         SourceCommand::SetTextAlignment(item_id, alignment) => {
             SourceStore::set_text_alignment(transaction, item_id, alignment)
         }
+        SourceCommand::SetTextMode(item_id, mode) => {
+            SourceStore::set_text_mode(transaction, item_id, mode)
+        }
+        SourceCommand::SetClockFormat(item_id, format) => {
+            SourceStore::set_clock_format(transaction, item_id, format)
+        }
+        SourceCommand::SetTimerFormat(item_id, format) => {
+            SourceStore::set_timer_format(transaction, item_id, format)
+        }
+        // One clock reading for the whole transaction, taken here rather than
+        // inside the store so that a start and the stop that follows it are
+        // measured against the same one.
+        SourceCommand::StartTextTimer(item_id) => {
+            SourceStore::start_text_timer(transaction, item_id, crate::clock::now_micros())
+        }
+        SourceCommand::StopTextTimer(item_id) => {
+            SourceStore::stop_text_timer(transaction, item_id, crate::clock::now_micros())
+        }
+        SourceCommand::ResetTextTimer(item_id) => {
+            SourceStore::reset_text_timer(transaction, item_id, crate::clock::now_micros())
+        }
         SourceCommand::SetTextSize(item_id, size) => {
             SourceStore::set_text_size(transaction, item_id, size)
         }
@@ -637,6 +658,88 @@ mod tests {
         let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(sources.items.is_empty());
         assert_eq!(sources.scene_name.as_deref(), Some("Scene 2"));
+    }
+
+    /// A Text Source's stopwatch, which is the one thing here whose stored
+    /// value is arithmetic rather than storage.
+    ///
+    /// The clock readings are supplied by hand rather than taken from the
+    /// machine — which is what `handle_source_command` does for the real
+    /// buttons — so a whole run can be measured without waiting for one.
+    #[test]
+    fn a_text_timer_accumulates_its_runs_and_forgets_none_of_them() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddText(scene_id)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item_id = sources.items[0].id;
+
+        let timer = |database: &ProjectDatabase| {
+            let (_, sources, _) = project_snapshot(database).unwrap();
+            match &sources.items[0].settings {
+                SourceSettings::Text(settings) => settings.timer,
+                other => panic!("not a text source: {other:?}"),
+            }
+        };
+        let start = |database: &mut ProjectDatabase, now| {
+            database
+                .transaction(|t| SourceStore::start_text_timer(t, item_id, now))
+                .unwrap();
+        };
+        let stop = |database: &mut ProjectDatabase, now| {
+            database
+                .transaction(|t| SourceStore::stop_text_timer(t, item_id, now))
+                .unwrap();
+        };
+
+        // A new one is stopped at zero, which is what makes the first press
+        // of the button a start rather than a resume.
+        assert_eq!(timer(&database), crate::domain::TextTimer::default());
+
+        start(&mut database, 1_000_000);
+        assert!(timer(&database).running());
+        assert_eq!(timer(&database).running_since, Some(1_000_000));
+
+        // Starting one that already runs must not restart it, or the button
+        // would be a reset for anyone who pressed it twice.
+        start(&mut database, 9_000_000);
+        assert_eq!(timer(&database).running_since, Some(1_000_000));
+
+        stop(&mut database, 3_500_000);
+        assert!(!timer(&database).running());
+        assert_eq!(
+            timer(&database).accumulated,
+            std::time::Duration::from_millis(2_500)
+        );
+
+        // A second run adds to the first rather than replacing it.
+        start(&mut database, 10_000_000);
+        stop(&mut database, 11_000_000);
+        assert_eq!(
+            timer(&database).accumulated,
+            std::time::Duration::from_millis(3_500)
+        );
+
+        // Stopping a stopped one adds nothing, which is what keeps a second
+        // press from counting the pause as elapsed time.
+        stop(&mut database, 99_000_000);
+        assert_eq!(
+            timer(&database).accumulated,
+            std::time::Duration::from_millis(3_500)
+        );
+
+        // Reset while running zeroes the total and begins the run again from
+        // now, rather than stopping it.
+        start(&mut database, 20_000_000);
+        database
+            .transaction(|t| SourceStore::reset_text_timer(t, item_id, 21_000_000))
+            .unwrap();
+        let reset = timer(&database);
+        assert_eq!(reset.accumulated, std::time::Duration::ZERO);
+        assert_eq!(reset.running_since, Some(21_000_000), "reset stopped it");
     }
 
     /// A Drawing's marks survive a round trip through the database, and the

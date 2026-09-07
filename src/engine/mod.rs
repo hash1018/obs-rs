@@ -736,6 +736,13 @@ fn run(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
+                // Before the interval below, not after it: a clock has to be
+                // redrawn as it moves, and this loop's timeout is what it
+                // moves against. `refresh_pushed` compares what it would
+                // draw against what it drew, so the pass costs a formatted
+                // string per clock and nothing at all until a second turns
+                // over.
+                redraw_clocks(&mut open, &scene);
                 if looked_for_missing.elapsed() < MISSING_RETRY {
                     continue;
                 }
@@ -768,6 +775,23 @@ fn run(
     }
     backend.stop();
     Ok(())
+}
+
+/// Redraws every Source that follows the clock rather than an edit.
+///
+/// The Sources that do are a running Text Source, and today that is all —
+/// see [`source::redraws_with_the_clock`]. Everything else this loop holds is
+/// redrawn by a Scene change, which arrives as a command rather than as time
+/// passing.
+fn redraw_clocks(open: &mut HashMap<SceneItemId, SourceState>, scene: &SourcesSnapshot) {
+    for item in &scene.items {
+        if !source::redraws_with_the_clock(item) {
+            continue;
+        }
+        if let Some(SourceState::Open(source)) = open.get_mut(&item.id) {
+            refresh_pushed(source, item);
+        }
+    }
 }
 
 /// Opens Sources on a thread of its own.
@@ -953,7 +977,13 @@ fn apply_command(
         }
         EngineCommand::Text(item_id, settings) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
-                push_content(source, PushedContent::Text(settings));
+                // Resolved here as everywhere else, so that editing the font
+                // of a running clock does not push the format description
+                // over the time it is showing.
+                push_content(
+                    source,
+                    PushedContent::Text(source::text::resolved(&settings)),
+                );
             }
             false
         }

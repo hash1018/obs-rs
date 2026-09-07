@@ -4,11 +4,12 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    ColorSourceSettings, Crop, DEFAULT_FONT_SIZE, DisplayCaptureSettings, DisplayCaptureTarget,
-    DrawingSourceSettings, ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings,
-    RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem, SceneItemId, Source,
-    SourceId, SourceKind, SourceSettings, Stroke, TextAlignment, TextSourceSettings, Transform,
-    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
+    ClockFormat, ColorSourceSettings, Crop, DEFAULT_FONT_SIZE, DisplayCaptureSettings,
+    DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB,
+    MediaFileSettings, RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem,
+    SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke, TextAlignment, TextMode,
+    TextSourceSettings, TextTimer, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
+    WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::{FilterStore, PersistenceResult};
@@ -149,7 +150,12 @@ impl SourceStore {
                 text_source_settings.green,
                 text_source_settings.blue,
                 text_source_settings.alpha,
-                text_source_settings.alignment
+                text_source_settings.alignment,
+                text_source_settings.mode,
+                text_source_settings.clock_format,
+                text_source_settings.timer_format,
+                text_source_settings.timer_running_since,
+                text_source_settings.timer_accumulated_us
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -240,6 +246,29 @@ impl SourceStore {
                                     rusqlite::types::Type::Text,
                                 )
                             })?,
+                        mode: TextMode::from_storage_name(&row.get::<_, String>(76)?).ok_or_else(
+                            || {
+                                rusqlite::Error::InvalidColumnType(
+                                    76,
+                                    "mode".into(),
+                                    rusqlite::types::Type::Text,
+                                )
+                            },
+                        )?,
+                        // A format this build does not know is the default
+                        // rather than a project that will not open: it can
+                        // only come from a newer build, and a clock in the
+                        // wrong format is a better answer than no project.
+                        clock_format: ClockFormat::from_storage_name(&row.get::<_, String>(77)?)
+                            .unwrap_or_default(),
+                        timer_format: TimerFormat::from_storage_name(&row.get::<_, String>(78)?)
+                            .unwrap_or_default(),
+                        timer: TextTimer {
+                            running_since: row.get(79)?,
+                            accumulated: std::time::Duration::from_micros(
+                                row.get::<_, i64>(80)?.max(0) as u64,
+                            ),
+                        },
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -556,6 +585,103 @@ impl SourceStore {
                 SET red = ?1, green = ?2, blue = ?3, alpha = ?4
               WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?5)",
             params![rgba[0], rgba[1], rgba[2], rgba[3], scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Where a Text Source's words come from.
+    pub(crate) fn set_text_mode(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        mode: TextMode,
+    ) -> PersistenceResult<()> {
+        set_text_column(transaction, scene_item_id, "mode", mode.storage_name())
+    }
+
+    pub(crate) fn set_clock_format(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        format: ClockFormat,
+    ) -> PersistenceResult<()> {
+        set_text_column(
+            transaction,
+            scene_item_id,
+            "clock_format",
+            format.storage_name(),
+        )
+    }
+
+    pub(crate) fn set_timer_format(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        format: TimerFormat,
+    ) -> PersistenceResult<()> {
+        set_text_column(
+            transaction,
+            scene_item_id,
+            "timer_format",
+            format.storage_name(),
+        )
+    }
+
+    /// Starts a Text Source's stopwatch from where it stands.
+    ///
+    /// `now` is passed in rather than read here so that starting and stopping
+    /// are stamped by one clock — the caller's — and so this is testable
+    /// without waiting for a second to pass. Starting one that already runs
+    /// does nothing, which is what makes the button idempotent.
+    pub(crate) fn start_text_timer(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        now: i64,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE text_source_settings
+                SET timer_running_since = ?1
+              WHERE timer_running_since IS NULL
+                AND source_id = (SELECT source_id FROM scene_items WHERE id = ?2)",
+            params![now, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Stops it, folding the run that was in progress into the total.
+    ///
+    /// The arithmetic is here rather than in the caller because this is
+    /// where both halves are: the interface would have to read the row back
+    /// to do it, and two of those racing would each write a total computed
+    /// from a stale one.
+    pub(crate) fn stop_text_timer(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        now: i64,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE text_source_settings
+                SET timer_accumulated_us =
+                        timer_accumulated_us + MAX(0, ?1 - timer_running_since),
+                    timer_running_since = NULL
+              WHERE timer_running_since IS NOT NULL
+                AND source_id = (SELECT source_id FROM scene_items WHERE id = ?2)",
+            params![now, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Puts it back to zero without stopping it, which is what a stopwatch's
+    /// reset does while it runs.
+    pub(crate) fn reset_text_timer(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        now: i64,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE text_source_settings
+                SET timer_accumulated_us = 0,
+                    timer_running_since =
+                        CASE WHEN timer_running_since IS NULL THEN NULL ELSE ?1 END
+              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)",
+            params![now, scene_item_id.0],
         )?;
         Ok(())
     }

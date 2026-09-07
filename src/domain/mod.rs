@@ -13,9 +13,9 @@ pub use filter::{
 pub use scene::{Scene, SceneId};
 pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
 pub use source::{
-    ColorSourceSettings, DEFAULT_FONT_SIZE, DisplayCaptureSettings, DisplayCaptureTarget,
-    DrawingSourceSettings, ImageSourceSettings, MediaFileSettings, RtspSourceSettings,
-    RtspTransport, Source, SourceId, SourceKind, SourceSettings, Stroke, TextAlignment,
-    TextSourceSettings, VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings,
-    WindowCaptureTarget,
+    ClockFormat, ColorSourceSettings, DEFAULT_FONT_SIZE, DisplayCaptureSettings,
+    DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings, MediaFileSettings,
+    RtspSourceSettings, RtspTransport, Source, SourceId, SourceKind, SourceSettings, Stroke,
+    TextAlignment, TextMode, TextSourceSettings, TextTimer, TimerFormat, VideoCaptureMode,
+    VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
 };

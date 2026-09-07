@@ -13,6 +13,7 @@
 
 mod app;
 mod capture;
+mod clock;
 mod domain;
 mod engine;
 mod hotkey;
@@ -31,6 +32,9 @@ use eframe::egui;
 use app::ObsApp;
 
 fn main() -> eframe::Result {
+    // First of all, and before this process has a second thread: reading the
+    // machine's time zone is only sound while it has one — see `clock`.
+    clock::capture_local_offset();
     // Before anything opens a file of its own. Two instances would write one
     // log and one project database between them, so the second is turned away
     // ahead of both — see `instance`.

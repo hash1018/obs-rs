@@ -1,8 +1,8 @@
 use crate::domain::{
-    AudioSourceId, ChromaKeySettings, Crop, DisplayCaptureSettings, FilterId, FilterKind,
-    ImageSourceSettings, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId,
-    SceneItemId, SourceKind, Stroke, TextAlignment, Transform, VideoCaptureMode,
-    VideoCaptureSettings, WindowCaptureSettings,
+    AudioSourceId, ChromaKeySettings, ClockFormat, Crop, DisplayCaptureSettings, FilterId,
+    FilterKind, ImageSourceSettings, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId,
+    SceneItemId, SourceKind, Stroke, TextAlignment, TextMode, TimerFormat, Transform,
+    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,6 +173,22 @@ pub enum SourceCommand {
     SetTextFontSize(SceneItemId, f32),
     SetTextColour(SceneItemId, [u8; 4]),
     SetTextAlignment(SceneItemId, TextAlignment),
+    /// Where a Text Source's words come from: what was typed, the wall
+    /// clock, or its own stopwatch.
+    SetTextMode(SceneItemId, TextMode),
+    SetClockFormat(SceneItemId, ClockFormat),
+    SetTimerFormat(SceneItemId, TimerFormat),
+    /// One Text Source's stopwatch, from the buttons in the Properties dock.
+    ///
+    /// Stored rather than kept in the engine, so that a timer survives the
+    /// Scene changing and the application being restarted — the same reason
+    /// a media file's paused flag is stored. Starting one that runs and
+    /// stopping one that does not are both no-ops, so the buttons need not
+    /// agree with the row about what state it is in.
+    StartTextTimer(SceneItemId),
+    StopTextTimer(SceneItemId),
+    /// Back to zero, without stopping one that is running.
+    ResetTextTimer(SceneItemId),
     /// The box glyphs are drawn into.
     ///
     /// Unlike everything else here this cannot take effect where it is: the

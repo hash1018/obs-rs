@@ -271,13 +271,37 @@ pub(in crate::engine) fn set_media_gain_db(source: &OpenSource, gain_db: f32) {
     }
 }
 
+/// Whether this Source redraws itself as time passes, rather than only when
+/// something is edited.
+///
+/// What the engine's idle tick asks, so that a clock is the only thing it
+/// wakes up for: every other pushed Source is redrawn by a Scene change and
+/// nothing else, and asking those a hundred times a second what they should
+/// be showing would be a hundred rasterizations for an answer that has not
+/// moved.
+pub(in crate::engine) fn redraws_with_the_clock(item: &SceneItemSnapshot) -> bool {
+    use crate::domain::{SourceSettings, TextMode};
+
+    match &item.settings {
+        SourceSettings::Text(settings) => match settings.mode {
+            TextMode::Static => false,
+            TextMode::Clock => true,
+            // A stopwatch that is stopped is a fixed number on the screen.
+            TextMode::Timer => settings.timer.running(),
+        },
+        _ => false,
+    }
+}
+
 pub(in crate::engine) fn refresh_pushed(source: &mut OpenSource, item: &SceneItemSnapshot) {
     use crate::domain::SourceSettings;
 
     let wanted = match &item.settings {
         SourceSettings::Color(settings) => PushedContent::Color(settings.rgba),
         SourceSettings::Drawing(settings) => PushedContent::Drawing(settings.strokes.clone()),
-        SourceSettings::Text(settings) => PushedContent::Text(settings.clone()),
+        // Resolved rather than stored: a clock's settings do not change as
+        // it ticks, and what is compared below has to.
+        SourceSettings::Text(settings) => PushedContent::Text(text::resolved(settings)),
         _ => return,
     };
     push_content(source, wanted);

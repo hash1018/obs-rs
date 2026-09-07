@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline, pool::UnboundObjectPool};
 
-use crate::domain::{SourceSettings, TextAlignment, TextSourceSettings};
+use crate::domain::{
+    ClockFormat, SourceSettings, TextAlignment, TextMode, TextSourceSettings, TimerFormat,
+};
 use crate::snapshots::SceneItemSnapshot;
 
 use super::super::backend::{BackendError, Layer, RunningSource};
@@ -74,6 +76,71 @@ fn font(path: Option<&Path>) -> Result<FontArc, BackendError> {
         .map_err(|_| format!("{} is not a font this can draw with", path.display()))?;
     cache.insert(path, font.clone());
     Ok(font)
+}
+
+/// What a Text Source shows *now*, which for two of the three modes is not
+/// what is stored.
+///
+/// Returns the settings with [`text`](TextSourceSettings::text) replaced by
+/// the resolved line, rather than the line alone. That is what lets every
+/// push go through one comparison: the engine keeps the last settings it
+/// drew, and a second ticking over changes them exactly as typing does — so
+/// a clock redraws once a second and a static caption still redraws never.
+///
+/// Called at every point that pushes, and cheap enough to be: it is a
+/// `strftime` and a `format!` for two modes, and a clone for the third.
+pub(in crate::engine) fn resolved(settings: &TextSourceSettings) -> TextSourceSettings {
+    let mut resolved = settings.clone();
+    resolved.text = match settings.mode {
+        TextMode::Static => return resolved,
+        TextMode::Clock => clock_line(settings.clock_format),
+        TextMode::Timer => timer_line(
+            settings.timer_format,
+            settings.timer.elapsed(crate::clock::now_micros()),
+        ),
+    };
+    resolved
+}
+
+/// The wall clock, written the way the chosen format writes it.
+///
+/// The formats are compile-time descriptions, so the only way this can fail
+/// is a `Display` implementation refusing to write into a `String`, which
+/// does not happen. An empty line is what a failure would produce, and it is
+/// what a blank caption would look like — hence the fallback saying so.
+fn clock_line(format: ClockFormat) -> String {
+    use time::macros::format_description;
+
+    let description = match format {
+        ClockFormat::Time => format_description!("[hour]:[minute]:[second]"),
+        ClockFormat::TimeToMinute => format_description!("[hour]:[minute]"),
+        ClockFormat::DateAndTime => {
+            format_description!("[year]-[month]-[day] [hour]:[minute]:[second]")
+        }
+        ClockFormat::Date => format_description!("[year]-[month]-[day]"),
+    };
+    crate::clock::now_local()
+        .format(description)
+        .unwrap_or_else(|_| "--:--:--".to_owned())
+}
+
+/// An elapsed duration, zero-padded so the line does not change width as it
+/// counts — which matters more here than anywhere else, because a caption
+/// that changed width would walk across the Canvas once a second.
+fn timer_line(format: TimerFormat, elapsed: std::time::Duration) -> String {
+    let seconds = elapsed.as_secs();
+    match format {
+        TimerFormat::HoursMinutesSeconds => format!(
+            "{:02}:{:02}:{:02}",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        ),
+        // Minutes keep counting past sixty rather than rolling into an hours
+        // field that is not being shown, which would make 1:00:00 read as
+        // 00:00 — the one thing a stopwatch must never do.
+        TimerFormat::MinutesSeconds => format!("{:02}:{:02}", seconds / 60, seconds % 60),
+    }
 }
 
 /// A rasterized string: one coverage byte per pixel, tightly bounding the
@@ -369,6 +436,8 @@ pub(in crate::engine) fn open(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// Every test here needs a font, and a machine with none is not a
@@ -383,6 +452,10 @@ mod tests {
             size: [400.0, 100.0],
             text: text.to_owned(),
             font: None,
+            mode: TextMode::Static,
+            clock_format: ClockFormat::default(),
+            timer_format: TimerFormat::default(),
+            timer: crate::domain::TextTimer::default(),
             font_size: 48.0,
             rgba: [255, 255, 255, 255],
             alignment,
@@ -619,6 +692,86 @@ mod tests {
             lit > 50,
             "the glyph did not reach the canvas ({lit} pixels)"
         );
+    }
+
+    /// A static caption is the string that was typed and nothing else, so
+    /// nothing about it changes as time passes — which is what keeps the
+    /// engine's tick from redrawing every Text Source in the Scene.
+    #[test]
+    fn a_static_caption_resolves_to_itself() {
+        let stored = settings("hello", TextAlignment::Left);
+        assert_eq!(resolved(&stored), stored);
+    }
+
+    #[test]
+    fn a_timer_counts_from_where_it_was_started_and_stands_still_when_stopped() {
+        use crate::domain::TextTimer;
+
+        let stopped = TextTimer {
+            running_since: None,
+            accumulated: Duration::from_secs(90),
+        };
+        assert_eq!(stopped.elapsed(0), Duration::from_secs(90));
+        // Whatever the clock says, a stopped timer reads the same.
+        assert_eq!(
+            stopped.elapsed(i64::MAX),
+            Duration::from_secs(90),
+            "a stopped timer moved"
+        );
+
+        let running = TextTimer {
+            running_since: Some(1_000_000),
+            accumulated: Duration::from_secs(90),
+        };
+        assert_eq!(running.elapsed(1_000_000), Duration::from_secs(90));
+        assert_eq!(running.elapsed(3_500_000), Duration::from_millis(92_500));
+
+        // A system clock moved back past the start of the run stands still
+        // rather than reading as an enormous duration, which is what an
+        // unsaturated subtraction would give.
+        assert_eq!(running.elapsed(0), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn a_timer_is_written_zero_padded_and_keeps_its_width() {
+        use crate::domain::TimerFormat;
+
+        let written = |format, seconds| timer_line(format, Duration::from_secs(seconds));
+        assert_eq!(written(TimerFormat::HoursMinutesSeconds, 0), "00:00:00");
+        assert_eq!(written(TimerFormat::HoursMinutesSeconds, 5), "00:00:05");
+        assert_eq!(written(TimerFormat::HoursMinutesSeconds, 5025), "01:23:45");
+        assert_eq!(written(TimerFormat::MinutesSeconds, 5), "00:05");
+        assert_eq!(written(TimerFormat::MinutesSeconds, 1425), "23:45");
+        // Past an hour the minutes keep counting rather than rolling into a
+        // field that is not being shown — 1:23:45 must not read as 23:45.
+        assert_eq!(written(TimerFormat::MinutesSeconds, 5025), "83:45");
+    }
+
+    /// The clock is whatever the machine's clock says, so what can be
+    /// asserted is its shape — and that it is not the fallback, which is
+    /// what a broken format description would leave behind.
+    #[test]
+    fn every_clock_format_writes_something_of_its_own_shape() {
+        use crate::domain::ClockFormat;
+
+        for (format, length, separators) in [
+            (ClockFormat::Time, 8, 2),
+            (ClockFormat::TimeToMinute, 5, 1),
+            (ClockFormat::DateAndTime, 19, 2),
+            (ClockFormat::Date, 10, 0),
+        ] {
+            let line = clock_line(format);
+            assert_eq!(line.len(), length, "{format:?} wrote {line:?}");
+            assert_eq!(
+                line.matches(':').count(),
+                separators,
+                "{format:?} wrote {line:?}"
+            );
+            assert!(
+                line.chars().any(|character| character.is_ascii_digit()),
+                "{format:?} wrote no digits at all: {line:?}"
+            );
+        }
     }
 
     /// The colour picker's alpha reaches the frame, so a caption can be

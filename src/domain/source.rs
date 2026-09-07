@@ -100,6 +100,158 @@ impl TextAlignment {
 /// Read at 1920x1080 from across a room, which is what a caption is for.
 pub const DEFAULT_FONT_SIZE: f32 = 72.0;
 
+/// What a Text Source says, as opposed to how it looks.
+///
+/// The three are one enum rather than a flag and a string because they are
+/// the same question — where the words come from — and only one answer can
+/// be true at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextMode {
+    /// What was typed, and nothing else. Redrawn when it is edited.
+    #[default]
+    Static,
+    /// The wall clock, redrawn as it moves.
+    Clock,
+    /// A stopwatch this Source owns, started and stopped from the Properties
+    /// dock — see [`TextTimer`].
+    Timer,
+}
+
+impl TextMode {
+    pub const ALL: [Self; 3] = [Self::Static, Self::Clock, Self::Timer];
+
+    pub(crate) fn storage_name(self) -> &'static str {
+        match self {
+            Self::Static => "static",
+            Self::Clock => "clock",
+            Self::Timer => "timer",
+        }
+    }
+
+    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "static" => Some(Self::Static),
+            "clock" => Some(Self::Clock),
+            "timer" => Some(Self::Timer),
+            _ => None,
+        }
+    }
+}
+
+/// How [`TextMode::Clock`] writes the time.
+///
+/// A fixed list rather than a format string the user types. A mistyped
+/// format is a Source that silently shows nothing, and there is no good place
+/// to report that — the caption *is* the report, and it is blank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClockFormat {
+    /// `14:32:07`
+    #[default]
+    Time,
+    /// `14:32`
+    TimeToMinute,
+    /// `2026-09-07 14:32:07`
+    DateAndTime,
+    /// `2026-09-07`
+    Date,
+}
+
+impl ClockFormat {
+    pub const ALL: [Self; 4] = [
+        Self::Time,
+        Self::TimeToMinute,
+        Self::DateAndTime,
+        Self::Date,
+    ];
+
+    pub(crate) fn storage_name(self) -> &'static str {
+        match self {
+            Self::Time => "time",
+            Self::TimeToMinute => "time-to-minute",
+            Self::DateAndTime => "date-and-time",
+            Self::Date => "date",
+        }
+    }
+
+    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "time" => Some(Self::Time),
+            "time-to-minute" => Some(Self::TimeToMinute),
+            "date-and-time" => Some(Self::DateAndTime),
+            "date" => Some(Self::Date),
+            _ => None,
+        }
+    }
+}
+
+/// How [`TextMode::Timer`] writes an elapsed duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimerFormat {
+    /// `01:23:45`
+    #[default]
+    HoursMinutesSeconds,
+    /// `23:45`, and `83:45` once it passes an hour — minutes keep counting
+    /// rather than rolling into a field that is not being shown.
+    MinutesSeconds,
+}
+
+impl TimerFormat {
+    pub const ALL: [Self; 2] = [Self::HoursMinutesSeconds, Self::MinutesSeconds];
+
+    pub(crate) fn storage_name(self) -> &'static str {
+        match self {
+            Self::HoursMinutesSeconds => "hours-minutes-seconds",
+            Self::MinutesSeconds => "minutes-seconds",
+        }
+    }
+
+    pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "hours-minutes-seconds" => Some(Self::HoursMinutesSeconds),
+            "minutes-seconds" => Some(Self::MinutesSeconds),
+            _ => None,
+        }
+    }
+}
+
+/// One Text Source's stopwatch.
+///
+/// Two fields rather than one instant, because a stopwatch that can be
+/// stopped has to remember what it already counted: `running_since` is the
+/// current run and `accumulated` is every run before it.
+///
+/// The instant is a wall-clock time and not an [`std::time::Instant`],
+/// because it is written to the project file and read back on the next run —
+/// a monotonic clock has no meaning across a restart. The cost is that
+/// setting the system clock while a timer runs moves the figure, which is
+/// the same bargain every stopwatch that survives a reboot makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextTimer {
+    /// Unix microseconds of the moment the current run began, or `None`
+    /// while the timer is stopped.
+    pub running_since: Option<i64>,
+    /// What every completed run added up to.
+    pub accumulated: Duration,
+}
+
+impl TextTimer {
+    pub fn running(&self) -> bool {
+        self.running_since.is_some()
+    }
+
+    /// What the timer reads, against a wall clock in unix microseconds.
+    ///
+    /// Saturating rather than wrapping: a system clock moved backwards past
+    /// the start of the run would otherwise read as an enormous duration
+    /// instead of standing still.
+    pub fn elapsed(&self, now: i64) -> Duration {
+        let Some(since) = self.running_since else {
+            return self.accumulated;
+        };
+        self.accumulated + Duration::from_micros(now.saturating_sub(since).max(0) as u64)
+    }
+}
+
 /// A line of text, and how to draw it.
 ///
 /// Kept as a string and a style rather than as pixels, for the reason
@@ -114,7 +266,14 @@ pub struct TextSourceSettings {
     /// different size — so changing it reopens the Source, exactly as a
     /// Drawing's surface does.
     pub size: [f32; 2],
+    /// What [`TextMode::Static`] shows. Kept while another mode is selected
+    /// rather than repurposed as its format, so switching to a clock and
+    /// back does not lose what was typed.
     pub text: String,
+    pub mode: TextMode,
+    pub clock_format: ClockFormat,
+    pub timer_format: TimerFormat,
+    pub timer: TextTimer,
     /// The font file to draw with, or `None` for the one this application
     /// already found for its own interface — see `crate::i18n::font`.
     ///

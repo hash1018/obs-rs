@@ -742,19 +742,128 @@ fn show_text(
     let mut edited = stored.clone();
     let mut committed: Option<SourceCommand> = None;
 
-    ui.label(i18n.text(TextKey::PropertiesText));
-    let field = ui.add(
-        egui::TextEdit::singleline(&mut edited.text)
-            .desired_width(f32::INFINITY)
-            .hint_text(i18n.text(TextKey::PropertiesText)),
-    );
-    // Committed when the field is let go rather than per keystroke, which is
-    // the same split the colour picker makes below. Return counts as letting
-    // go: a caption is one line, so there is nothing else it could mean.
-    if field.lost_focus() && edited.text != stored.text {
-        committed = Some(SourceCommand::SetText(item, edited.text.clone()));
+    ui.label(i18n.text(TextKey::PropertiesTextMode));
+    egui::ComboBox::from_id_salt(("text-mode", item.0))
+        .width(ui.available_width())
+        .selected_text(i18n.text(mode_key(edited.mode)))
+        .show_ui(ui, |ui| {
+            for mode in crate::domain::TextMode::ALL {
+                let label = i18n.text(mode_key(mode));
+                if ui.selectable_label(edited.mode == mode, label).clicked() {
+                    edited.mode = mode;
+                }
+            }
+        });
+    if edited.mode != stored.mode {
+        committed = Some(SourceCommand::SetTextMode(item, edited.mode));
     }
     ui.end_row();
+
+    // One row, three meanings — because all three answer the same question,
+    // "what does this say", differently per mode. A static caption is typed;
+    // a clock and a timer are chosen from what this build can write, so a
+    // mistyped format cannot produce a blank caption with nowhere to report
+    // why.
+    match edited.mode {
+        crate::domain::TextMode::Static => {
+            ui.label(i18n.text(TextKey::PropertiesText));
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut edited.text)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(i18n.text(TextKey::PropertiesText)),
+            );
+            // Committed when the field is let go rather than per keystroke,
+            // which is the same split the colour picker makes below. Return
+            // counts as letting go: a caption is one line, so there is
+            // nothing else it could mean.
+            if field.lost_focus() && edited.text != stored.text {
+                committed = Some(SourceCommand::SetText(item, edited.text.clone()));
+            }
+        }
+        crate::domain::TextMode::Clock => {
+            ui.label(i18n.text(TextKey::PropertiesTextFormat));
+            egui::ComboBox::from_id_salt(("clock-format", item.0))
+                .width(ui.available_width())
+                .selected_text(clock_example(edited.clock_format))
+                .show_ui(ui, |ui| {
+                    for format in crate::domain::ClockFormat::ALL {
+                        // Named by an example of itself. "Time to the
+                        // minute" is a description of `14:32` that is longer
+                        // than it and less clear, and it would need
+                        // translating where the example does not.
+                        if ui
+                            .selectable_label(edited.clock_format == format, clock_example(format))
+                            .clicked()
+                        {
+                            edited.clock_format = format;
+                        }
+                    }
+                });
+            if edited.clock_format != stored.clock_format {
+                committed = Some(SourceCommand::SetClockFormat(item, edited.clock_format));
+            }
+        }
+        crate::domain::TextMode::Timer => {
+            ui.label(i18n.text(TextKey::PropertiesTextFormat));
+            egui::ComboBox::from_id_salt(("timer-format", item.0))
+                .width(ui.available_width())
+                .selected_text(timer_example(edited.timer_format))
+                .show_ui(ui, |ui| {
+                    for format in crate::domain::TimerFormat::ALL {
+                        if ui
+                            .selectable_label(edited.timer_format == format, timer_example(format))
+                            .clicked()
+                        {
+                            edited.timer_format = format;
+                        }
+                    }
+                });
+            if edited.timer_format != stored.timer_format {
+                committed = Some(SourceCommand::SetTimerFormat(item, edited.timer_format));
+            }
+        }
+    }
+    ui.end_row();
+
+    // The stopwatch's own controls, and only while it is the mode: a start
+    // button on a clock would have nothing to start.
+    if edited.mode == crate::domain::TextMode::Timer {
+        ui.label(i18n.text(TextKey::PropertiesTimer));
+        ui.horizontal(|ui| {
+            let running = stored.timer.running();
+            let label = if running {
+                TextKey::PropertiesTimerStop
+            } else {
+                TextKey::PropertiesTimerStart
+            };
+            if ui.button(i18n.text(label)).clicked() {
+                committed = Some(if running {
+                    SourceCommand::StopTextTimer(item)
+                } else {
+                    SourceCommand::StartTextTimer(item)
+                });
+            }
+            if ui
+                .button(i18n.text(TextKey::PropertiesTimerReset))
+                .clicked()
+            {
+                committed = Some(SourceCommand::ResetTextTimer(item));
+            }
+            // What the Canvas is showing, beside the buttons, so a timer can
+            // be run without looking away from them. Its own reading rather
+            // than the Canvas's: this repaints with the interface and that
+            // with the engine's tick, and a tenth of a second between them is
+            // not worth routing a value through the snapshot for.
+            ui.monospace(elapsed_reading(stored));
+        });
+        ui.end_row();
+        // A running timer moves on its own, so the dock has to be asked to
+        // draw again — nothing else here would ask.
+        if stored.timer.running() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
 
     ui.label(i18n.text(TextKey::PropertiesFont));
     ui.horizontal(|ui| {
@@ -899,6 +1008,47 @@ fn show_text(
     if let Some(command) = committed {
         actions.push(UiAction::Project(ProjectCommand::Source(command)));
     }
+}
+
+fn mode_key(mode: crate::domain::TextMode) -> TextKey {
+    match mode {
+        crate::domain::TextMode::Static => TextKey::PropertiesTextModeStatic,
+        crate::domain::TextMode::Clock => TextKey::PropertiesTextModeClock,
+        crate::domain::TextMode::Timer => TextKey::PropertiesTextModeTimer,
+    }
+}
+
+/// Each clock format, written as itself against a fixed moment.
+///
+/// A sample rather than a name, and a fixed moment rather than the current
+/// one: a list whose every entry ticked while it was open is a list nobody
+/// can read an example off.
+fn clock_example(format: crate::domain::ClockFormat) -> &'static str {
+    match format {
+        crate::domain::ClockFormat::Time => "14:32:07",
+        crate::domain::ClockFormat::TimeToMinute => "14:32",
+        crate::domain::ClockFormat::DateAndTime => "2026-09-07 14:32:07",
+        crate::domain::ClockFormat::Date => "2026-09-07",
+    }
+}
+
+fn timer_example(format: crate::domain::TimerFormat) -> &'static str {
+    match format {
+        crate::domain::TimerFormat::HoursMinutesSeconds => "01:23:45",
+        crate::domain::TimerFormat::MinutesSeconds => "23:45",
+    }
+}
+
+/// What one Text Source's stopwatch reads, for the dock's own readout.
+fn elapsed_reading(settings: &crate::domain::TextSourceSettings) -> String {
+    let elapsed = settings.timer.elapsed(crate::clock::now_micros());
+    let seconds = elapsed.as_secs();
+    format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60
+    )
 }
 
 fn alignment_key(alignment: crate::domain::TextAlignment) -> TextKey {

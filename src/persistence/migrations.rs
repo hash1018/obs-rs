@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -301,6 +301,40 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             );
 
             PRAGMA user_version = 19;",
+        )?;
+    }
+    if current_version < 20 {
+        // What a Text Source says, as opposed to how it looks: a typed line,
+        // the wall clock, or a stopwatch of its own.
+        //
+        // `text` is left alone rather than doubling as the clock's format.
+        // One column per mode's settings means switching to a clock and back
+        // returns what was typed instead of having eaten it — and a format
+        // is a choice from a list here, not a string, because a mistyped
+        // format description produces a blank caption and there is nowhere
+        // to report that: the caption *is* where a Source reports.
+        //
+        // The stopwatch is two columns for the reason a stopwatch has two
+        // hands: `timer_running_since` is the run in progress and
+        // `timer_accumulated_us` is every run before it. The first is unix
+        // microseconds rather than anything monotonic because it is written
+        // to this file and read back on a later launch, where a monotonic
+        // clock means nothing.
+        transaction.execute_batch(
+            "ALTER TABLE text_source_settings
+                ADD COLUMN mode TEXT NOT NULL DEFAULT 'static'
+                    CHECK (mode IN ('static', 'clock', 'timer'));
+             ALTER TABLE text_source_settings
+                ADD COLUMN clock_format TEXT NOT NULL DEFAULT 'time';
+             ALTER TABLE text_source_settings
+                ADD COLUMN timer_format TEXT NOT NULL DEFAULT 'hours-minutes-seconds';
+             ALTER TABLE text_source_settings
+                ADD COLUMN timer_running_since INTEGER;
+             ALTER TABLE text_source_settings
+                ADD COLUMN timer_accumulated_us INTEGER NOT NULL DEFAULT 0
+                    CHECK (timer_accumulated_us >= 0);
+
+            PRAGMA user_version = 20;",
         )?;
     }
     transaction.commit()?;
