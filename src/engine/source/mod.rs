@@ -96,12 +96,18 @@ pub(in crate::engine) struct OpenSource {
     /// The Source's filters as they are running, in chain order, each with
     /// the handle that reaches it.
     ///
-    /// Empty for a Source with none, which is most of them. What is kept
-    /// here is only what can be changed without rebuilding: a filter's
-    /// settings and whether it is on. Adding, removing or reordering one
-    /// changes the chain itself, so `reconcile` reopens the Source instead
-    /// — see [`filters::shape`].
+    /// Empty for a Source with none, which is most of them. Settings and the
+    /// enable flag reach the running elements through these; adding,
+    /// removing and reordering go through [`filter_rack`](Self::filter_rack)
+    /// instead, and this is replaced with what that answers.
     pub(in crate::engine) filters: Vec<filters::OpenFilter>,
+    /// The rack those filters sit in, for the Source kinds that have one.
+    ///
+    /// `None` for a kind not wired to `filters` yet, which is every kind but
+    /// the camera today. A Source with one can have its whole filter list
+    /// exchanged without being reopened — which is the point, since
+    /// reopening a camera is a visible stall and on Wayland a portal dialog.
+    pub(in crate::engine) filter_rack: Option<filters::FilterRack>,
 }
 
 /// The part of a media file Source that can be changed while it plays.

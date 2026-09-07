@@ -45,22 +45,29 @@ pub(in crate::engine) fn open(
         format.width,
         format.height,
     )?;
-    // Filters work in BGRA, so a camera with any gets one conversion in
-    // front of them and its layer is BGRA from there. One with none is
-    // untouched, NV12 all the way to the compositor as before.
-    let (filter_chain, filters) = filters::build(
+    // Filters work in BGRA, so a rack with any in it puts one conversion at
+    // the head and the layer is BGRA from there. An empty one is untouched,
+    // NV12 all the way to the compositor as before.
+    let (rack, filter_rack) = filters::rack(
         &name,
         device,
         filters::ChainFormat::Nv12,
-        &item.filters,
         format.width,
         format.height,
-    )?;
+    );
+    // Filled before the pipeline runs, so the first frame is already keyed:
+    // a rack picks its contents up on the next buffer, and there is not one
+    // yet.
+    let filters = filter_rack.refill(&item.filters)?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let chain = context.branch().queue("camera", QUEUE_DEPTH).pipe(upload);
-        let branch = filter_chain.append(chain).to(sink)?;
+        let branch = context
+            .branch()
+            .queue("camera", QUEUE_DEPTH)
+            .pipe(upload)
+            .pipe(rack)
+            .to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -74,6 +81,7 @@ pub(in crate::engine) fn open(
         name,
         refreshed_token: None,
         filters,
+        filter_rack: Some(filter_rack),
         showing: true,
         running: true,
         pushed: None,

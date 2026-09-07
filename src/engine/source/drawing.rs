@@ -194,6 +194,7 @@ fn opened(
         name,
         refreshed_token: None,
         filters: Vec::new(),
+        filter_rack: None,
         showing: true,
         running: true,
         pushed: Some(PushedSurface {

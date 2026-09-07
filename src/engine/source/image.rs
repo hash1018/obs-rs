@@ -125,6 +125,7 @@ fn opened(
         name,
         refreshed_token: None,
         filters: Vec::new(),
+        filter_rack: None,
         showing: true,
         running: true,
         // Held rather than dropped: an `AppSource` runs only while a handle to

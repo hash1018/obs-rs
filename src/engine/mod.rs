@@ -1634,22 +1634,47 @@ fn retry_missing(
 
 /// Brings the running Sources in line with what the project now holds.
 /// Applies a Source's filters as the project now has them, and answers
-/// whether that needed more than applying.
+/// whether that needed the Source reopening after all.
 ///
 /// Settings and the enable flag reach the running elements through the
 /// handles kept beside them, which is the whole reason those are kept: a
 /// slider must not reopen a camera, and on Wayland a reopen is a portal
-/// dialog. Adding, removing or reordering one is a different question — a
-/// chain is only assembled when a Source is opened, so that answer is `true`
-/// and the Source is rebuilt.
-fn refresh_filters(source: &OpenSource, item: &SceneItemSnapshot) -> bool {
-    if filters::running_shape(&source.filters) != filters::shape(&item.filters) {
-        return true;
+/// dialog. Adding, removing and reordering used to be a different question,
+/// because a chain was only assembled when a Source was opened; they are now
+/// a refill of the Source's rack, which the frames flow through the whole
+/// time.
+///
+/// The answer is therefore `true` in two cases only: a Source whose kind has
+/// no rack, and one whose refill failed. Building a filter fails on a lost or
+/// exhausted device, which is what reopening the Source is the recovery for —
+/// so the old path is what a failure falls back to rather than something that
+/// no longer exists.
+fn refresh_filters(source: &mut OpenSource, item: &SceneItemSnapshot) -> bool {
+    if filters::running_shape(&source.filters) == filters::shape(&item.filters) {
+        for (open, stored) in source.filters.iter().zip(&item.filters) {
+            open.apply(stored);
+        }
+        return false;
     }
-    for (open, stored) in source.filters.iter().zip(&item.filters) {
-        open.apply(stored);
+
+    // Answered before the match so the borrow of the rack ends with it, and
+    // the new handles can be written back into the same Source.
+    let refilled = match &source.filter_rack {
+        Some(rack) => rack.refill(&item.filters),
+        None => return true,
+    };
+    match refilled {
+        Ok(filters) => {
+            // Built from the stored settings, with the stored enable flag
+            // already set, so there is nothing left to apply to them.
+            source.filters = filters;
+            false
+        }
+        Err(error) => {
+            eprintln!("\"{}\": could not rebuild the filters: {error}", item.name);
+            true
+        }
     }
-    false
 }
 
 fn reconcile(

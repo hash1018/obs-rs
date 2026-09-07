@@ -98,6 +98,7 @@ pub(in crate::engine) fn open(
             name,
             refreshed_token,
             filters: Vec::new(),
+            filter_rack: None,
             showing: true,
             running: true,
             pushed: None,

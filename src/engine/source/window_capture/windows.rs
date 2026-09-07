@@ -67,6 +67,7 @@ pub(in crate::engine) fn open(
         name,
         refreshed_token: None,
         filters: Vec::new(),
+        filter_rack: None,
         // `None` rather than a guess: Windows Graphics Capture settles the
         // frame size once the capture is running and `WgcCaptureSource`
         // reports none, so there is nothing here to correct the stored hint

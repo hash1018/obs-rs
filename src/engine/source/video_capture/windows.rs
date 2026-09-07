@@ -43,30 +43,37 @@ pub(in crate::engine) fn open(
 
     // NV12 in, and the compositor converts it on the GPU exactly as it does
     // for a hardware-decoded video file, so an unfiltered camera converts
-    // nothing on the way. One with filters does: they work in BGRA, and
-    // `filters::build` puts the conversion in front of them.
+    // nothing on the way. One with filters does: they work in BGRA, and the
+    // rack puts the conversion at the head of what it holds.
     let upload = D3d11Upload::new(
         format!("{name}-upload"),
         device,
         format.width,
         format.height,
     );
-    let (filter_chain, filters) = filters::build(
+    let (rack, filter_rack) = filters::rack(
         &name,
         device,
         d3d_context,
         filters::ChainFormat::Nv12,
-        &item.filters,
         format.width,
         format.height,
-    )?;
+    );
+    // Filled before the pipeline runs, so the first frame is already keyed:
+    // a rack picks its contents up on the next buffer, and there is not one
+    // yet.
+    let filters = filter_rack.refill(&item.filters)?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let chain = context.branch().queue("camera", QUEUE_DEPTH).pipe(upload);
-        let branch = filter_chain.append(chain).to(sink)?;
+        let branch = context
+            .branch()
+            .queue("camera", QUEUE_DEPTH)
+            .pipe(upload)
+            .pipe(rack)
+            .to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -79,6 +86,7 @@ pub(in crate::engine) fn open(
         name,
         refreshed_token: None,
         filters,
+        filter_rack: Some(filter_rack),
         // What the camera negotiated, which is not always the mode that was
         // asked for — see `start`, where a stored mode the device no longer
         // offers falls back to its own.

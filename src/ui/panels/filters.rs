@@ -112,10 +112,12 @@ fn show_list(
             for filter in &item.filters {
                 ui.horizontal(|ui| {
                     let mut enabled = filter.enabled;
-                    // The one control here that never rebuilds anything: a
-                    // disabled filter stays in the chain and passes frames
-                    // straight through, so this is a handle call rather than
-                    // a camera restarting.
+                    // The cheapest control here, and the only one that
+                    // changes nothing about the chain: a disabled filter
+                    // stays in it and passes frames straight through, so
+                    // this is one handle call. The buttons below rebuild
+                    // what is in the Source's rack, which is still not a
+                    // camera restarting.
                     if ui.checkbox(&mut enabled, "").changed() {
                         actions.push(command(SourceCommand::SetFilterEnabled(filter.id, enabled)));
                     }

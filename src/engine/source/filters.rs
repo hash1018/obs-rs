@@ -1,44 +1,52 @@
 //! Turning a Source's stored filter list into elements in its chain.
 //!
-//! Each Source kind builds its own branch, so each calls in here just before
-//! it terminates at the compositor. A Source with no filters gets exactly the
-//! chain it had before this existed — [`FilterChain::append`] hands the
-//! builder straight back, no element and no cost.
+//! Each Source kind that runs filters puts a [`Rack`] in its branch, just
+//! before it terminates at the compositor, and hands the [`FilterRack`] back
+//! for [`OpenSource`](super::OpenSource) to keep. A Source with no filters
+//! gets an empty rack, which is a wire: the buffer that arrives is the buffer
+//! that leaves, not a copy of it.
 //!
-//! # Two calls, because the handles have to escape
+//! # Why a rack and not a chain
 //!
-//! A chain is assembled inside the closure `Pipeline::new` takes, and that
-//! closure is where the elements have to end up. But a chroma key hands out
-//! its [`ChromaKeyHandle`](media_pp::elements::ChromaKeyHandle) at
-//! construction, and the handle has to reach [`OpenSource`] so a slider can
-//! reach the element afterwards.
+//! A branch is assembled once, inside the closure `Pipeline::new` takes, and
+//! keeps its shape for as long as it exists. Adding a filter therefore used
+//! to mean building the branch again, which means reopening the Source — a
+//! camera going dark and coming back, and on Wayland a portal dialog for a
+//! checkbox. A rack is the one place in a media-pp graph whose contents can
+//! be exchanged while frames flow, so adding, removing and reordering are all
+//! [`FilterRack::refill`] now, and the picture never stops.
 //!
-//! So [`build`] runs outside the closure and answers with both halves: the
-//! elements, boxed into a `FilterChain` that moves in, and the handles, which
-//! stay behind. `Box<dyn Filter>` would have avoided the split, and
-//! `ChainBuilder::pipe` does not take one — which is why the elements travel
-//! as an enum per kind rather than as trait objects.
+//! What a rack cannot absorb is what the filters cannot do without: a device,
+//! and the picture size they were built for. Those are what [`FilterRack`]
+//! holds beside the handle, so a refill can build the new elements without
+//! the engine loop having to know which backend it is on.
 //!
 //! # The bridge
 //!
 //! Every filter here works in BGRA, and half the Sources hand over NV12 — a
-//! camera on either platform, and anything hardware-decoded. So a chain that
-//! has filters and does not already carry BGRA gets one conversion in front
-//! of them, and the compositor takes the keyed BGRA layer directly: both
+//! camera on either platform, and anything hardware-decoded. So a rack that
+//! is filled and does not already carry BGRA gets one conversion at the head
+//! of it, and the compositor takes the keyed BGRA layer directly: both
 //! backends accept a layer of either format and read which from the frame.
+//! An emptied rack drops the conversion with everything else, and the layer
+//! is NV12 again on the next frame.
 //!
 //! Nothing converts back. On Linux that makes a filtered Color Source
 //! *cheaper* than an unfiltered one, which converts to NV12 today for no
 //! reason this still holds — see `color::open`.
 
+use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
+use media_pp::element::Filter as PpFilter;
+use media_pp::elements::{Rack, RackHandle};
+
 use crate::domain::{Filter, FilterId, FilterSettings};
 
 use super::super::backend::BackendError;
 
-/// What the chain carries where the filters are appended.
+/// What the chain carries where the rack sits.
 ///
-/// The caller knows this and the chain does not: it is whatever the last
-/// element before this point produces, and that differs per Source kind.
+/// The caller knows this and the rack does not: it is whatever the last
+/// element before it produces, and that differs per Source kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine) enum ChainFormat {
     /// What every filter here wants, so no bridge is inserted.
@@ -52,8 +60,8 @@ pub(in crate::engine) enum ChainFormat {
     /// the key just wrote.
     #[allow(dead_code)]
     Bgra,
-    /// A camera, or anything decoded. Bridged to BGRA when there are filters
-    /// to run, and left alone when there are not.
+    /// A camera, or anything decoded. Bridged to BGRA when the rack has
+    /// filters to run, and left alone when it does not.
     Nv12,
 }
 
@@ -65,6 +73,15 @@ pub(in crate::engine) struct OpenFilter {
     pub(in crate::engine) id: FilterId,
     pub(in crate::engine) handle: FilterHandle,
 }
+
+/// What a backend answers a build with: the elements to put in the rack, in
+/// order, and the handles for the ones the project can retune afterwards.
+///
+/// Two vectors of different lengths, which is why they are not one. A bridge
+/// is an element with nothing to control, so it is in the first and not the
+/// second — and the second is what `OpenSource::filters` becomes, which must
+/// line up with the stored list rather than with the chain.
+type Built = Result<(Vec<Box<dyn PpFilter>>, Vec<OpenFilter>), BackendError>;
 
 /// The runtime control for one filter, by kind.
 pub(in crate::engine) enum FilterHandle {
@@ -79,12 +96,12 @@ impl OpenFilter {
         }
     }
 
-    /// Applies what the project now says, without rebuilding anything.
+    /// Applies what the project now says, without building anything.
     ///
-    /// This is the whole reason the handles are kept. Everything a filter
-    /// carries except its identity and its place in the chain can be changed
-    /// through one of these, and the two that cannot are exactly the two
-    /// that make [`crate::engine`] reopen the Source instead.
+    /// This is what the handles are kept for. Everything a filter carries
+    /// except its identity and its place in the chain can be changed through
+    /// one of these; the two that cannot are what makes the engine refill the
+    /// rack instead — see [`shape`].
     pub(in crate::engine) fn apply(&self, filter: &Filter) {
         match &self.handle {
             FilterHandle::ChromaKey(handle) => handle.set_enabled(filter.enabled),
@@ -106,11 +123,60 @@ impl OpenFilter {
     }
 }
 
+/// A Source's rack, and everything needed to fill it again.
+///
+/// Held by the running Source rather than by its branch: what is inside the
+/// rack belongs to the rack, and this is only the way back to it. Dropping
+/// this stops nothing — the rack keeps running whatever it was last given.
+pub(in crate::engine) struct FilterRack {
+    handle: RackHandle,
+    backend: backend::Backend,
+}
+
+impl FilterRack {
+    /// Builds the elements for `filters` and swaps them in, answering the
+    /// handles that reach the ones now running.
+    ///
+    /// Atomic from the caller's side: nothing is swapped in until every
+    /// element has been built, so a filter that fails to construct leaves the
+    /// rack running exactly what it was. The swap itself takes effect on the
+    /// next frame.
+    ///
+    /// An empty `filters` empties the rack, and with it the bridge — a Source
+    /// whose last filter was removed costs what it did before any were added.
+    pub(in crate::engine) fn refill(
+        &self,
+        filters: &[Filter],
+    ) -> Result<Vec<OpenFilter>, BackendError> {
+        let (elements, open) = backend::build(&self.backend, filters)?;
+        self.handle
+            .replace(elements)
+            .map_err(|error| BackendError::from(error.to_string()))?;
+        Ok(open)
+    }
+}
+
+/// The rack every Source with filters puts in its branch.
+///
+/// Its contracts are declared rather than derived — what is in one changes,
+/// so nothing could derive them — and what they declare is the one thing true
+/// of this rack whatever it holds: decoded video frames, in the backend's own
+/// memory. The pixel format varies within that (NV12 in, BGRA out once a
+/// bridge is there), and a contract naming one would refuse the other.
+fn new_rack(name: &str, memory: MemoryDomain) -> (Rack, RackHandle) {
+    let port = PortContract::frame(MediaKind::VideoFrame, memory);
+    Rack::new(
+        format!("{name}-filters"),
+        InputContract::Fixed(port),
+        OutputContract::Fixed(port),
+    )
+}
+
 /// What identifies a chain as the one that is running.
 ///
 /// Which filters, of which kinds, in which order — and nothing else. Change
-/// any of it and the branch has to be rebuilt, which means reopening the
-/// Source; change anything else and [`OpenFilter::apply`] is enough.
+/// any of it and the rack is refilled; change anything else and
+/// [`OpenFilter::apply`] is enough.
 pub(in crate::engine) fn shape(filters: &[Filter]) -> Vec<(FilterId, crate::domain::FilterKind)> {
     filters
         .iter()
@@ -135,101 +201,98 @@ pub(in crate::engine) fn running_shape(
 }
 
 #[cfg(target_os = "windows")]
-pub(in crate::engine) use windows::build;
+use windows as backend;
+#[cfg(target_os = "windows")]
+pub(in crate::engine) use windows::rack;
 
 #[cfg(target_os = "linux")]
-pub(in crate::engine) use linux::build;
+use linux as backend;
+#[cfg(target_os = "linux")]
+pub(in crate::engine) use linux::rack;
 
 #[cfg(target_os = "windows")]
 mod windows {
     use std::sync::{Arc, Mutex};
 
-    use media_pp::elements::{D3d11ChromaKey, D3d11Scaler, D3d11ScalerFormat};
-    use media_pp::pipeline::ChainBuilder;
+    use media_pp::contract::MemoryDomain;
+    use media_pp::element::Filter as PpFilter;
+    use media_pp::elements::{D3d11ChromaKey, D3d11Scaler, D3d11ScalerFormat, Rack};
     use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
-    use super::{BackendError, ChainFormat, Filter, FilterHandle, FilterSettings, OpenFilter};
+    use super::{
+        BackendError, ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter,
+    };
 
-    /// One filter built and waiting to be piped.
+    /// What a refill needs and the rack cannot hold for it.
     ///
-    /// An enum rather than `Box<dyn Filter>` because `ChainBuilder::pipe`
-    /// takes its element by value and by type — see this module's own docs.
-    enum Built {
-        ChromaKey(D3d11ChromaKey),
+    /// The device is owned rather than borrowed: this outlives the call that
+    /// opened the Source, and a `windows-rs` interface is a refcounted
+    /// pointer, so keeping one is a clone rather than a lifetime.
+    pub(super) struct Backend {
+        name: String,
+        device: ID3D11Device,
+        context: Arc<Mutex<ID3D11DeviceContext>>,
+        incoming: ChainFormat,
+        width: u32,
+        height: u32,
     }
 
-    /// The elements a Source's filters become, ready to move into the
-    /// closure that assembles its chain.
-    pub(in crate::engine) struct FilterChain {
-        /// The conversion in front of them, for a Source that does not
-        /// already hand over BGRA. `None` when it does, and when there are
-        /// no filters at all.
-        bridge: Option<D3d11Scaler>,
-        built: Vec<Built>,
-    }
-
-    impl FilterChain {
-        /// Appends everything onto `chain`, in order.
-        ///
-        /// A Source with no filters gets its builder back untouched, which
-        /// is what keeps this out of the way of every Source that has none.
-        pub(in crate::engine) fn append(self, chain: ChainBuilder) -> ChainBuilder {
-            let mut chain = match self.bridge {
-                Some(bridge) => chain.pipe(bridge),
-                None => chain,
-            };
-            for built in self.built {
-                chain = match built {
-                    Built::ChromaKey(key) => chain.pipe(key),
-                };
-            }
-            chain
-        }
-    }
-
-    /// Builds a Source's filters, and the handles that reach them afterwards.
+    /// Creates a Source's rack, and the way back to it.
     ///
     /// `width`/`height` are the picture the filters will see, which is the
     /// Source's own — every filter here is a per-pixel transform and none of
     /// them resizes.
-    pub(in crate::engine) fn build(
+    pub(in crate::engine) fn rack(
         name: &str,
         device: &ID3D11Device,
         context: Arc<Mutex<ID3D11DeviceContext>>,
         incoming: ChainFormat,
-        filters: &[Filter],
         width: u32,
         height: u32,
-    ) -> Result<(FilterChain, Vec<OpenFilter>), BackendError> {
-        if filters.is_empty() {
-            return Ok((
-                FilterChain {
-                    bridge: None,
-                    built: Vec::new(),
-                },
-                Vec::new(),
-            ));
-        }
+    ) -> (Rack, FilterRack) {
+        let (rack, handle) = super::new_rack(name, MemoryDomain::D3d11);
+        let backend = Backend {
+            name: name.to_owned(),
+            device: device.clone(),
+            context,
+            incoming,
+            width,
+            height,
+        };
+        (rack, FilterRack { handle, backend })
+    }
 
+    pub(super) fn build(backend: &Backend, filters: &[Filter]) -> super::Built {
+        if filters.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let Backend {
+            name,
+            device,
+            context,
+            incoming,
+            width,
+            height,
+        } = backend;
+
+        let mut elements: Vec<Box<dyn PpFilter>> = Vec::with_capacity(filters.len() + 1);
         // `D3d11ScalerFormat::Bgra` names the chroma key among the things it
         // is for, so this is the conversion the library already intended
         // rather than one invented here.
-        let bridge = match incoming {
-            ChainFormat::Bgra => None,
-            ChainFormat::Nv12 => Some(
+        if *incoming == ChainFormat::Nv12 {
+            elements.push(Box::new(
                 D3d11Scaler::new(
                     format!("{name}-to-bgra"),
                     device,
                     context.clone(),
                     D3d11ScalerFormat::Bgra,
-                    width,
-                    height,
+                    *width,
+                    *height,
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?,
-            ),
-        };
+            ));
+        }
 
-        let mut built = Vec::with_capacity(filters.len());
         let mut open = Vec::with_capacity(filters.len());
         for filter in filters {
             match &filter.settings {
@@ -242,7 +305,7 @@ mod windows {
                     )
                     .map_err(|error| BackendError::from(error.to_string()))?;
                     handle.set_enabled(filter.enabled);
-                    built.push(Built::ChromaKey(element));
+                    elements.push(Box::new(element));
                     open.push(OpenFilter {
                         id: filter.id,
                         handle: FilterHandle::ChromaKey(handle),
@@ -250,81 +313,77 @@ mod windows {
                 }
             }
         }
-        Ok((FilterChain { bridge, built }, open))
+        Ok((elements, open))
     }
 }
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use media_pp::elements::{CudaChromaKey, CudaConverter, CudaDevice, CudaFrameFormat};
-    use media_pp::pipeline::ChainBuilder;
+    use media_pp::contract::MemoryDomain;
+    use media_pp::element::Filter as PpFilter;
+    use media_pp::elements::{CudaChromaKey, CudaConverter, CudaDevice, CudaFrameFormat, Rack};
 
-    use super::{BackendError, ChainFormat, Filter, FilterHandle, FilterSettings, OpenFilter};
+    use super::{
+        BackendError, ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter,
+    };
 
-    /// One filter built and waiting to be piped — see the Windows twin.
-    enum Built {
-        ChromaKey(CudaChromaKey),
+    /// What a refill needs and the rack cannot hold for it — see the Windows
+    /// twin. A `CudaDevice` is refcounted the same way, so this is a clone
+    /// rather than a lifetime.
+    pub(super) struct Backend {
+        name: String,
+        device: CudaDevice,
+        incoming: ChainFormat,
+        width: u32,
+        height: u32,
     }
 
-    /// The elements a Source's filters become, ready to move into the
-    /// closure that assembles its chain.
-    pub(in crate::engine) struct FilterChain {
-        /// The conversion in front of them, for a Source that does not
-        /// already hand over BGRA.
-        bridge: Option<CudaConverter>,
-        built: Vec<Built>,
-    }
-
-    impl FilterChain {
-        pub(in crate::engine) fn append(self, chain: ChainBuilder) -> ChainBuilder {
-            let mut chain = match self.bridge {
-                Some(bridge) => chain.pipe(bridge),
-                None => chain,
-            };
-            for built in self.built {
-                chain = match built {
-                    Built::ChromaKey(key) => chain.pipe(key),
-                };
-            }
-            chain
-        }
-    }
-
-    pub(in crate::engine) fn build(
+    pub(in crate::engine) fn rack(
         name: &str,
         device: &CudaDevice,
         incoming: ChainFormat,
-        filters: &[Filter],
         width: u32,
         height: u32,
-    ) -> Result<(FilterChain, Vec<OpenFilter>), BackendError> {
-        if filters.is_empty() {
-            return Ok((
-                FilterChain {
-                    bridge: None,
-                    built: Vec::new(),
-                },
-                Vec::new(),
-            ));
-        }
+    ) -> (Rack, FilterRack) {
+        let (rack, handle) = super::new_rack(name, MemoryDomain::Cuda);
+        let backend = Backend {
+            name: name.to_owned(),
+            device: device.clone(),
+            incoming,
+            width,
+            height,
+        };
+        (rack, FilterRack { handle, backend })
+    }
 
+    pub(super) fn build(backend: &Backend, filters: &[Filter]) -> super::Built {
+        if filters.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let Backend {
+            name,
+            device,
+            incoming,
+            width,
+            height,
+        } = backend;
+
+        let mut elements: Vec<Box<dyn PpFilter>> = Vec::with_capacity(filters.len() + 1);
         // `CudaScaler` cannot do this — it refuses a YUV/RGB pair either way
         // — which is why `CudaConverter` grew the direction.
-        let bridge = match incoming {
-            ChainFormat::Bgra => None,
-            ChainFormat::Nv12 => Some(
+        if *incoming == ChainFormat::Nv12 {
+            elements.push(Box::new(
                 CudaConverter::new(
                     format!("{name}-to-bgra"),
                     device,
                     CudaFrameFormat::Bgra,
-                    width,
-                    height,
+                    *width,
+                    *height,
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?,
-            ),
-        };
+            ));
+        }
 
-        let mut built = Vec::with_capacity(filters.len());
         let mut open = Vec::with_capacity(filters.len());
         for filter in filters {
             match &filter.settings {
@@ -332,13 +391,13 @@ mod linux {
                     let (element, handle) = CudaChromaKey::new(
                         format!("{name}-key-{}", filter.id.0),
                         device,
-                        width,
-                        height,
+                        *width,
+                        *height,
                         super::chroma_key_options(settings),
                     )
                     .map_err(|error| BackendError::from(error.to_string()))?;
                     handle.set_enabled(filter.enabled);
-                    built.push(Built::ChromaKey(element));
+                    elements.push(Box::new(element));
                     open.push(OpenFilter {
                         id: filter.id,
                         handle: FilterHandle::ChromaKey(handle),
@@ -346,7 +405,7 @@ mod linux {
                 }
             }
         }
-        Ok((FilterChain { bridge, built }, open))
+        Ok((elements, open))
     }
 }
 
