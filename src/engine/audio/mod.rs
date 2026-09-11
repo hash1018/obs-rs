@@ -124,6 +124,24 @@ pub(in crate::engine) fn monitors(monitored: bool, monitoring: bool) -> bool {
     monitored && monitoring
 }
 
+/// [`monitors`] for one of the mixer's own sources, which adds the question
+/// the dock asks before it draws a button: whether this kind is worth
+/// playing back at all.
+///
+/// Asked here as well as there, because the dock is not the only way a
+/// stored flag arrives. Monitoring was offered on every channel before it
+/// was taken off Desktop Audio, and a project saved in between still says
+/// Desktop Audio is monitored — with no button left to say otherwise. The
+/// engine believed it, and played the desktop into the endpoint it was
+/// capturing the desktop from: a loop whose gain is the fader's, which
+/// echoes below unity and runs away above it.
+fn source_monitors(source: &AudioSourceSnapshot, monitoring: bool) -> bool {
+    monitors(
+        source.monitored && source.kind.can_be_monitored(),
+        monitoring,
+    )
+}
+
 /// One source that is open, in its own pipeline, and how it was opened.
 struct OpenAudioSource {
     /// This source's capture, tee and fader. Dropping it stops that one
@@ -431,7 +449,7 @@ impl AudioEngine {
                 self.close(source.id);
                 continue;
             }
-            let wanted = monitors(source.monitored, self.monitor_output.is_some());
+            let wanted = source_monitors(source, self.monitor_output.is_some());
             match self.sources.get(&source.id) {
                 // Already open on the endpoint asked for, and feeding the
                 // mixes it should: the fader and the mute button are all that
@@ -519,7 +537,7 @@ impl AudioEngine {
             .as_ref()
             .map(|monitor| monitor.handle.clone())
             .filter(|_| self.monitor_output.is_some());
-        let monitored = monitors(source.monitored, monitor.is_some());
+        let monitored = source_monitors(source, monitor.is_some());
 
         let meter = Meter::new(self.meter_wake.clone());
         match open_source(&mixer, monitor.as_ref(), &name, source, monitored, meter) {
@@ -832,5 +850,38 @@ mod tests {
         assert!(!monitors(true, false));
         assert!(!monitors(false, true));
         assert!(!monitors(false, false));
+    }
+
+    /// Desktop Audio stored as monitored is not monitored.
+    ///
+    /// The project that found this had exactly that: monitoring switched on
+    /// for Desktop Audio while every channel still offered it, then the
+    /// control taken away and the flag left behind. With a monitoring device
+    /// set, the desktop was played into the endpoint it is captured from,
+    /// and raising its fader past unity made the echo run away.
+    #[test]
+    fn desktop_audio_is_never_played_back_whatever_the_project_says() {
+        use crate::domain::AudioSourceKind;
+
+        let source = |kind| AudioSourceSnapshot {
+            id: AudioSourceId(1),
+            name: "a source".to_owned(),
+            kind,
+            device: None,
+            gain_db: 0.0,
+            muted: false,
+            monitored: true,
+            peak_db: None,
+            running: true,
+        };
+
+        assert!(
+            !source_monitors(&source(AudioSourceKind::Output), true),
+            "an output stored as monitored must still stay out of the monitor mix"
+        );
+        assert!(
+            source_monitors(&source(AudioSourceKind::Input), true),
+            "while an input stored as monitored is exactly what monitoring is for"
+        );
     }
 }

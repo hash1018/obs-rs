@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -337,6 +337,22 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 20;",
         )?;
     }
+    if current_version < 21 {
+        // Clears a flag nothing can clear any more.
+        //
+        // Monitoring was offered on every channel for a while before Desktop
+        // Audio lost the control, and a project that switched it on in
+        // between kept the value with no button left to switch it off. The
+        // engine no longer acts on it either — see `source_monitors` — so
+        // this is for whatever reads the column next: a flag that says
+        // something the application refuses to do is a trap for the first
+        // person who takes it at its word.
+        transaction.execute_batch(
+            "UPDATE audio_sources SET monitored = 0 WHERE kind = 'output';
+
+            PRAGMA user_version = 21;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -459,6 +475,35 @@ mod tests {
 
         assert!(!monitored.is_empty(), "the schema ships two audio sources");
         assert!(monitored.iter().all(|on| *on == 0), "got {monitored:?}");
+    }
+
+    /// A project saved while Desktop Audio could still be monitored comes
+    /// back with that cleared — and only that: a monitored microphone is a
+    /// choice somebody made and can still see.
+    #[test]
+    fn a_monitored_desktop_is_cleared_and_a_monitored_microphone_is_kept() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "UPDATE audio_sources SET monitored = 1;
+                 PRAGMA user_version = 20;",
+            )
+            .unwrap();
+
+        run(&mut connection).unwrap();
+
+        let monitored = |kind: &str| -> i64 {
+            connection
+                .query_row(
+                    "SELECT monitored FROM audio_sources WHERE kind = ?1",
+                    [kind],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(monitored("output"), 0, "Desktop Audio is not monitored");
+        assert_eq!(monitored("input"), 1, "the microphone keeps its choice");
     }
 
     #[test]
