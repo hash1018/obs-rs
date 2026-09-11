@@ -1,4 +1,5 @@
 mod action;
+mod dialog;
 mod docking;
 mod editor;
 mod panels;

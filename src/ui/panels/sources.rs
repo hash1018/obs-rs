@@ -251,17 +251,14 @@ fn show_stream_dialog(
         return;
     };
 
-    let mut open = true;
     let mut add = false;
     let mut cancel = false;
     let waiting = dialog.probe.is_some();
-    egui::Window::new(i18n.text(TextKey::SourceStreamTitle))
-        .id(egui::Id::new("network_stream_dialog"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "network_stream_dialog",
+        &i18n.text(TextKey::SourceStreamTitle),
+        |ui| {
             ui.set_min_width(360.0);
             ui.label(i18n.text(TextKey::SourceStreamPrompt));
             ui.add_space(4.0);
@@ -338,9 +335,10 @@ fn show_stream_dialog(
                     cancel = true;
                 }
             });
-        });
+        },
+    );
 
-    if cancel || !open {
+    if cancel || shown.escaped {
         state.stream = None;
         return;
     }
@@ -770,16 +768,13 @@ fn show_add_dialog(
         return;
     }
 
-    let mut open = true;
     let mut add_requested = false;
     let mut cancel = false;
-    egui::Window::new(i18n.text(TextKey::SourceAddTitle))
-        .id(egui::Id::new("add_source_dialog"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "add_source_dialog",
+        &i18n.text(TextKey::SourceAddTitle),
+        |ui| {
             ui.set_min_width(280.0);
             ui.label(i18n.text(TextKey::SourceType));
             ui.add_space(4.0);
@@ -810,9 +805,11 @@ fn show_add_dialog(
                     cancel = true;
                 }
             });
-        });
+        },
+    );
 
-    if cancel {
+    let mut open = true;
+    if cancel || shown.escaped {
         open = false;
     } else if add_requested {
         match state.selected_add_kind() {
@@ -996,13 +993,11 @@ fn show_camera_dialog(
     let mut add = false;
     let mut back = false;
     let mut cancel = false;
-    egui::Window::new(i18n.text(TextKey::SourceCameraTitle))
-        .id(egui::Id::new("video_capture_dialog"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "video_capture_dialog",
+        &i18n.text(TextKey::SourceCameraTitle),
+        |ui| {
             ui.set_min_width(360.0);
             ui.label(i18n.text(TextKey::SourceCameraPrompt));
             ui.add_space(4.0);
@@ -1044,12 +1039,13 @@ fn show_camera_dialog(
                     cancel = true;
                 }
             });
-        });
+        },
+    );
 
     if back {
         open = false;
         state.add_dialog_open = true;
-    } else if cancel {
+    } else if cancel || shown.escaped {
         open = false;
     } else if add {
         let selected = state
@@ -1126,13 +1122,11 @@ fn show_display_dialog(
     let mut add = false;
     let mut back = false;
     let mut cancel = false;
-    egui::Window::new(i18n.text(TextKey::SourceDisplayTitle))
-        .id(egui::Id::new("display_capture_dialog"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "display_capture_dialog",
+        &i18n.text(TextKey::SourceDisplayTitle),
+        |ui| {
             ui.set_min_width(360.0);
             ui.label(i18n.text(TextKey::SourceDisplayPrompt));
             ui.add_space(4.0);
@@ -1175,12 +1169,13 @@ fn show_display_dialog(
                     cancel = true;
                 }
             });
-        });
+        },
+    );
 
     if back {
         open = false;
         state.add_dialog_open = true;
-    } else if cancel {
+    } else if cancel || shown.escaped {
         open = false;
     } else if add {
         let selected = state
@@ -1268,13 +1263,11 @@ fn show_window_dialog(
     let mut add = false;
     let mut back = false;
     let mut cancel = false;
-    egui::Window::new(i18n.text(TextKey::SourceWindowTitle))
-        .id(egui::Id::new("window_capture_dialog"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "window_capture_dialog",
+        &i18n.text(TextKey::SourceWindowTitle),
+        |ui| {
             ui.set_min_width(360.0);
             ui.label(i18n.text(TextKey::SourceWindowPrompt));
             ui.add_space(4.0);
@@ -1316,12 +1309,13 @@ fn show_window_dialog(
                     cancel = true;
                 }
             });
-        });
+        },
+    );
 
     if back {
         open = false;
         state.add_dialog_open = true;
-    } else if cancel {
+    } else if cancel || shown.escaped {
         open = false;
     } else if add {
         let selected = state

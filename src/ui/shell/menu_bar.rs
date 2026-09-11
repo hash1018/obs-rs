@@ -148,12 +148,15 @@ fn theme_option(
 
 /// The About box: what this is, which build, and where it comes from.
 pub fn show_about(ui: &mut egui::Ui, state: &mut UiState, i18n: &LocalizationManager) {
-    egui::Window::new(i18n.text(TextKey::MenuAbout))
-        .open(&mut state.about_open)
-        .collapsible(false)
-        .resizable(false)
-        .show(ui.ctx(), |ui| {
-            ui.heading("obs-rs");
+    if !state.about_open {
+        return;
+    }
+    let shown = crate::ui::dialog::show(
+        ui.ctx(),
+        "about_dialog",
+        &i18n.text(TextKey::MenuAbout),
+        |ui| {
+            ui.strong("obs-rs");
             ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
             ui.label(i18n.text(TextKey::AboutDescription));
             ui.add_space(4.0);
@@ -161,7 +164,14 @@ pub fn show_about(ui: &mut egui::Ui, state: &mut UiState, i18n: &LocalizationMan
             // the system browser, which is the only thing anybody wants from
             // an address in an About box.
             ui.hyperlink(REPOSITORY);
-        });
+            ui.add_space(12.0);
+            // Its way out, now that there is no title bar to close it from.
+            ui.button(i18n.text(TextKey::ActionOk)).clicked()
+        },
+    );
+    if shown.inner || shown.escaped {
+        state.about_open = false;
+    }
 }
 
 /// Where this application is developed. From the manifest rather than

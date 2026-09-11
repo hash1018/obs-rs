@@ -201,17 +201,14 @@ pub(in crate::ui) fn show(
     state.poll_folder_picker();
     let picking = state.picking_folder();
 
-    let mut open = true;
     let mut browse = false;
     let mut apply = false;
     let mut close = false;
-    egui::Window::new(i18n.text(TextKey::SettingsTitle))
-        .id(egui::Id::new("settings_dialog"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = super::dialog::show(
+        ctx,
+        "settings_dialog",
+        &i18n.text(TextKey::SettingsTitle),
+        |ui| {
             // Bounded before anything in it is laid out, because the divider
             // below is a vertical rule and one of those takes the height
             // *available* to it — which inside a window is the rest of the
@@ -318,7 +315,8 @@ pub(in crate::ui) fn show(
                     apply = true;
                 }
             });
-        });
+        },
+    );
 
     if browse {
         let ctx = ctx.clone();
@@ -327,9 +325,9 @@ pub(in crate::ui) fn show(
     if apply {
         actions.push(UiAction::ApplySettings(Box::new(state.draft.clone())));
     }
-    // The window's own close button and Cancel end the same way, and neither
-    // writes anything: a draft that was never applied is simply dropped.
-    if close || !open {
+    // Escape and Cancel end the same way, and neither writes anything: a
+    // draft that was never applied is simply dropped.
+    if close || shown.escaped {
         state.open = false;
     }
 }

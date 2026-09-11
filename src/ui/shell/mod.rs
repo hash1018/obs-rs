@@ -10,10 +10,11 @@ use crate::i18n::{LocalizationManager, TextKey};
 
 /// Asks before closing the window on a running recording.
 ///
-/// Modal in the sense that matters — it is the only thing that can answer the
-/// question — but not in egui's: the window behind it stays live, because a
-/// recording is still running and its clock is part of what the answer
-/// depends on.
+/// A dialog like every other, and the recording's clock still runs behind it:
+/// the backdrop stops clicks, not repaints, so what the answer depends on
+/// stays in view. It has to be one, too. Asked while the Settings dialog is
+/// open, a floating window would appear *under* that dialog's backdrop and
+/// could not be answered; a dialog shown later goes on top.
 fn confirm_exit(
     ctx: &egui::Context,
     state: &mut UiState,
@@ -23,15 +24,12 @@ fn confirm_exit(
     if !state.exit_confirm_open {
         return;
     }
-    let mut open = true;
     let mut answered = false;
-    egui::Window::new(i18n.text(TextKey::ExitWhileRecordingTitle))
-        .id(egui::Id::new("exit_confirm"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = super::dialog::show(
+        ctx,
+        "exit_confirm",
+        &i18n.text(TextKey::ExitWhileRecordingTitle),
+        |ui| {
             ui.set_max_width(320.0);
             ui.label(i18n.text(TextKey::ExitWhileRecordingBody));
             ui.add_space(12.0);
@@ -40,14 +38,15 @@ fn confirm_exit(
                     actions.push(UiAction::StopRecordingAndExit);
                     answered = true;
                 }
-                // Carrying on is the safe answer, so it is the one the window's
-                // own close button and Escape land on.
+                // Carrying on is the safe answer, so it is the one Escape
+                // lands on.
                 if ui.button(i18n.text(TextKey::ExitKeepRecording)).clicked() {
                     answered = true;
                 }
             });
-        });
-    if answered || !open {
+        },
+    );
+    if answered || shown.escaped {
         state.exit_confirm_open = false;
     }
 }
@@ -63,15 +62,12 @@ fn report_project_error(ctx: &egui::Context, state: &mut UiState, i18n: &Localiz
     let Some(error) = state.project_error.clone() else {
         return;
     };
-    let mut open = true;
     let mut answered = false;
-    egui::Window::new(i18n.text(TextKey::ProjectUnavailableTitle))
-        .id(egui::Id::new("project_error"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .show(ctx, |ui| {
+    let shown = super::dialog::show(
+        ctx,
+        "project_error",
+        &i18n.text(TextKey::ProjectUnavailableTitle),
+        |ui| {
             ui.set_max_width(420.0);
             ui.label(i18n.text(TextKey::ProjectUnavailableBody));
             ui.add_space(8.0);
@@ -83,8 +79,9 @@ fn report_project_error(ctx: &egui::Context, state: &mut UiState, i18n: &Localiz
             {
                 answered = true;
             }
-        });
-    if answered || !open {
+        },
+    );
+    if answered || shown.escaped {
         state.project_error = None;
     }
 }
