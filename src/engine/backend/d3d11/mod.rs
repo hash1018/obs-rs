@@ -386,8 +386,10 @@ impl RunningSource {
         match self {
             Self::Owned(pipeline) => pipeline.pause(),
             Self::Shared {
-                captures, monitor, ..
-            } => captures.set_showing(monitor, false),
+                captures,
+                monitor,
+                branch,
+            } => captures.set_showing(monitor, *branch, false),
         }
     }
 
@@ -395,8 +397,10 @@ impl RunningSource {
         match self {
             Self::Owned(pipeline) => pipeline.resume(),
             Self::Shared {
-                captures, monitor, ..
-            } => captures.set_showing(monitor, true),
+                captures,
+                monitor,
+                branch,
+            } => captures.set_showing(monitor, *branch, true),
         }
     }
 
