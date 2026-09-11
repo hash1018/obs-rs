@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::capture::AudioDeviceTarget;
 use crate::domain::SceneCanvas;
-use crate::engine::{AudioManager, EngineManager};
+use crate::engine::{AudioManager, EngineManager, METER_INTERVAL, MeterWake};
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
@@ -104,6 +104,14 @@ impl ObsApp {
         let audio_repaint_ctx = cc.egui_ctx.clone();
         #[cfg(target_os = "linux")]
         let picker_repaint_ctx = cc.egui_ctx.clone();
+        // Within an interval rather than now, so a meter's repaint and one the
+        // Preview was about to cause are the same repaint — see
+        // `METER_INTERVAL`. One for both halves, so every meter shares the
+        // one limit.
+        let meter_wake = {
+            let ctx = cc.egui_ctx.clone();
+            MeterWake::new(move || ctx.request_repaint_after(METER_INTERVAL))
+        };
 
         // Built before the struct so the engine can be handed a dispatcher:
         // opening a capture Source can produce a fresher restore token, and
@@ -139,9 +147,11 @@ impl ObsApp {
         // audio track attaches and the mixer is what owns it. Without it the
         // mixer draws what the project holds and nothing is captured, which
         // is what this application did until now.
-        let mut audio = AudioManager::spawn(mix_format(&settings), move || {
-            audio_repaint_ctx.request_repaint()
-        })
+        let mut audio = AudioManager::spawn(
+            mix_format(&settings),
+            move || audio_repaint_ctx.request_repaint(),
+            meter_wake.clone(),
+        )
         .inspect_err(|error| eprintln!("could not start audio: {error}"))
         .ok();
         // Taken before the engine is built, because the engine loop is the
@@ -189,6 +199,7 @@ impl ObsApp {
                         mixer,
                         monitor,
                         troubles: audio_troubles,
+                        meter_wake,
                     },
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )

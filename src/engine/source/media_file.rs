@@ -65,6 +65,7 @@ use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
 use crate::domain::MediaFileSettings;
+use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
 use crate::engine::source::sound::{self, Sound, Track};
 use crate::engine::source::{MediaMeters, input_name};
@@ -240,6 +241,7 @@ fn audio(
     settings: &MediaFileSettings,
     item: &SceneItemSnapshot,
     meters: &Arc<MediaMeters>,
+    meter_wake: &MeterWake,
 ) -> Result<Option<Sound>, BackendError> {
     sound::build(
         name,
@@ -248,6 +250,7 @@ fn audio(
         settings.gain_db,
         super::muted(settings.muted, item.visible),
         meters,
+        meter_wake,
     )
 }
 
@@ -306,6 +309,7 @@ pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     mixer: Option<&MixerHandle>,
+    meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
@@ -340,7 +344,15 @@ pub(in crate::engine) fn open(
         HW_FRAME_BUDGET,
     )?;
     let meters = Arc::new(MediaMeters::default());
-    let audio = audio(&name, chosen.audio, mixer, settings, item, &meters)?;
+    let audio = audio(
+        &name,
+        chosen.audio,
+        mixer,
+        settings,
+        item,
+        &meters,
+        meter_wake,
+    )?;
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
     let position = position_sink(
         &name,
@@ -405,6 +417,7 @@ pub(in crate::engine) fn open(
     device: &media_pp::elements::CudaDevice,
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     mixer: Option<&MixerHandle>,
+    meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
@@ -436,7 +449,15 @@ pub(in crate::engine) fn open(
         HW_FRAME_BUDGET,
     )?;
     let meters = Arc::new(MediaMeters::default());
-    let audio = audio(&name, chosen.audio, mixer, settings, item, &meters)?;
+    let audio = audio(
+        &name,
+        chosen.audio,
+        mixer,
+        settings,
+        item,
+        &meters,
+        meter_wake,
+    )?;
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
     let position = position_sink(
         &name,

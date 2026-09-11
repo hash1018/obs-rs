@@ -49,6 +49,7 @@ impl Backend {
         _fps: u32,
         _preview_fps: u32,
         _on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
+        _meter_wake: crate::engine::audio::MeterWake,
     ) -> Result<Self, BackendError> {
         Err("no compositor backend is written for this platform yet".into())
     }

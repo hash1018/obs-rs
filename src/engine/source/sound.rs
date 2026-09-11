@@ -26,7 +26,6 @@
 //! to somebody who only asked to hear it.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use media_pp::element::{Context, Sink, Source as SourceElement};
@@ -36,6 +35,7 @@ use media_pp::elements::{
 use media_pp::ffmpeg;
 use media_pp::graph::BranchId;
 
+use crate::engine::audio::{Meter, MeterWake};
 use crate::engine::backend::BackendError;
 use crate::engine::source::MediaMeters;
 
@@ -193,6 +193,7 @@ pub(in crate::engine) fn build(
     gain_db: f32,
     muted: bool,
     meters: &Arc<MediaMeters>,
+    meter_wake: &MeterWake,
 ) -> Result<Option<Sound>, BackendError> {
     let (Some(track), Some(mixer)) = (track, mixer) else {
         return Ok(None);
@@ -208,12 +209,10 @@ pub(in crate::engine) fn build(
 
     let meter = AppSink::new(format!("{name}-meter"), {
         let meters = Arc::clone(meters);
+        let mut meter = Meter::new(meter_wake.clone());
         move |buffer| {
             if let media_pp::buffer::MediaBuffer::Audio(frame) = &buffer {
-                meters.peak.store(
-                    crate::engine::audio::peak_db(frame).to_bits(),
-                    Ordering::Relaxed,
-                );
+                meter.measure(frame, &meters.peak);
             }
             Ok(())
         }

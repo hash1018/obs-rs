@@ -58,6 +58,7 @@ use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
 use crate::domain::RtspSourceSettings;
+use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
 use crate::engine::source::sound::{self, Sound, Track};
 use crate::engine::source::{MediaMeters, input_name};
@@ -249,6 +250,7 @@ pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     mixer: Option<&MixerHandle>,
+    meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
@@ -281,6 +283,7 @@ pub(in crate::engine) fn open(
         settings.gain_db,
         super::muted(settings.muted, item.visible),
         &meters,
+        meter_wake,
     )?
     // The same limit the picture is paced with, so a sender that restarts
     // its timeline re-anchors both branches together — see `TIMELINE_JUMP`.
@@ -326,6 +329,7 @@ pub(in crate::engine) fn open(
     device: &media_pp::elements::CudaDevice,
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     mixer: Option<&MixerHandle>,
+    meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Option<super::OpenSource>, BackendError> {
@@ -361,6 +365,7 @@ pub(in crate::engine) fn open(
         settings.gain_db,
         super::muted(settings.muted, item.visible),
         &meters,
+        meter_wake,
     )?
     // The same limit the picture is paced with, so a sender that restarts
     // its timeline re-anchors both branches together — see `TIMELINE_JUMP`.

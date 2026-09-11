@@ -160,9 +160,9 @@ pub(in crate::engine) struct MediaFile {
 /// anything else.
 #[derive(Default)]
 pub(in crate::engine) struct MediaMeters {
-    /// The loudest sample since the last read, as `f32` bits. Zero until the
-    /// audio branch has measured one, which is also what a file with no
-    /// sound looks like.
+    /// What the meter shows, as `f32` bits — see `audio::Meter`. Zero until
+    /// the audio branch has measured anything, which is also what a file
+    /// with no sound looks like.
     pub(in crate::engine) peak: AtomicU32,
     /// Where playback is *in the file*, in microseconds — the frame's own
     /// timestamp with the loop's accumulated offset taken back off, so a

@@ -18,7 +18,7 @@ use crate::capture::AudioDeviceTarget;
 use crate::domain::AudioSourceId;
 use crate::snapshots::AudioSnapshot;
 
-use super::{AudioEngine, Levels};
+use super::{AudioEngine, Levels, MeterWake};
 
 /// How often the worker looks at what it has open when nothing has woken it.
 ///
@@ -106,7 +106,14 @@ pub struct AudioManager {
 }
 
 impl AudioManager {
-    pub fn spawn(format: MixFormat, wake_ui: impl Fn() + Send + 'static) -> std::io::Result<Self> {
+    /// `wake_ui` is for what this thread publishes about the graph, which
+    /// changes rarely; `meter_wake` is for the meters, which change with
+    /// every word — see [`MeterWake`].
+    pub fn spawn(
+        format: MixFormat,
+        wake_ui: impl Fn() + Send + 'static,
+        meter_wake: MeterWake,
+    ) -> std::io::Result<Self> {
         let (commands, command_rx) = mpsc::channel::<AudioCommand>();
         let levels = Arc::new(ArcSwapOption::empty());
         let devices = Arc::new(ArcSwapOption::empty());
@@ -124,7 +131,7 @@ impl AudioManager {
             let published_monitor = Arc::clone(&monitor);
             let watch_commands = commands.clone();
             move || {
-                let mut engine = AudioEngine::new(format);
+                let mut engine = AudioEngine::new(format, meter_wake);
                 // The worker's own copy, because the monitoring branch is
                 // built against it and a device change arrives without one.
                 let mut mix_format = format;
@@ -406,7 +413,7 @@ mod tests {
                 // The mixer starts either way; captures do not, since no
                 // project snapshot is ever sent. That is enough — the
                 // channel and the watch are what this is about.
-                let manager = AudioManager::spawn(DEFAULT_MIX_FORMAT, || {});
+                let manager = AudioManager::spawn(DEFAULT_MIX_FORMAT, || {}, MeterWake::new(|| {}));
                 drop(manager);
                 let _ = finished.send(());
             })

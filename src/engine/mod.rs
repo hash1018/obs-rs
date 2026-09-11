@@ -22,7 +22,7 @@ pub(in crate::engine) mod trouble;
 pub use preview::CompositeFrame;
 mod source;
 
-pub use audio::AudioManager;
+pub use audio::{AudioManager, METER_INTERVAL, MeterWake};
 /// What an output encodes with — read off the settings, and the only thing
 /// the encoders are told about which kind of output they serve.
 pub use output::OutputEncoding;
@@ -157,6 +157,9 @@ struct EngineSetup {
     /// `None` on a machine whose audio never started, which is also a
     /// machine with no mix for an output's audio track to fail on.
     audio_troubles: Option<mpsc::Receiver<Trouble>>,
+    /// For the meters of Sources that bring their own sound — see
+    /// `AudioLink::meter_wake`.
+    meter_wake: MeterWake,
 }
 
 /// The slots the engine writes and the UI reads, which travel together.
@@ -246,6 +249,10 @@ pub struct AudioLink {
     /// What that thread reports its own pipelines' failures on — see
     /// `trouble`.
     pub troubles: Option<mpsc::Receiver<Trouble>>,
+    /// The same wake the audio thread's meters use, for the meters of media
+    /// files and streams. One between them, so the limit it keeps is on the
+    /// window rather than on each half — see [`MeterWake`].
+    pub meter_wake: MeterWake,
 }
 
 pub struct OutputSettings {
@@ -305,6 +312,7 @@ impl EngineManager {
             mixer,
             monitor,
             troubles: audio_troubles,
+            meter_wake,
         } = audio;
         let size = [canvas.width as u32, canvas.height as u32];
         let frame = Arc::new(ArcSwapOption::empty());
@@ -358,6 +366,7 @@ impl EngineManager {
                     size,
                     project,
                     audio_troubles,
+                    meter_wake,
                     recording: OutputState {
                         settings: outputs.recording,
                         streaming: outputs.streaming,
@@ -704,6 +713,7 @@ fn run(
         project,
         mut recording,
         audio_troubles,
+        meter_wake,
     } = setup;
     // Shared rather than moved: both the sink that publishes a frame and the
     // loop that puts the branch to sleep have to ask for a repaint.
@@ -737,6 +747,7 @@ fn run(
         // Scene made at 24 is asking for frames that do not exist.
         PREVIEW_FPS.min(recording.settings.fps.max(1)),
         publish,
+        meter_wake,
     )?);
 
     // Probed here rather than on demand: it needs the backend's own device,

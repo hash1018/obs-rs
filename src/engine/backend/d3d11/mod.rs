@@ -29,6 +29,7 @@ use windows::Win32::Graphics::{
 };
 
 use crate::domain::SourceKind;
+use crate::engine::audio::MeterWake;
 use crate::snapshots::SceneItemSnapshot;
 
 use crate::engine::source::{self, OpenSource};
@@ -62,6 +63,8 @@ pub(in crate::engine) struct Backend {
     /// Reached from the UI through [`Backend::set_preview_visible`] — see
     /// [`PreviewSurface`].
     pub(in crate::engine) surface: Arc<PreviewSurface>,
+    /// Handed to the meter of every Source that brings its own sound.
+    pub(in crate::engine) meter_wake: MeterWake,
 }
 
 impl Backend {
@@ -71,6 +74,7 @@ impl Backend {
         fps: u32,
         preview_fps: u32,
         on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
+        meter_wake: MeterWake,
     ) -> Result<Self, BackendError> {
         media_pp::init()?;
         let [width, height] = size;
@@ -183,6 +187,7 @@ impl Backend {
             tee,
             encoders: std::sync::OnceLock::new(),
             surface,
+            meter_wake,
         })
     }
 
@@ -278,12 +283,22 @@ impl Backend {
             SourceKind::WindowCapture => {
                 source::window_capture::open(&self.device, &self.compositor, item, layer, fps)
             }
-            SourceKind::MediaFile => {
-                source::media_file::open(&self.device, &self.compositor, mixer, item, layer)
-            }
-            SourceKind::Rtsp => {
-                source::rtsp::open(&self.device, &self.compositor, mixer, item, layer)
-            }
+            SourceKind::MediaFile => source::media_file::open(
+                &self.device,
+                &self.compositor,
+                mixer,
+                &self.meter_wake,
+                item,
+                layer,
+            ),
+            SourceKind::Rtsp => source::rtsp::open(
+                &self.device,
+                &self.compositor,
+                mixer,
+                &self.meter_wake,
+                item,
+                layer,
+            ),
             SourceKind::VideoCapture => source::video_capture::open(
                 &self.device,
                 self.context.clone(),

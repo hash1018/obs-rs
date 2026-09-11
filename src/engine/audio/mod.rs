@@ -48,14 +48,15 @@ mod level;
 mod manager;
 
 pub(super) use level::Levels;
-/// Measuring a buffer's peak is one function, and both halves of the engine
-/// now need it: the devices' own meters and a media file Source's.
-pub(in crate::engine) use level::peak_db;
+/// A meter is one type, and both halves of the engine need it: the devices'
+/// own meters and a media file Source's.
+pub(in crate::engine) use level::Meter;
+pub use level::{METER_INTERVAL, MeterWake};
 pub use manager::AudioManager;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 
 use media_pp::{
     buffer::MediaBuffer,
@@ -195,6 +196,8 @@ pub(super) struct AudioEngine {
     monitor_output: Option<MonitorOutput>,
     sources: HashMap<AudioSourceId, OpenAudioSource>,
     levels: Levels,
+    /// Handed to every source's meter as it opens.
+    meter_wake: MeterWake,
 }
 
 struct RunningMixer {
@@ -212,7 +215,7 @@ struct RunningMixer {
 impl AudioEngine {
     /// Starts the mixer. It runs from here until this is dropped, whether or
     /// not anything is feeding it.
-    pub(super) fn new(format: MixFormat) -> Self {
+    pub(super) fn new(format: MixFormat, meter_wake: MeterWake) -> Self {
         let mixer = match start_mixer("audio-mix", "mix-tee", format) {
             Ok(mixer) => Some(mixer),
             Err(error) => {
@@ -236,6 +239,7 @@ impl AudioEngine {
             monitor_output: None,
             sources: HashMap::new(),
             levels: Levels::default(),
+            meter_wake,
         }
     }
 
@@ -517,7 +521,8 @@ impl AudioEngine {
             .filter(|_| self.monitor_output.is_some());
         let monitored = monitors(source.monitored, monitor.is_some());
 
-        match open_source(&mixer, monitor.as_ref(), &name, source, monitored) {
+        let meter = Meter::new(self.meter_wake.clone());
+        match open_source(&mixer, monitor.as_ref(), &name, source, monitored, meter) {
             Ok((open, peak)) => {
                 self.levels.track(source.id, peak);
                 self.sources.insert(source.id, open);
@@ -624,6 +629,7 @@ fn open_source(
     name: &str,
     source: &AudioSourceSnapshot,
     monitored: bool,
+    mut meter: Meter,
 ) -> Result<(OpenAudioSource, Arc<AtomicU32>), BackendError> {
     let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
     let monitor_input = match (monitored, monitor) {
@@ -645,7 +651,7 @@ fn open_source(
         let peak = Arc::clone(&peak);
         move |buffer| {
             if let MediaBuffer::Audio(frame) = &buffer {
-                peak.store(level::peak_db(frame).to_bits(), Ordering::Relaxed);
+                meter.measure(frame, &peak);
             }
             Ok(())
         }
@@ -748,6 +754,7 @@ mod tests {
             monitor_output: None,
             sources: sources.into_iter().collect(),
             levels,
+            meter_wake: MeterWake::new(|| {}),
         }
     }
 
