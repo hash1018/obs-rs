@@ -31,12 +31,18 @@ const DECAY_DB_PER_SECOND: f32 = 20.0;
 
 /// The most often a meter asks to be drawn.
 ///
-/// The Preview's own ceiling, and for the same reason: a meter is watched by
-/// one person, and every repaint is the whole window. Also the delay each
-/// request asks for, which is what lets one coincide with a repaint the
-/// Preview was going to cause anyway — egui counts a pass that happens first
-/// as having served it.
-pub const METER_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
+/// Twenty a second, below the Preview's thirty, because what it buys is
+/// cheaper to give up. egui has no partial repaint, so moving one meter bar
+/// redraws the whole window — over an empty Scene, somebody talking into a
+/// microphone cost about two points of GPU at thirty. The meter already
+/// falls smoothly between readings (see [`DECAY_DB_PER_SECOND`]), so a third
+/// fewer of them is hard to see and a third less of that cost.
+///
+/// Also the delay each request asks for, which is what lets one coincide
+/// with a repaint the Preview was going to cause anyway — egui counts a pass
+/// that happens first as having served it. Over a Scene that is moving, the
+/// meters cost nothing at any rate.
+pub const METER_INTERVAL: Duration = Duration::from_millis(50);
 
 /// What a meter's number is stored as: `f32` bits, with zero kept for "never
 /// measured".
@@ -160,7 +166,7 @@ impl Meter {
     ///
     /// Silence costs nothing: a meter resting at the floor asks for no
     /// repaint at all, which is what keeps a quiet session from drawing the
-    /// whole window thirty times a second for a channel with nothing in it.
+    /// whole window twenty times a second for a channel with nothing in it.
     pub(in crate::engine) fn measure(
         &mut self,
         frame: &media_pp::ffmpeg::frame::Audio,
