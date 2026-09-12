@@ -238,27 +238,58 @@ fn show_settings(
             ui.end_row();
         });
 
-    if edited == settings {
-        return;
-    }
-
     // Two destinations, the split the mixer's fader already documents: the
     // picture has to follow the pointer, and the project should hear one edit
     // rather than one per frame of the drag. Both reach the running element
     // through its handle either way, so neither rebuilds the chain — what
-    // differs is how many rows get written.
-    let dragging = sliders.iter().any(egui::Response::dragged);
-    if dragging {
+    // differs is how many rows get written. See `Gesture` for when each.
+    let gesture = Gesture::of(&sliders, edited != settings);
+    if gesture.drag {
         actions.push(UiAction::DragFilterSettings(
             item.id,
             filter.id,
             FilterSettings::ChromaKey(edited),
         ));
-        return;
     }
-    actions.push(command(SourceCommand::SetChromaKeySettings(
-        filter.id, edited,
-    )));
+    if gesture.record {
+        actions.push(command(SourceCommand::SetChromaKeySettings(
+            filter.id, edited,
+        )));
+    }
+}
+
+/// Where one frame's edit to a filter's settings goes.
+///
+/// Heard while dragging, recorded once when let go — the fader's split, and
+/// its way of knowing when that is. The value is recorded on the frame the
+/// drag stops, not on the next change: every frame of the drag has already
+/// put it into the snapshot the dock reads, so on release nothing differs,
+/// and waiting for a difference recorded nothing. The next project snapshot
+/// then put the slider back where it was before the drag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Gesture {
+    /// Send it to what is running, and not to the project.
+    drag: bool,
+    /// Record it in the project.
+    record: bool,
+}
+
+impl Gesture {
+    fn of(sliders: &[egui::Response], changed: bool) -> Self {
+        Self::decide(
+            sliders.iter().any(egui::Response::dragged),
+            sliders.iter().any(egui::Response::drag_stopped),
+            changed,
+        )
+    }
+
+    /// `changed` is whether the value differs from the snapshot's.
+    fn decide(dragging: bool, released: bool, changed: bool) -> Self {
+        Self {
+            drag: changed && dragging,
+            record: released || (changed && !dragging),
+        }
+    }
 }
 
 fn command(command: SourceCommand) -> UiAction {
@@ -276,5 +307,65 @@ fn method_key(method: ChromaKeyMethod) -> TextKey {
         ChromaKeyMethod::Green => TextKey::FiltersChromaKeyGreen,
         ChromaKeyMethod::Blue => TextKey::FiltersChromaKeyBlue,
         ChromaKeyMethod::Custom => TextKey::FiltersChromaKeyCustomMethod,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Gesture;
+
+    /// A slider dragged over three frames and let go on the fourth. Each
+    /// frame of the drag goes to what is running and writes the value into
+    /// the snapshot, so the release frame sees no difference — and it is the
+    /// one that must record. This is the frame that used to send nothing,
+    /// which put the slider back where it was on the next project snapshot.
+    #[test]
+    fn letting_go_of_a_slider_records_the_value_it_was_dragged_to() {
+        for _ in 0..3 {
+            assert_eq!(
+                Gesture::decide(true, false, true),
+                Gesture {
+                    drag: true,
+                    record: false
+                },
+                "while dragging: heard, not recorded"
+            );
+        }
+        assert_eq!(
+            Gesture::decide(false, true, false),
+            Gesture {
+                drag: false,
+                record: true
+            },
+            "let go: recorded, though nothing differs from the snapshot"
+        );
+    }
+
+    /// A change that is not a drag — a click on the track, a typed value —
+    /// is recorded at once, and a frame with nothing happening sends nothing.
+    #[test]
+    fn a_change_without_a_drag_is_recorded_and_no_change_sends_nothing() {
+        assert_eq!(
+            Gesture::decide(false, false, true),
+            Gesture {
+                drag: false,
+                record: true
+            }
+        );
+        assert_eq!(
+            Gesture::decide(false, false, false),
+            Gesture {
+                drag: false,
+                record: false
+            }
+        );
+        assert_eq!(
+            Gesture::decide(true, false, false),
+            Gesture {
+                drag: false,
+                record: false
+            },
+            "held still mid-drag: nothing new to hear"
+        );
     }
 }
