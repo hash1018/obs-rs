@@ -68,6 +68,10 @@ mod platform {
         let stat = unsafe { stat.assume_init() };
         // Blocks free to an unprivileged user, not `f_bfree`: the reserve
         // only root may write into is room a recording will never get.
+        //
+        // `u64::from` is a no-op on 64-bit Linux, where both fields already
+        // are one, and is what compiles on 32-bit Linux, where they are not.
+        #[allow(clippy::useless_conversion)]
         u64::from(stat.f_bavail).checked_mul(u64::from(stat.f_frsize))
     }
 }
