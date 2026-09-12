@@ -194,7 +194,7 @@ pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendEr
 /// pass, which is every Scene change, so the comparison inside is what keeps a
 /// move or a rename from costing a redraw and a re-upload of something nobody
 /// touched.
-/// Tells a running media file Source what its settings now say.
+/// Tells a running media file or stream Source what its settings now say.
 ///
 /// No comparison against what was last set, unlike [`refresh_pushed`]: what
 /// that guards is a redraw and a re-upload, and this is a single atomic
@@ -210,14 +210,16 @@ pub(in crate::engine) fn refresh_media_file(
         return;
     };
 
-    // Whether this Source's sound is played back, asked of every Source that
-    // has one rather than of media files alone. A live stream has no such
-    // setting yet and answers `false`, which is where it has always been.
+    // What the Audio Mixer column sets, which a file and a stream both have.
+    let (gain_db, mute, monitored) = match &item.settings {
+        SourceSettings::MediaFile(settings) => {
+            (settings.gain_db, settings.muted, settings.monitored)
+        }
+        SourceSettings::Rtsp(settings) => (settings.gain_db, settings.muted, settings.monitored),
+        _ => return,
+    };
+
     if let Some(routing) = &mut media.sound {
-        let monitored = match &item.settings {
-            SourceSettings::MediaFile(settings) => settings.monitored,
-            _ => false,
-        };
         routing.apply(
             crate::engine::audio::monitors(monitored, monitor.is_some()),
             monitor,
@@ -227,15 +229,12 @@ pub(in crate::engine) fn refresh_media_file(
         routing.apply_filters(&item.audio_filters);
     }
 
-    let SourceSettings::MediaFile(settings) = &item.settings else {
-        return;
-    };
-    if let Some(looping) = &media.looping {
-        looping.set_looping(settings.looping);
-    }
     if let Some(volume) = &media.volume {
-        let _ = volume.set_gain_db(settings.gain_db);
-        volume.set_muted(muted(settings.muted, item.visible));
+        let _ = volume.set_gain_db(gain_db);
+        volume.set_muted(muted(mute, item.visible));
+    }
+    if let (Some(looping), SourceSettings::MediaFile(settings)) = (&media.looping, &item.settings) {
+        looping.set_looping(settings.looping);
     }
 }
 

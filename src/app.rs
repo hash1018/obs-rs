@@ -731,9 +731,14 @@ impl ObsApp {
                     .items
                     .iter_mut()
                     .find(|item| item.id == item_id)
-                    && let crate::domain::SourceSettings::MediaFile(settings) = &mut item.settings
                 {
-                    settings.gain_db = gain_db;
+                    match &mut item.settings {
+                        crate::domain::SourceSettings::MediaFile(settings) => {
+                            settings.gain_db = gain_db;
+                        }
+                        crate::domain::SourceSettings::Rtsp(settings) => settings.gain_db = gain_db,
+                        _ => {}
+                    }
                 }
             }
             UiAction::DragSceneItem(item_id, transform, crop) => {

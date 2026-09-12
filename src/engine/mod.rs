@@ -2220,6 +2220,7 @@ mod tests {
             has_audio: false,
             gain_db: 0.0,
             muted: false,
+            monitored: false,
         });
         item
     }

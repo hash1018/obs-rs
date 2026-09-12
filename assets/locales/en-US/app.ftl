@@ -157,6 +157,7 @@ source-media-file-filter = Video files
 source-image-filter = Image files
 source-ended = Ended
 audio-kind-media-file = Media file
+audio-kind-stream = Stream
 source-kind-image = Image
 action-add = Add
 action-cancel = Cancel

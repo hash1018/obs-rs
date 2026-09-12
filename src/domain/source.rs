@@ -448,6 +448,10 @@ pub struct RtspSourceSettings {
     pub has_audio: bool,
     pub gain_db: f32,
     pub muted: bool,
+    /// Whether this stream is played back to the person running obs-rs — on
+    /// a media file's terms and for its reason: a stream's sound exists only
+    /// inside obs-rs. See [`MediaFileSettings::monitored`].
+    pub monitored: bool,
 }
 
 /// One picture shape a camera offers, as it is stored and shown.

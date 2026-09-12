@@ -133,6 +133,7 @@ impl SourceStore {
                 rtsp_source_settings.has_audio AS rtsp_has_audio,
                 rtsp_source_settings.gain_db AS rtsp_gain_db,
                 rtsp_source_settings.muted AS rtsp_muted,
+                rtsp_source_settings.monitored AS rtsp_monitored,
                 video_capture_settings.device AS video_capture_device,
                 video_capture_settings.device_name AS video_capture_device_name,
                 video_capture_settings.mode_width AS video_capture_mode_width,
@@ -328,6 +329,7 @@ impl SourceStore {
                         has_audio: row.get("rtsp_has_audio")?,
                         gain_db: row.get("rtsp_gain_db")?,
                         muted: row.get("rtsp_muted")?,
+                        monitored: row.get("rtsp_monitored")?,
                     }),
                     SourceKind::VideoCapture => {
                         SourceSettings::VideoCapture(VideoCaptureSettings {
@@ -916,8 +918,8 @@ impl SourceStore {
         transaction.execute(
             "INSERT INTO rtsp_source_settings
                 (source_id, url, transport, reconnect_seconds, width, height,
-                 has_audio, gain_db, muted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 has_audio, gain_db, muted, monitored)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 source_id.0,
                 settings.url,
@@ -930,7 +932,8 @@ impl SourceStore {
                 height,
                 settings.has_audio,
                 settings.gain_db,
-                settings.muted
+                settings.muted,
+                settings.monitored
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
@@ -1089,13 +1092,14 @@ impl SourceStore {
         set_media_column(transaction, scene_item_id, "looping", looping)
     }
 
-    /// This media file Source's own fader, in decibels.
+    /// The own fader, in decibels, of a Source that carries its own sound —
+    /// a media file or a stream.
     pub(crate) fn set_media_gain_db(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
         gain_db: f32,
     ) -> PersistenceResult<()> {
-        set_media_column(
+        set_sound_column(
             transaction,
             scene_item_id,
             "gain_db",
@@ -1114,7 +1118,7 @@ impl SourceStore {
         set_media_column(transaction, scene_item_id, "paused", paused)
     }
 
-    /// This media file Source's own mute button. Hiding the SceneItem
+    /// The own mute button of a media file or a stream. Hiding the SceneItem
     /// silences it too, and does not come through here — see
     /// [`crate::domain::MediaFileSettings::muted`].
     pub(crate) fn set_media_muted(
@@ -1122,15 +1126,16 @@ impl SourceStore {
         scene_item_id: SceneItemId,
         muted: bool,
     ) -> PersistenceResult<()> {
-        set_media_column(transaction, scene_item_id, "muted", muted)
+        set_sound_column(transaction, scene_item_id, "muted", muted)
     }
 
+    /// Whether a media file's or a stream's sound is played back.
     pub(crate) fn set_media_monitored(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
         monitored: bool,
     ) -> PersistenceResult<()> {
-        set_media_column(transaction, scene_item_id, "monitored", monitored)
+        set_sound_column(transaction, scene_item_id, "monitored", monitored)
     }
 
     /// How much of the Source this item leaves out, in the Source's own
@@ -1479,6 +1484,32 @@ fn set_media_column<T: rusqlite::ToSql>(
         ),
         params![value, scene_item_id.0],
     )?;
+    Ok(())
+}
+
+/// A column both kinds with sound of their own store under the same name —
+/// the fader, the mute, the monitor — on whichever of the two this item's
+/// Source is. Both updates run and one of them matches no row, which is
+/// cheaper to say than asking first which kind it is.
+///
+/// The column name is a literal from the callers above, as for
+/// [`set_media_column`].
+fn set_sound_column<T: rusqlite::ToSql>(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    column: &'static str,
+    value: T,
+) -> PersistenceResult<()> {
+    for table in ["media_file_settings", "rtsp_source_settings"] {
+        transaction.execute(
+            &format!(
+                "UPDATE {table}
+                 SET {column} = ?1
+                 WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)"
+            ),
+            params![&value, scene_item_id.0],
+        )?;
+    }
     Ok(())
 }
 
@@ -1898,6 +1929,48 @@ mod tests {
         assert_ne!(stored.size, [64.0, 64.0], "its own size is not a hint");
     }
 
+    /// A stream's fader, mute and monitor go through the same three setters
+    /// a media file's do, and land on the stream — the Audio Mixer column
+    /// that moves them does not know which of the two it is drawing.
+    #[test]
+    fn a_streams_sound_is_set_through_the_media_files_setters() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_rtsp(
+                    transaction,
+                    scene_id,
+                    &RtspSourceSettings {
+                        url: "rtsp://10.0.0.7/main".to_owned(),
+                        transport: RtspTransport::Tcp,
+                        reconnect: None,
+                        size_hint: None,
+                        has_audio: true,
+                        gain_db: 0.0,
+                        muted: false,
+                        monitored: false,
+                    },
+                )
+            })
+            .unwrap();
+        database
+            .transaction(|transaction| {
+                SourceStore::set_media_gain_db(transaction, item_id, -9.0)?;
+                SourceStore::set_media_muted(transaction, item_id, true)?;
+                SourceStore::set_media_monitored(transaction, item_id, true)
+            })
+            .unwrap();
+
+        let SourceSettings::Rtsp(stored) = settings_of(&database, scene_id) else {
+            panic!("a stream Source must read back as one");
+        };
+        assert_eq!(
+            (stored.gain_db, stored.muted, stored.monitored),
+            (-9.0, true, true)
+        );
+    }
+
     /// The three things a stream stores that nothing else does, through the
     /// write and back out of the read — a transport that came back as the
     /// other one, or a reconnect that came back as zero, would each be a
@@ -1919,6 +1992,7 @@ mod tests {
                         has_audio: true,
                         gain_db: 0.0,
                         muted: false,
+                        monitored: false,
                     },
                 )
             })

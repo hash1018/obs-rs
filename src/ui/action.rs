@@ -73,9 +73,9 @@ pub enum UiAction {
     /// own menu is the way in; a Source's sound has the same way in from its
     /// column, beside being selected.
     ShowAudioFilters(AudioFilterHost),
-    /// One media file Source's gain while the fader is still held. Goes to
-    /// the engine rather than the audio graph: a file's fader lives in its
-    /// own pipeline, which the video engine owns.
+    /// One media file's or stream's gain while the fader is still held. Goes
+    /// to the engine rather than the audio graph: their faders live in their
+    /// own pipelines, which the video engine owns.
     DragMediaGain(SceneItemId, f32),
     /// Move one media file Source to a position in its own file.
     ///

@@ -43,9 +43,11 @@ struct Channel<'a> {
     gain_db: f32,
     muted: bool,
     peak_db: Option<f32>,
-    /// Set for a device channel. A media file has no endpoint to choose, so
-    /// its name is a label rather than a picker.
+    /// Set for a device channel. A media file or a stream has no endpoint
+    /// to choose, so its name opens its filters rather than a picker.
     device: Option<Device<'a>>,
+    /// What the name's hover says this is.
+    kind: TextKey,
     /// Whether this channel is played back — `None` for a channel there is
     /// no point monitoring.
     ///
@@ -99,37 +101,61 @@ fn channels<'a>(
                 kind: source.kind,
                 id: source.device.as_deref(),
             }),
+            kind: match source.kind {
+                AudioSourceKind::Output => TextKey::AudioKindOutput,
+                AudioSourceKind::Input => TextKey::AudioKindInput,
+            },
             monitored: source.kind.can_be_monitored().then_some(source.monitored),
         })
         .collect();
 
     channels.extend(sources.items.iter().filter_map(|item| {
-        let crate::domain::SourceSettings::MediaFile(settings) = &item.settings else {
-            return None;
+        // A media file and a stream, the two kinds that carry sound of
+        // their own. The same column for both; only a file can be paused.
+        let (has_audio, gain_db, muted, monitored, paused, kind) = match &item.settings {
+            crate::domain::SourceSettings::MediaFile(settings) => (
+                settings.has_audio,
+                settings.gain_db,
+                settings.muted,
+                settings.monitored,
+                settings.paused,
+                TextKey::AudioKindMediaFile,
+            ),
+            crate::domain::SourceSettings::Rtsp(settings) => (
+                settings.has_audio,
+                settings.gain_db,
+                settings.muted,
+                settings.monitored,
+                false,
+                TextKey::AudioKindStream,
+            ),
+            _ => return None,
         };
         // Three ways to have no column, and they are all the same statement:
         // there is no sound coming from this Source to fade. A hidden item is
-        // silenced (see `engine::source::muted`), and a file that played out
-        // or never opened has nothing running behind it.
-        if !settings.has_audio || !item.visible || status.is_some_and(|s| s.contains_key(&item.id))
-        {
+        // silenced (see `engine::source::muted`), and a file that played out,
+        // a stream that dropped, or either that never opened has nothing
+        // running behind it.
+        if !has_audio || !item.visible || status.is_some_and(|s| s.contains_key(&item.id)) {
             return None;
         }
         Some(Channel {
             id: ChannelId::SceneItem(item.id),
             name: &item.name,
-            gain_db: settings.gain_db,
-            muted: settings.muted,
+            gain_db,
+            muted,
             // A paused file is making no sound. The peak is the last reading
             // rather than a decaying one, so left alone the meter would sit
             // at whatever was playing when the pause landed and say the clip
             // was still going.
-            peak_db: item.peak_db.filter(|_| !settings.paused),
+            peak_db: item.peak_db.filter(|_| !paused),
             device: None,
-            // Always, and this is the channel the control was really wanted
-            // for: a file's sound exists nowhere but inside obs-rs, so with
-            // this off there is no way at all to hear what you have added.
-            monitored: Some(settings.monitored),
+            kind,
+            // Always, and these are the channels the control was really
+            // wanted for: a file's or a stream's sound exists nowhere but
+            // inside obs-rs, so with this off there is no way at all to hear
+            // what you have added.
+            monitored: Some(monitored),
         })
     }));
     channels
@@ -397,10 +423,10 @@ fn show_name(
     actions: &mut Vec<UiAction>,
 ) {
     let Some(source) = &channel.device else {
-        // A media file has no endpoint to choose, so its name opens a menu
-        // with the one thing it does have — its filters — rather than the
-        // device list a channel's does. It is renamed where it lives, in the
-        // Sources dock, and this follows.
+        // A media file or a stream has no endpoint to choose, so its name
+        // opens a menu with the one thing it does have — its filters —
+        // rather than the device list a channel's does. It is renamed where
+        // it lives, in the Sources dock, and this follows.
         //
         // Painted from a galley rather than added as a `Label`, for the two
         // things a Source name needs that a label in a column this narrow
@@ -434,7 +460,7 @@ fn show_name(
                 }
             });
         }
-        let kind = i18n.text(TextKey::AudioKindMediaFile);
+        let kind = i18n.text(channel.kind);
         response.on_hover_text(if elided {
             format!("{kind} · {}", channel.name)
         } else {
@@ -442,10 +468,7 @@ fn show_name(
         });
         return;
     };
-    let kind = i18n.text(match source.kind {
-        AudioSourceKind::Output => TextKey::AudioKindOutput,
-        AudioSourceKind::Input => TextKey::AudioKindInput,
-    });
+    let kind = i18n.text(channel.kind);
     let default_label = i18n.text(TextKey::AudioDeviceDefault);
     // The stored id is what a device is known by, but the picker shows names
     // — so an endpoint that has since gone shows its id rather than becoming
@@ -1039,5 +1062,70 @@ mod tests {
 
         assert_eq!(last, f64::MIN);
         assert!(!lit);
+    }
+
+    fn stream(id: i64, has_audio: bool, visible: bool) -> crate::snapshots::SceneItemSnapshot {
+        use crate::domain::{Crop, SceneItemId, SourceKind, SourceSettings, Transform};
+
+        crate::snapshots::SceneItemSnapshot {
+            filters: Vec::new(),
+            audio_filters: Vec::new(),
+            id: SceneItemId(id),
+            name: format!("camera {id}"),
+            kind: SourceKind::Rtsp,
+            settings: SourceSettings::Rtsp(crate::domain::RtspSourceSettings {
+                url: "rtsp://10.0.0.7/main".to_owned(),
+                transport: crate::domain::RtspTransport::Tcp,
+                reconnect: None,
+                size_hint: None,
+                has_audio,
+                gain_db: -6.0,
+                muted: true,
+                monitored: true,
+            }),
+            source_size: [1280.0, 720.0],
+            visible,
+            locked: false,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            peak_db: Some(-20.0),
+            position: None,
+        }
+    }
+
+    /// A stream with a sound track gets a column on a media file's terms —
+    /// its own fader, mute and monitor, read from its own settings — and one
+    /// with no sound, or hidden, or dropped, gets none.
+    #[test]
+    fn a_stream_with_sound_has_a_column_and_one_without_does_not() {
+        use crate::domain::SceneItemId;
+
+        let sources = SourcesSnapshot {
+            items: vec![
+                stream(1, true, true),
+                stream(2, false, true),
+                stream(3, true, false),
+                stream(4, true, true),
+            ],
+            ..SourcesSnapshot::default()
+        };
+        let dropped =
+            std::collections::HashMap::from([(SceneItemId(4), SourceStatus::Disconnected)]);
+        let audio = AudioSnapshot { items: Vec::new() };
+        let columns = channels(&audio, &sources, Some(&dropped));
+
+        assert_eq!(columns.len(), 1);
+        let column = &columns[0];
+        assert_eq!(column.id, ChannelId::SceneItem(SceneItemId(1)));
+        assert_eq!(
+            (
+                column.gain_db,
+                column.muted,
+                column.monitored,
+                column.peak_db
+            ),
+            (-6.0, true, Some(true), Some(-20.0))
+        );
+        assert_eq!(column.kind, TextKey::AudioKindStream);
     }
 }

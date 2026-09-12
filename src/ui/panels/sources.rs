@@ -404,6 +404,9 @@ fn poll_stream_probe(state: &mut SourcesPanelState, actions: &mut Vec<UiAction>)
                         has_audio: stream.has_audio,
                         gain_db: 0.0,
                         muted: false,
+                        // Not monitored, for the reason a new media file
+                        // is not — see `add_file`.
+                        monitored: false,
                     },
                 },
             )));

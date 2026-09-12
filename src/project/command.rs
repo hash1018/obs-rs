@@ -141,13 +141,15 @@ pub enum SourceCommand {
     /// Repaints a Color Source. Sent when the picker is let go, not while it
     /// is being dragged — see `UiAction::DragSourceColour`.
     SetColor(SceneItemId, [u8; 4]),
-    /// A media file Source's own fader, recorded when the gesture ends — the
-    /// same two-part split a Color's picker makes, with
-    /// `UiAction::DragMediaGain` carrying the live value.
+    /// The own fader of a Source that carries its own sound — a media file
+    /// or a stream — recorded when the gesture ends: the same two-part split
+    /// a Color's picker makes, with `UiAction::DragMediaGain` carrying the
+    /// live value.
     SetMediaGain(SceneItemId, f32),
-    /// Whether a media file Source's sound is muted.
+    /// Whether a media file's or a stream's sound is muted.
     SetMediaMuted(SceneItemId, bool),
-    /// Whether this file is played back to the person running obs-rs.
+    /// Whether a media file or a stream is played back to the person running
+    /// obs-rs.
     SetMediaMonitored(SceneItemId, bool),
     /// Whether a media file Source is stopped where it is.
     ///

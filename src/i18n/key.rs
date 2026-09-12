@@ -279,6 +279,7 @@ text_keys! {
     SourceImageFilter             => "source-image-filter";
     SourceEnded                   => "source-ended";
     AudioKindMediaFile            => "audio-kind-media-file";
+    AudioKindStream               => "audio-kind-stream";
     DrawingToolSelect             => "drawing-tool-select";
     DrawingToolPen                => "drawing-tool-pen";
     DrawingToolHighlighter        => "drawing-tool-highlighter";

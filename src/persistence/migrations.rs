@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -505,6 +505,20 @@ fn migrate(
             )
             .into());
         }
+    }
+    if step(25) {
+        // A stream's sound can be monitored, as a media file's can, now that
+        // it has a column in the Audio Mixer to do it from. Off for every
+        // stream there already is — the value a media file's took when its
+        // own was added, and for its reason: switching it on for somebody
+        // would start a stream talking into their speakers unasked.
+        transaction.execute_batch(
+            "ALTER TABLE rtsp_source_settings
+                ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0
+                    CHECK (monitored IN (0, 1));
+
+            PRAGMA user_version = 25;",
+        )?;
     }
     transaction.commit()?;
     Ok(())
