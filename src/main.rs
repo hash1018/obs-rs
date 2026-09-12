@@ -76,7 +76,7 @@ fn main() -> eframe::Result {
                 // this field is `Some`, so leaving it out is a window with
                 // no `app_id` at all and a task bar showing the fallback
                 // icon beside the right name.
-                .with_app_id("obs-rs")
+                .with_app_id(APP_ID)
                 .with_icon(window_icon())
                 .with_min_inner_size([480.0, 320.0]),
             settings.workspace.window,
@@ -119,6 +119,18 @@ fn window_icon() -> egui::IconData {
 
 /// The window's own default size, used until the application has closed once.
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [960.0, 600.0];
+
+/// What the desktop knows this application by: the window's `app_id` below,
+/// the desktop entry `assets/linux/install-desktop-entry.sh` writes, and the
+/// name the global hotkey listener registers with the portal.
+///
+/// Reverse-DNS because the portal takes nothing else — an ID needs at least
+/// two dot-separated parts, and one that has them must also have a desktop
+/// entry by the same name, or the portal will not register it. Measured:
+/// unregistered, a request to bind shortcuts went unanswered for as long as
+/// it was waited on. The storage directory keeps the short name, which is
+/// `run_native`'s rather than this, so nobody's settings moved with it.
+pub const APP_ID: &str = "io.github.hash1018.obs-rs";
 
 /// Puts the window back where it was left, if that is still somewhere the
 /// user can reach.

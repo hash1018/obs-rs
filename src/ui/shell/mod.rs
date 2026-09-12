@@ -100,7 +100,7 @@ pub fn show(
         state,
         resources.snapshots,
         &resources.settings.hotkeys,
-        resources.global_hotkeys,
+        &resources.global_hotkeys,
         actions,
     );
     menu_bar::show(ui, state, resources.i18n, actions);

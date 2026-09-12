@@ -209,15 +209,16 @@ const SCENE_KEYS: [Key; 9] = [
 
 /// The keys the window hears for itself, run before anything is drawn.
 ///
-/// `global` is whether a global listener is running, in which case every
-/// hotkey but the window's own comes from it instead — see this module's
-/// docs — and hearing them here too would do each twice.
+/// `taken` is what a global listener hears, which comes from it instead —
+/// see this module's docs — since hearing it here too would do it twice.
+/// Every other hotkey is the window's: all of them where nothing listens
+/// globally, and on Linux any the desktop has not given a key.
 pub fn dispatch(
     ctx: &egui::Context,
     state: &mut UiState,
     snapshots: &Snapshots,
     bindings: &HotkeySettings,
-    global: bool,
+    taken: &HashSet<Hotkey>,
     actions: &mut Vec<UiAction>,
 ) {
     // Text first: a field with focus owns the keyboard, whatever the chord.
@@ -225,16 +226,14 @@ pub fn dispatch(
     // bind — a chord spent here is one that never reaches what asked for it.
     let typing = ctx.egui_wants_keyboard_input() || state.settings.capturing_hotkey();
 
-    if !global {
-        let bound: Vec<(Hotkey, Chord)> = bindings
-            .bound()
-            .into_iter()
-            .filter(|(hotkey, _)| hotkey.is_global())
-            .collect();
-        let tracker = &mut state.hotkeys.tracker;
-        let edges = ctx.input(|input| tracker.update(&bound, &WindowKeys(input), !typing));
-        act(state, snapshots, bindings, &edges, actions);
-    }
+    let heard: Vec<(Hotkey, Chord)> = bindings
+        .bound()
+        .into_iter()
+        .filter(|(hotkey, _)| hotkey.is_global() && !taken.contains(hotkey))
+        .collect();
+    let tracker = &mut state.hotkeys.tracker;
+    let edges = ctx.input(|input| tracker.update(&heard, &WindowKeys(input), !typing));
+    act(state, snapshots, bindings, &edges, actions);
     if typing {
         return;
     }
@@ -348,6 +347,28 @@ mod tests {
         bindings: &HotkeySettings,
         global: bool,
     ) -> Vec<Vec<UiAction>> {
+        // A global listener that holds every global hotkey, as the Windows
+        // one does, or none at all.
+        let taken: HashSet<Hotkey> = if global {
+            bindings
+                .bound()
+                .into_iter()
+                .map(|(hotkey, _)| hotkey)
+                .filter(|hotkey| hotkey.is_global())
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        run_holding(passes, snapshots, bindings, &taken)
+    }
+
+    /// [`run`], with a global listener holding exactly `taken`.
+    fn run_holding(
+        passes: Vec<Vec<(Key, bool, Modifiers)>>,
+        snapshots: &Snapshots,
+        bindings: &HotkeySettings,
+        taken: &HashSet<Hotkey>,
+    ) -> Vec<Vec<UiAction>> {
         let context = egui::Context::default();
         let mut state = UiState::default();
         passes
@@ -383,7 +404,7 @@ mod tests {
                             &mut state,
                             snapshots,
                             bindings,
-                            global,
+                            taken,
                             &mut actions,
                         );
                     });
@@ -634,6 +655,24 @@ mod tests {
             .remove(0),
             [UiAction::OpenSettings]
         );
+    }
+
+    /// On Linux the desktop may give some shortcuts a key and not others.
+    /// The window keeps every one it was not given, so a hotkey left without
+    /// a key still works while obs-rs has focus rather than nowhere.
+    #[test]
+    fn the_window_keeps_every_global_hotkey_the_listener_does_not_hold() {
+        let idle = recording_for(None);
+        let bindings = HotkeySettings::default();
+        // Pause is held elsewhere; recording is not, so the window hears it.
+        let taken = HashSet::from([Hotkey::Action(HotkeyAction::TogglePause)]);
+        let heard = run_holding(
+            vec![vec![(Key::R, true, Modifiers::CTRL)]],
+            &idle,
+            &bindings,
+            &taken,
+        );
+        assert!(matches!(heard[0].as_slice(), [UiAction::StartRecording]));
     }
 
     #[test]

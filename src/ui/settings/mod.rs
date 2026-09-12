@@ -18,6 +18,8 @@
 mod audio;
 mod general;
 mod hotkeys;
+
+pub(crate) use hotkeys::label as hotkey_label;
 mod recording;
 mod streaming;
 mod video;

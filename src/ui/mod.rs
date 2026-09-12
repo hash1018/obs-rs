@@ -18,6 +18,7 @@ use crate::snapshots::Snapshots;
 pub use action::{AudioFilterHost, UiAction};
 pub use docking::WorkspaceDocks;
 pub use preview::PreviewZoom;
+pub(crate) use settings::hotkey_label;
 pub use shell::hotkeys::{act as act_on_hotkeys, keyboard_taken};
 pub use state::UiState;
 
@@ -33,9 +34,9 @@ pub(super) struct UiResources<'a> {
     /// The latest frame the engine composited, or `None` before the first one
     /// arrives or when no engine is running.
     composite_frame: Option<&'a CompositeFrame>,
-    /// Whether a global hotkey listener is running, which takes every
-    /// hotkey but the window's own away from it — see `shell::hotkeys`.
-    global_hotkeys: bool,
+    /// The hotkeys a global listener hears, which the window leaves to it —
+    /// see `shell::hotkeys::dispatch`.
+    global_hotkeys: std::collections::HashSet<crate::hotkey::Hotkey>,
 }
 
 impl<'a> UiResources<'a> {
@@ -48,7 +49,7 @@ impl<'a> UiResources<'a> {
         audio_devices: &'a [AudioDeviceTarget],
         i18n: &'a LocalizationManager,
         composite_frame: Option<&'a CompositeFrame>,
-        global_hotkeys: bool,
+        global_hotkeys: std::collections::HashSet<crate::hotkey::Hotkey>,
     ) -> Self {
         Self {
             snapshots,

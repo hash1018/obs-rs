@@ -7,7 +7,7 @@ use eframe::egui;
 use crate::capture::AudioDeviceTarget;
 use crate::domain::SceneCanvas;
 use crate::engine::{AudioManager, EngineManager, METER_INTERVAL, MeterWake};
-use crate::hotkey::global::GlobalHotkeys;
+use crate::hotkey::global::{Bound, GlobalHotkeys};
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
@@ -176,11 +176,12 @@ impl ObsApp {
         // A repaint to wake the application's `logic` pass, which is where
         // what it heard is acted on — and which runs while the window is
         // minimised, when a hotkey is the only way to reach it at all.
-        let global_hotkeys =
-            GlobalHotkeys::spawn(move || hotkey_repaint_ctx.request_repaint_after(REPAINT_NOW));
-        if let Some(global) = &global_hotkeys {
-            global.set_bindings(&settings.hotkeys);
-        }
+        //
+        // The bindings follow on the first `logic` pass — see `poll_hotkeys`
+        // — which is where the names the system shows them under are known.
+        let global_hotkeys = GlobalHotkeys::spawn(cc, move || {
+            hotkey_repaint_ctx.request_repaint_after(REPAINT_NOW)
+        });
         let mixer = audio.as_ref().and_then(AudioManager::mixer);
         let monitor = audio
             .as_ref()
@@ -364,11 +365,6 @@ impl ObsApp {
         {
             audio.set_monitor_device(settings.audio.monitor_device.clone());
         }
-        if settings.hotkeys != self.settings.hotkeys
-            && let Some(global) = &self.global_hotkeys
-        {
-            global.set_bindings(&settings.hotkeys);
-        }
         self.settings = settings;
         if let Err(error) = self.settings_store.save(&self.settings) {
             eprintln!("could not save app settings: {error}");
@@ -511,6 +507,28 @@ impl ObsApp {
     /// heard or not: a push-to-talk key bound a moment ago silences its
     /// channel before anything is pressed.
     fn poll_hotkeys(&mut self, ctx: &egui::Context) {
+        if let Some(global) = &self.global_hotkeys {
+            // Every pass rather than when the settings change: a channel or
+            // Scene renamed renames its shortcut where the system shows it,
+            // and the listener does nothing with a list it already has.
+            global.set_bindings(
+                self.settings
+                    .hotkeys
+                    .bound()
+                    .into_iter()
+                    .map(|(hotkey, chord)| Bound {
+                        hotkey,
+                        chord,
+                        description: ui::hotkey_label(
+                            hotkey,
+                            &self.snapshots.audio,
+                            &self.snapshots.scenes,
+                            &self.localization,
+                        ),
+                    })
+                    .collect(),
+            );
+        }
         let edges = self
             .global_hotkeys
             .as_ref()
@@ -894,13 +912,20 @@ impl eframe::App for ObsApp {
             &self.audio_devices,
             &self.localization,
             composite_frame.as_deref(),
-            self.global_hotkeys.is_some(),
+            // What reaches it *now*: on Linux the desktop asks before it lets
+            // any through, and until it answers — or for good, if it is told
+            // no — the window keeps them.
+            self.global_hotkeys
+                .as_ref()
+                .map(GlobalHotkeys::taken)
+                .unwrap_or_default(),
         );
         ui::show(ui, &mut self.ui_state, &resources, &mut self.ui_actions);
 
         let ctx = ui.ctx().clone();
         if let Some(global) = &self.global_hotkeys {
             global.set_typing(ui::keyboard_taken(&ctx, &self.ui_state));
+            global.set_focused(ctx.input(|input| input.viewport().focused.unwrap_or(false)));
         }
         for index in 0..self.ui_actions.len() {
             let action = self.ui_actions[index].clone();

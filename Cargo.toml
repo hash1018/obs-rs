@@ -45,6 +45,12 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 toml = "0.9"
 unic-langid = "0.9.6"
 rfd = "0.17.2"
+# The window, named to the platform by the global hotkey listener: on Linux the
+# system's dialog asking to allow a set of shortcuts is shown over it, which
+# is what keeps that dialog from opening behind whatever has focus. Already in
+# the tree through winit and wgpu; named here because `hotkey::global` takes
+# the traits in its signature.
+raw-window-handle = "0.6"
 
 # The pipeline library this application is built on. Taken from crates.io so
 # that cloning this repository alone is enough to build it, and named by
@@ -78,10 +84,22 @@ winit = { version = "0.30", features = ["wayland-csd-adwaita"] }
 # `async-io`, not the default `tokio` backend. `media-pp` runs its own portal
 # handshake on this same crate and picks `async-io`; ashpd refuses to compile
 # with both backends enabled, so the choice is the library's, not ours.
+#
+# `global_shortcuts` for the hotkeys that work while another application has
+# focus — see `hotkey::global` — and `raw_handle` with `wayland` so the dialog
+# that asks to allow them can be shown over this window rather than behind it.
 ashpd = { version = "0.13.13", default-features = false, features = [
     "async-io",
+    "global_shortcuts",
+    "raw_handle",
     "screencast",
+    "wayland",
 ] }
+# Drive the global hotkey listener's portal conversation on its own thread —
+# a block_on, a timer, and waiting on whichever of several things happens
+# first. Already in the tree through `zbus`, at these versions.
+async-io = "2"
+futures-lite = "2"
 # `flock`, for the single-instance lock. Already in the tree through several
 # dependencies; named here because `instance::platform` calls it directly.
 libc = "0.2"

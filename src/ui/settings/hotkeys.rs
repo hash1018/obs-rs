@@ -209,7 +209,11 @@ fn row(
 /// What a hotkey is called on the page — a channel's and a Scene's with
 /// their own names in, as the project has them now. One whose channel or
 /// Scene has gone is still named, for the conflict it can still be in.
-fn label(
+///
+/// Also what the global listener calls it where the system shows it — see
+/// `hotkey::global::Bound::description` — so the dialog asking to allow a
+/// shortcut names it the way this page does.
+pub(crate) fn label(
     hotkey: Hotkey,
     audio: &AudioSnapshot,
     scenes: &ScenesSnapshot,
