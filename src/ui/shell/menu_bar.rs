@@ -48,37 +48,9 @@ pub fn show(
                     }
 
                     ui.menu_button(i18n.text(TextKey::MenuDocks), |ui| {
-                        dock_option(ui, state, DockPanel::Scenes, i18n.text(TextKey::DockScenes));
-                        dock_option(
-                            ui,
-                            state,
-                            DockPanel::Sources,
-                            i18n.text(TextKey::DockSources),
-                        );
-                        dock_option(
-                            ui,
-                            state,
-                            DockPanel::Properties,
-                            i18n.text(TextKey::DockProperties),
-                        );
-                        dock_option(
-                            ui,
-                            state,
-                            DockPanel::Filters,
-                            i18n.text(TextKey::DockFilters),
-                        );
-                        dock_option(
-                            ui,
-                            state,
-                            DockPanel::AudioMixer,
-                            i18n.text(TextKey::DockAudioMixer),
-                        );
-                        dock_option(
-                            ui,
-                            state,
-                            DockPanel::Controls,
-                            i18n.text(TextKey::DockControls),
-                        );
+                        for panel in DockPanel::ALL {
+                            dock_option(ui, state, panel, i18n.text(panel.title()));
+                        }
                     });
 
                     ui.menu_button(i18n.text(TextKey::MenuTheme), |ui| {

@@ -5,7 +5,7 @@ use eframe::egui;
 use super::PANEL_MARGIN;
 use super::layout::{DockLayout, DockPanel, DockRegionId, REGIONS};
 use crate::capture::AudioDeviceTarget;
-use crate::i18n::{LocalizationManager, TextKey};
+use crate::i18n::LocalizationManager;
 use crate::snapshots::Snapshots;
 use crate::ui::editor::SceneEditorState;
 use crate::ui::{UiAction, UiResources, panels};
@@ -240,15 +240,7 @@ fn show_panel(
     child.painter().text(
         title_rect.left_center(),
         egui::Align2::LEFT_CENTER,
-        content.i18n.text(match panel {
-            DockPanel::Scenes => TextKey::DockScenes,
-            DockPanel::Sources => TextKey::DockSources,
-            DockPanel::AudioMixer => TextKey::DockAudioMixer,
-            DockPanel::Controls => TextKey::DockControls,
-            DockPanel::Properties => TextKey::DockProperties,
-            DockPanel::Filters => TextKey::DockFilters,
-            DockPanel::Stats => TextKey::DockStats,
-        }),
+        content.i18n.text(panel.title()),
         egui::TextStyle::Heading.resolve(child.style()),
         child.visuals().strong_text_color(),
     );

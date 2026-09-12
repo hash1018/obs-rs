@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::TextKey;
+
 /// One dock.
 ///
 /// Serialised into the settings file by name, so the arrangement survives a
@@ -147,6 +149,35 @@ impl DockState {
 }
 
 impl DockPanel {
+    /// Every dock, in the order the View menu lists them.
+    ///
+    /// The menu is the only way to open a dock that starts closed, so one
+    /// missing from here is a dock nobody can reach. That is what the Stats
+    /// dock was: closed by default, and absent from a menu that named each
+    /// dock by hand. A test holds this to the default layout.
+    pub(in crate::ui) const ALL: [DockPanel; 7] = [
+        DockPanel::Scenes,
+        DockPanel::Sources,
+        DockPanel::Properties,
+        DockPanel::Filters,
+        DockPanel::Stats,
+        DockPanel::AudioMixer,
+        DockPanel::Controls,
+    ];
+
+    /// What the dock is called, in its title bar and in the View menu.
+    pub(in crate::ui) fn title(self) -> TextKey {
+        match self {
+            Self::Scenes => TextKey::DockScenes,
+            Self::Sources => TextKey::DockSources,
+            Self::AudioMixer => TextKey::DockAudioMixer,
+            Self::Controls => TextKey::DockControls,
+            Self::Properties => TextKey::DockProperties,
+            Self::Filters => TextKey::DockFilters,
+            Self::Stats => TextKey::DockStats,
+        }
+    }
+
     pub(super) fn min_size(self) -> egui::Vec2 {
         match self {
             Self::Scenes | Self::Sources => egui::vec2(180.0, 120.0),
@@ -543,6 +574,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The View menu lists `DockPanel::ALL`, and it is the only way to open
+    /// a dock that starts closed. The Stats dock was added to the layout,
+    /// closed, and left out of a menu that named docks by hand — so nothing
+    /// could open it.
+    #[test]
+    fn every_dock_the_layout_has_can_be_opened_from_the_menu() {
+        let layout = DockLayout::default();
+        for panel in layout.states.keys() {
+            assert!(
+                DockPanel::ALL.contains(panel),
+                "{panel:?} is in the layout but not in the View menu"
+            );
+        }
+        assert_eq!(
+            DockPanel::ALL.len(),
+            layout.states.len(),
+            "the menu lists a dock twice, or one the layout does not have"
+        );
     }
 
     #[test]
