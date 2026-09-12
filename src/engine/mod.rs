@@ -158,8 +158,8 @@ struct EngineSetup {
     /// `None` on a machine whose audio never started, which is also a
     /// machine with no mix for an output's audio track to fail on.
     audio_troubles: Option<mpsc::Receiver<Trouble>>,
-    /// What the audio thread's own outputs are costing — see `load`.
-    audio_load: Arc<ArcSwapOption<load::Load>>,
+    /// What the audio thread's mix pipeline is doing — see `load`.
+    audio_stats: Arc<ArcSwapOption<media_pp::stats::PipelineStats>>,
     /// For the meters of Sources that bring their own sound — see
     /// `AudioLink::meter_wake`.
     meter_wake: MeterWake,
@@ -265,9 +265,9 @@ pub struct AudioLink {
     /// files and streams. One between them, so the limit it keeps is on the
     /// window rather than on each half — see [`MeterWake`].
     pub meter_wake: MeterWake,
-    /// What its own outputs are costing, republished each pass — see
+    /// What its mix pipeline is doing, republished each pass — see
     /// [`load`].
-    pub load: Arc<ArcSwapOption<load::Load>>,
+    pub stats: Arc<ArcSwapOption<media_pp::stats::PipelineStats>>,
 }
 
 pub struct OutputSettings {
@@ -331,7 +331,7 @@ impl EngineManager {
             mixer,
             monitor,
             troubles: audio_troubles,
-            load: audio_load,
+            stats: audio_stats,
             meter_wake,
         } = audio;
         let size = [canvas.width as u32, canvas.height as u32];
@@ -392,7 +392,7 @@ impl EngineManager {
                     size,
                     project,
                     audio_troubles,
-                    audio_load,
+                    audio_stats,
                     meter_wake,
                     recording: OutputState {
                         settings: outputs.recording,
@@ -754,7 +754,7 @@ fn run(
         project,
         mut recording,
         audio_troubles,
-        audio_load,
+        audio_stats,
         meter_wake,
     } = setup;
     // Shared rather than moved: both the sink that publishes a frame and the
@@ -872,8 +872,22 @@ fn run(
                     continue;
                 }
                 looked_for_missing = Instant::now();
-                last_load = publish_output_load(&engine, &published, &audio_load, last_load);
-                publish_stats(&engine, &published, &open, &scene, &mut reading);
+                // Read once for both: each reading copies a pipeline's
+                // registry, and the two would otherwise disagree by however
+                // many buffers moved in between.
+                let compositor = engine.backend.preview.stats();
+                let mix = audio_stats.load_full();
+                last_load = publish_output_load(&published, &compositor, mix.as_deref(), last_load);
+                publish_stats(
+                    &published,
+                    [("preview", &compositor)]
+                        .into_iter()
+                        .chain(mix.as_deref().map(|mix| ("mix", mix))),
+                    &open,
+                    &scene,
+                    &recording.settings.directory_or_default(),
+                    &mut reading,
+                );
                 status::notice_closed_windows(&backend, &mut open, &scene);
                 status::notice_ended_media(&backend, &mut open, &scene);
                 status::notice_dropped_streams(&backend, &mut open, &scene);
@@ -1052,21 +1066,18 @@ fn watch_outputs(
 /// Both pipelines, added together: an output's video branch is on the
 /// compositor's and its audio on the audio thread's, and either can be the
 /// one that is behind. The audio side arrives already read — see
-/// `AudioManager::load`.
+/// `AudioManager::stats`.
 ///
 /// Answers the reading to measure the next interval against.
 fn publish_output_load(
-    engine: &Engine<'_>,
     published: &Published,
-    audio_load: &ArcSwapOption<load::Load>,
+    compositor: &media_pp::stats::PipelineStats,
+    mix: Option<&media_pp::stats::PipelineStats>,
     last: (Instant, load::Load),
 ) -> (Instant, load::Load) {
     let now = Instant::now();
-    let total = load::Load::read(&engine.backend.preview.stats()).merge(
-        audio_load
-            .load_full()
-            .map_or_else(load::Load::default, |load| *load),
-    );
+    let total =
+        load::Load::read(compositor).merge(mix.map_or_else(load::Load::default, load::Load::read));
     let (_, before) = last;
     let share = total.since(before).pressure();
     published
@@ -1080,17 +1091,20 @@ fn publish_output_load(
 /// Every pipeline, because they are not one: the compositor has its own, the
 /// mixer has its own, and each Source has its own again. What ties them
 /// together is the names — which element belongs to which of the few things
-/// a person would act on.
-fn publish_stats(
-    engine: &Engine<'_>,
+/// a person would act on. The compositor's and the mixer's arrive already
+/// read, since the output load is taken from the same reading.
+///
+/// Also how much room is left in `directory`, where recordings go.
+fn publish_stats<'a>(
     published: &Published,
+    shared: impl IntoIterator<Item = (&'static str, &'a media_pp::stats::PipelineStats)>,
     open: &HashMap<SceneItemId, SourceState>,
     scene: &SourcesSnapshot,
+    directory: &std::path::Path,
     reading: &mut load::Reading,
 ) {
     use crate::snapshots::Subject;
 
-    let compositor = engine.backend.preview.stats();
     // Held for as long as the borrows below, since `take` reads through them.
     let scene_sources: Vec<_> = scene
         .items
@@ -1112,13 +1126,16 @@ fn publish_stats(
         .map(|(element, name, _)| (element.as_str(), name.as_str()))
         .collect();
 
-    let mut pipelines = vec![("preview", load::elements(&compositor))];
+    let mut pipelines: Vec<_> = shared
+        .into_iter()
+        .map(|(label, stats)| (label, load::elements(stats)))
+        .collect();
     pipelines.extend(
         scene_sources
             .iter()
             .map(|(element, _, stats)| (element.as_str(), load::elements(stats))),
     );
-    let snapshot = reading.take(&pipelines, |element| match element.name {
+    let mut snapshot = reading.take(&pipelines, |element| match element.name {
         // The compositor takes nothing in — it is its pipeline's source, and
         // what it made is on its output pad. What compositing costs is not
         // an element's `busy` at all: it happens in the thread that drives
@@ -1147,6 +1164,7 @@ fn publish_stats(
             .map(|name| (Subject::Source((*name).to_owned()), Role::Throughput)),
         _ => None,
     });
+    snapshot.disk_available = output::disk::available(directory);
     published.stats.store(Some(Arc::new(snapshot)));
 }
 

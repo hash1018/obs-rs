@@ -45,7 +45,8 @@
 
 use std::time::Duration;
 
-use media_pp::stats::{ElementStats, PipelineStats};
+use media_pp::graph::ElementId;
+use media_pp::stats::{ElementState, ElementStats, PipelineStats, TickStats};
 
 use crate::snapshots::Role;
 
@@ -247,6 +248,17 @@ pub struct Element<'a> {
     pub errors: u64,
     /// Its queue, if it is one.
     pub queue: Option<media_pp::stats::QueueStats>,
+    /// Its stable identity. `None` only in a view built by hand.
+    pub id: Option<ElementId>,
+    /// Whether it is in the graph, rather than on a finished branch that is
+    /// still draining.
+    pub attached: bool,
+    /// Bytes of packets through its busiest output port — for an encoder,
+    /// what it has written.
+    pub bytes: u64,
+    /// Its ticks, for an element that produces on a schedule of its own —
+    /// which here is the compositor.
+    pub ticks: Option<TickStats>,
 }
 
 impl<'a> From<&'a ElementStats> for Element<'a> {
@@ -259,6 +271,10 @@ impl<'a> From<&'a ElementStats> for Element<'a> {
             idle_for: element.idle_for,
             errors: element.errors,
             queue: element.queue,
+            id: Some(element.id),
+            attached: element.state == ElementState::Attached,
+            bytes: element.pads.iter().map(|pad| pad.bytes).max().unwrap_or(0),
+            ticks: element.ticks,
         }
     }
 }
@@ -277,6 +293,12 @@ pub fn elements(stats: &PipelineStats) -> Vec<Element<'_>> {
 pub struct Reading {
     /// Totals as they last stood, kept to measure the next reading against.
     previous: std::collections::HashMap<String, Totals>,
+    /// The compositor's ticks as they last stood, and whose they were — see
+    /// [`Reading::rendering`].
+    rendered: Option<(Option<ElementId>, TickStats)>,
+    /// Each output's bytes as they last stood, and which run of it wrote
+    /// them — see [`Reading::output`].
+    written: std::collections::HashMap<crate::snapshots::Subject, (Option<ElementId>, u64)>,
     taken_at: std::time::Instant,
 }
 
@@ -290,6 +312,8 @@ impl Reading {
     pub fn new() -> Self {
         Self {
             previous: std::collections::HashMap::new(),
+            rendered: None,
+            written: std::collections::HashMap::new(),
             taken_at: std::time::Instant::now(),
         }
     }
@@ -395,7 +419,109 @@ impl Reading {
         crate::snapshots::StatsSnapshot {
             rows: std::sync::Arc::new(rows),
             interval,
+            rendering: self.rendering(pipelines),
+            recording: self.output(OutputKind::Recording, pipelines, interval),
+            broadcast: self.output(OutputKind::Broadcast, pipelines, interval),
+            disk_available: None,
         }
+    }
+
+    /// How the compositor is keeping its frame rate: the ticks it has drawn
+    /// and missed, and what drawing a frame took over this interval.
+    ///
+    /// Found by its ticks rather than its name — it is the only element that
+    /// reports any.
+    fn rendering(
+        &mut self,
+        pipelines: &[(&str, Vec<Element<'_>>)],
+    ) -> Option<crate::snapshots::Rendering> {
+        let (run, ticks) = pipelines
+            .iter()
+            .flat_map(|(_, elements)| elements)
+            .find_map(|element| Some((element.id, element.ticks?)))?;
+        // Against the same compositor only: one built again starts from
+        // nothing, and measuring it against the last one's totals would read
+        // as no frames drawn at all.
+        let before = self
+            .rendered
+            .replace((run, ticks))
+            .filter(|(was, _)| *was == run);
+        let frame_time = before.and_then(|(_, before)| {
+            let made = ticks.made.saturating_sub(before.made);
+            (made > 0).then(|| {
+                Duration::from_secs_f64(
+                    ticks.work.saturating_sub(before.work).as_secs_f64() / made as f64,
+                )
+            })
+        });
+        Some(crate::snapshots::Rendering {
+            run,
+            made: ticks.made,
+            missed: ticks.missed,
+            frame_time,
+        })
+    }
+
+    /// What one output has been handed, lost and written, or `None` when it
+    /// is not running.
+    ///
+    /// Its video queue is the head of it: what reached the queue is every
+    /// frame the output was given, and what the queue threw away or gave up
+    /// waiting to hand on is what never reached the file or the wire. An
+    /// output's queues block rather than drop, so a frame is lost only once
+    /// the wait has run out — by which point the compositor has been held up
+    /// too, and says so as missed ticks. Its encoders, video and audio, are
+    /// what it has written.
+    ///
+    /// Only what is still in the graph: a finished output's branch drains
+    /// for a moment after it stops, and counting it would show a recording
+    /// that is not running.
+    fn output(
+        &mut self,
+        kind: OutputKind,
+        pipelines: &[(&str, Vec<Element<'_>>)],
+        interval: Duration,
+    ) -> Option<crate::snapshots::OutputStats> {
+        let subject = match kind {
+            OutputKind::Recording => crate::snapshots::Subject::Recording,
+            OutputKind::Broadcast => crate::snapshots::Subject::Broadcast,
+        };
+        let prefix = kind.prefix();
+        let attached = || {
+            pipelines
+                .iter()
+                .flat_map(|(_, elements)| elements)
+                .filter(|element| element.attached)
+        };
+        let queue = format!("{prefix}-queue");
+        let Some(head) =
+            attached().find(|element| element.name == queue && element.queue.is_some())
+        else {
+            self.written.remove(&subject);
+            return None;
+        };
+        let encoders = [format!("{prefix}-encode"), format!("{prefix}-audio-encode")];
+        let bytes = attached()
+            .filter(|element| encoders.iter().any(|name| name == element.name))
+            .map(|element| element.bytes)
+            .sum();
+        // Against the same run only, for the reason the compositor's are:
+        // a recording started again has written nothing yet.
+        let before = self
+            .written
+            .insert(subject, (head.id, bytes))
+            .filter(|(was, _)| *was == head.id);
+        let bitrate = before.and_then(|(_, before)| {
+            (!interval.is_zero())
+                .then(|| bytes.saturating_sub(before) as f64 * 8.0 / interval.as_secs_f64())
+        });
+        Some(crate::snapshots::OutputStats {
+            run: head.id,
+            frames: head.taken,
+            lost: head.queue.map_or(0, |queue| queue.dropped) + head.errors,
+            bytes,
+            bitrate,
+        })
     }
 }
 
@@ -440,11 +566,134 @@ mod folding {
         pipelines: impl Fn(u64) -> Vec<(&'a str, Vec<Element<'a>>)>,
         named: impl Fn(&Element<'_>) -> Option<(Subject, Role)> + Copy,
     ) -> Vec<crate::snapshots::StatsRow> {
+        read_twice(pipelines, named).rows.as_ref().clone()
+    }
+
+    /// The same, answering the whole second reading rather than its rows.
+    fn read_twice<'a>(
+        pipelines: impl Fn(u64) -> Vec<(&'a str, Vec<Element<'a>>)>,
+        named: impl Fn(&Element<'_>) -> Option<(Subject, Role)> + Copy,
+    ) -> crate::snapshots::StatsSnapshot {
         let mut reading = Reading::new();
         reading.take(&pipelines(0), named);
         reading.taken_at = std::time::Instant::now() - Duration::from_secs(1);
-        let snapshot = reading.take(&pipelines(1), named);
-        snapshot.rows.as_ref().clone()
+        reading.take(&pipelines(1), named)
+    }
+
+    /// A recording as the summary reads it: the video queue at its head on
+    /// the compositor's pipeline, its video encoder beside it, and its audio
+    /// encoder on the mixer's. `second` scales every total.
+    fn a_recording<'a>(second: u64) -> Vec<(&'a str, Vec<Element<'a>>)> {
+        vec![
+            (
+                "preview",
+                vec![
+                    Element {
+                        name: "record-queue",
+                        taken: 60 * second,
+                        errors: second,
+                        queue: Some(QueueStats {
+                            dropped: 2 * second,
+                            ..queue(0, 8)
+                        }),
+                        attached: true,
+                        ..Element::default()
+                    },
+                    Element {
+                        name: "record-encode",
+                        bytes: 750_000 * second,
+                        attached: true,
+                        ..Element::default()
+                    },
+                ],
+            ),
+            (
+                "mix",
+                vec![Element {
+                    name: "record-audio-encode",
+                    bytes: 20_000 * second,
+                    attached: true,
+                    ..Element::default()
+                }],
+            ),
+        ]
+    }
+
+    /// What OBS shows for an output: frames it was given and lost, what its
+    /// encoders wrote — video and audio, from two pipelines — and the rate
+    /// they wrote it at.
+    #[test]
+    fn an_outputs_totals_come_from_its_queue_and_both_of_its_encoders() {
+        let snapshot = read_twice(a_recording, |_| None);
+        let recording = snapshot.recording.expect("a recording is running");
+        assert_eq!(recording.frames, 60);
+        assert_eq!(
+            recording.lost, 3,
+            "thrown away, and given up on after waiting — both never reached the file"
+        );
+        assert_eq!(recording.bytes, 770_000);
+        let bitrate = recording.bitrate.expect("a second reading has a rate");
+        assert!(
+            (bitrate - 6_160_000.0).abs() < 100_000.0,
+            "770 kB in about a second is about 6.2 Mb/s: {bitrate}"
+        );
+        assert_eq!(snapshot.broadcast, None, "and nothing is being broadcast");
+    }
+
+    /// A stopped recording's branch drains for a moment outside the graph.
+    /// Counted, it would show a recording running after it had stopped.
+    #[test]
+    fn a_finished_outputs_draining_branch_is_not_a_running_output() {
+        let snapshot = read_twice(
+            |second| {
+                let mut pipelines = a_recording(second);
+                for (_, elements) in &mut pipelines {
+                    for element in elements {
+                        element.attached = false;
+                    }
+                }
+                pipelines
+            },
+            |_| None,
+        );
+        assert_eq!(snapshot.recording, None);
+    }
+
+    /// The first reading of a run has nothing to measure a rate against,
+    /// and says so rather than dividing a whole run's bytes by a second.
+    #[test]
+    fn an_outputs_first_reading_has_no_bitrate() {
+        let mut reading = Reading::new();
+        let snapshot = reading.take(&a_recording(10), |_| None);
+        assert_eq!(snapshot.recording.map(|r| r.bitrate), Some(None));
+    }
+
+    /// What a frame took to draw, over the interval: the compositor's work
+    /// between two readings over the frames it drew in between.
+    #[test]
+    fn the_time_a_frame_takes_to_draw_is_measured_between_two_readings() {
+        let snapshot = read_twice(
+            |second| {
+                vec![(
+                    "preview",
+                    vec![Element {
+                        name: "preview-compositor",
+                        ticks: Some(TickStats {
+                            made: 60 * second,
+                            missed: second,
+                            work: Duration::from_millis(18 * second),
+                        }),
+                        ..Element::default()
+                    }],
+                )]
+            },
+            |_| None,
+        );
+        let rendering = snapshot
+            .rendering
+            .expect("the compositor reports its ticks");
+        assert_eq!((rendering.made, rendering.missed), (60, 1));
+        assert_eq!(rendering.frame_time, Some(Duration::from_micros(300)));
     }
 
     /// A recording is a queue, an encoder and a muxer, and only the muxer

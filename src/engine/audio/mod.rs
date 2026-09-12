@@ -261,17 +261,14 @@ impl AudioEngine {
         }
     }
 
-    /// What this thread's outputs have cost, as running totals.
+    /// What the mix pipeline is doing, as running totals, or `None` when the
+    /// mixer never started.
     ///
-    /// An output's audio branch is on the mix pipeline, so its queue is
-    /// counted here and nowhere else — the same split that makes this
-    /// thread forward its own failures. See `engine::load`.
-    pub(super) fn load(&self) -> crate::engine::load::Load {
-        self.mixer
-            .as_ref()
-            .map_or_else(crate::engine::load::Load::default, |mixer| {
-                crate::engine::load::Load::read(&mixer.pipeline.stats())
-            })
+    /// An output's audio branch is on the mix pipeline, so its queue and its
+    /// encoder are counted here and nowhere else — the same split that makes
+    /// this thread forward its own failures. See `engine::load`.
+    pub(super) fn stats(&self) -> Option<media_pp::stats::PipelineStats> {
+        self.mixer.as_ref().map(|mixer| mixer.pipeline.stats())
     }
 
     /// What has gone wrong on this thread's own pipelines since it was last

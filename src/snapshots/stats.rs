@@ -13,6 +13,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use media_pp::graph::ElementId;
+
 /// Everything the Stats dock shows, as of one reading.
 #[derive(Debug, Clone, Default)]
 pub struct StatsSnapshot {
@@ -20,6 +22,60 @@ pub struct StatsSnapshot {
     pub rows: Arc<Vec<StatsRow>>,
     /// How long the reading covers, for turning totals into rates.
     pub interval: Duration,
+    /// How the compositor is keeping its frame rate, or `None` before it has
+    /// drawn anything.
+    pub rendering: Option<Rendering>,
+    /// What the running recording has taken, lost and written, or `None`
+    /// when none is running.
+    pub recording: Option<OutputStats>,
+    /// The same, for the running broadcast.
+    pub broadcast: Option<OutputStats>,
+    /// Bytes free to this user where recordings are written, or `None` where
+    /// that could not be asked.
+    pub disk_available: Option<u64>,
+}
+
+/// How the compositor is keeping its frame rate — what OBS calls rendering.
+///
+/// Totals rather than rates, apart from `frame_time`, so that the dock can
+/// count from wherever it was last reset.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rendering {
+    /// Which compositor these totals belong to. One built again counts from
+    /// zero, and a reset taken against the last one does not apply to it.
+    pub run: Option<ElementId>,
+    /// Frames drawn.
+    pub made: u64,
+    /// Ticks of the frame rate skipped because the one before ran past
+    /// their deadline — whatever held it up. Drawing is one thing that can;
+    /// an output that is behind is the other, since the compositor hands
+    /// each frame on before it draws the next. `frame_time` says which.
+    pub missed: u64,
+    /// What drawing a frame took on average over the last interval, not
+    /// counting handing it on. `None` when nothing was drawn in it.
+    pub frame_time: Option<Duration>,
+}
+
+/// What one output has been handed, lost and written, for one run of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputStats {
+    /// Which run of the output these totals belong to — a recording started
+    /// again counts from zero, and a reset taken against the last one does
+    /// not apply to it.
+    pub run: Option<ElementId>,
+    /// Video frames handed to it.
+    pub frames: u64,
+    /// Of those, the ones it never took: its queue blocks rather than drops,
+    /// so these are the ones it gave up waiting to hand on — something
+    /// after it, the encoder or the disk or the network, stayed behind for
+    /// the whole of that wait.
+    pub lost: u64,
+    /// Bytes its encoders have put out, video and audio together — what the
+    /// file or the stream has been given, before the container's own.
+    pub bytes: u64,
+    /// Bits a second its encoders put out over the last interval. `None` on
+    /// the first reading of a run, which has nothing to measure against.
+    pub bitrate: Option<f64>,
 }
 
 /// What one named thing in the graph is doing.

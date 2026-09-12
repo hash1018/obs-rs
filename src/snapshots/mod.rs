@@ -7,7 +7,7 @@ mod status;
 pub use audio::{AudioSnapshot, AudioSourceSnapshot};
 pub use scenes::{SceneSnapshot, ScenesSnapshot};
 pub use sources::{SceneItemSnapshot, SourcesSnapshot};
-pub use stats::{Role, StatsRow, StatsSnapshot, Subject};
+pub use stats::{OutputStats, Rendering, Role, StatsRow, StatsSnapshot, Subject};
 pub use status::{SourceStatus, StatusSnapshot};
 
 /// Read-only application state consumed while drawing one UI frame.

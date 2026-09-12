@@ -111,6 +111,7 @@ pub fn show(
             scenes: &mut state.scenes,
             sources: &mut state.sources,
             filters: &mut state.filters,
+            stats: &mut state.stats,
         },
         &mut state.editor,
         resources,

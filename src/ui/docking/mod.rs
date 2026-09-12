@@ -25,6 +25,7 @@ pub(super) struct PanelStates<'a> {
     pub(super) scenes: &'a mut ScenesPanelState,
     pub(super) sources: &'a mut SourcesPanelState,
     pub(super) filters: &'a mut crate::ui::panels::filters::FiltersPanelState,
+    pub(super) stats: &'a mut crate::ui::panels::stats::StatsPanelState,
 }
 
 pub(super) fn show(

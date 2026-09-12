@@ -288,7 +288,13 @@ fn show_panel(
             );
         }
         DockPanel::Stats => {
-            panels::stats::show(&mut child, &content.snapshots.stats, content.i18n);
+            panels::stats::show(
+                &mut child,
+                content.panels.stats,
+                &content.snapshots.stats,
+                &content.snapshots.status,
+                content.i18n,
+            );
         }
         DockPanel::Filters => {
             panels::filters::show(

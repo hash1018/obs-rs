@@ -3,6 +3,7 @@ use super::editor::SceneEditorState;
 use super::panels::filters::FiltersPanelState;
 use super::panels::scenes::ScenesPanelState;
 use super::panels::sources::SourcesPanelState;
+use super::panels::stats::StatsPanelState;
 use super::preview::PreviewViewState;
 use super::settings::SettingsDialogState;
 
@@ -24,6 +25,7 @@ pub struct UiState {
     pub(super) editor: SceneEditorState,
     pub(super) sources: SourcesPanelState,
     pub(super) filters: FiltersPanelState,
+    pub(super) stats: StatsPanelState,
     pub(super) preview: PreviewViewState,
     pub(super) settings: SettingsDialogState,
 }

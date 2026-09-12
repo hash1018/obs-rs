@@ -40,6 +40,7 @@
 //! is not a reason to refuse a recording, so the track list is decided here,
 //! per recording, from what is actually running.
 
+pub(in crate::engine) mod disk;
 mod session;
 mod streaming;
 
