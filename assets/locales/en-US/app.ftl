@@ -259,9 +259,14 @@ filters-noise-suppression-about = Takes steady background noise out of speech, w
 filters-noise-gate = Noise Gate
 filters-gate-open = Open threshold
 filters-gate-close = Close threshold
-filters-gate-attack = Attack
 filters-gate-hold = Hold
-filters-gate-release = Release
+filters-compressor = Compressor
+filters-limiter = Limiter
+filters-threshold = Threshold
+filters-ratio = Ratio
+filters-attack = Attack
+filters-release = Release
+filters-output-gain = Output gain
 
 project-unavailable-title = Project could not be opened
 project-unavailable-body = obs-rs is running without a project. Scenes, sources and settings from this session will not be saved.

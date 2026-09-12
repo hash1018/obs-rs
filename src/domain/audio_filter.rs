@@ -23,6 +23,10 @@ stored_by_name! {
         NoiseSuppression => "noise_suppression",
         /// Silences what is below a level.
         NoiseGate => "noise_gate",
+        /// Turns down what is above a level, by a ratio.
+        Compressor => "compressor",
+        /// Lets nothing out above a level.
+        Limiter => "limiter",
     }
 }
 
@@ -47,6 +51,8 @@ pub enum AudioFilterSettings {
     /// suppression people reach for.
     NoiseSuppression,
     NoiseGate(NoiseGateSettings),
+    Compressor(CompressorSettings),
+    Limiter(LimiterSettings),
 }
 
 impl AudioFilterSettings {
@@ -54,6 +60,8 @@ impl AudioFilterSettings {
         match self {
             Self::NoiseSuppression => AudioFilterKind::NoiseSuppression,
             Self::NoiseGate(_) => AudioFilterKind::NoiseGate,
+            Self::Compressor(_) => AudioFilterKind::Compressor,
+            Self::Limiter(_) => AudioFilterKind::Limiter,
         }
     }
 
@@ -62,7 +70,30 @@ impl AudioFilterSettings {
         match kind {
             AudioFilterKind::NoiseSuppression => Self::NoiseSuppression,
             AudioFilterKind::NoiseGate => Self::NoiseGate(NoiseGateSettings::default()),
+            AudioFilterKind::Compressor => Self::Compressor(CompressorSettings::default()),
+            AudioFilterKind::Limiter => Self::Limiter(LimiterSettings::default()),
         }
+    }
+
+    /// The same settings brought within range, whichever kind they are —
+    /// what every way of changing them passes through.
+    pub fn sanitised(self) -> Self {
+        match self {
+            Self::NoiseSuppression => Self::NoiseSuppression,
+            Self::NoiseGate(settings) => Self::NoiseGate(settings.sanitised()),
+            Self::Compressor(settings) => Self::Compressor(settings.sanitised()),
+            Self::Limiter(settings) => Self::Limiter(settings.sanitised()),
+        }
+    }
+}
+
+/// `db` within `min..=max`, and a level that is no level at all at
+/// `otherwise` — where the filter it is for does least.
+fn clamp_db(db: f32, min: f32, max: f32, otherwise: f32) -> f32 {
+    if db.is_finite() {
+        db.clamp(min, max)
+    } else {
+        otherwise
     }
 }
 
@@ -108,17 +139,99 @@ impl NoiseGateSettings {
     /// range — what every way of changing them passes through, so the
     /// engine is never handed a pair its gate refuses.
     pub fn sanitised(self) -> Self {
-        let clamp = |db: f32| {
-            if db.is_finite() {
-                db.clamp(Self::MIN_THRESHOLD_DB, 0.0)
-            } else {
-                Self::MIN_THRESHOLD_DB
-            }
-        };
+        let clamp = |db: f32| clamp_db(db, Self::MIN_THRESHOLD_DB, 0.0, Self::MIN_THRESHOLD_DB);
         let open = clamp(self.open_threshold_db);
         Self {
             open_threshold_db: open,
             close_threshold_db: clamp(self.close_threshold_db).min(open),
+            ..self
+        }
+    }
+}
+
+/// A compressor's five settings, as the Filters dock edits them — mirroring
+/// `media_pp::elements::AudioCompressorOptions` as [`NoiseGateSettings`]
+/// mirrors the gate's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompressorSettings {
+    /// The level, in dBFS, above which it starts turning down.
+    pub threshold_db: f32,
+    /// How much it turns down what is over the threshold: at 4, a level 12 dB
+    /// over comes out 3 dB over.
+    pub ratio: f32,
+    pub attack_ms: u32,
+    pub release_ms: u32,
+    /// Gain after compression, in dB, to make up for what it took off.
+    pub output_gain_db: f32,
+}
+
+impl Default for CompressorSettings {
+    /// A streaming application's compressor starts from these.
+    fn default() -> Self {
+        Self {
+            threshold_db: -18.0,
+            ratio: 10.0,
+            attack_ms: 6,
+            release_ms: 60,
+            output_gain_db: 0.0,
+        }
+    }
+}
+
+impl CompressorSettings {
+    pub const MIN_THRESHOLD_DB: f32 = -60.0;
+    pub const MAX_RATIO: f32 = 32.0;
+    /// How far the output gain goes either way, in dB.
+    pub const OUTPUT_GAIN_DB: f32 = 32.0;
+
+    /// The same settings within range. A ratio under one would be an
+    /// expander, which the element refuses; one that is not a number is
+    /// taken as one, which does nothing.
+    pub fn sanitised(self) -> Self {
+        Self {
+            threshold_db: clamp_db(self.threshold_db, Self::MIN_THRESHOLD_DB, 0.0, 0.0),
+            ratio: if self.ratio.is_finite() {
+                self.ratio.clamp(1.0, Self::MAX_RATIO)
+            } else {
+                1.0
+            },
+            output_gain_db: if self.output_gain_db.is_finite() {
+                self.output_gain_db
+                    .clamp(-Self::OUTPUT_GAIN_DB, Self::OUTPUT_GAIN_DB)
+            } else {
+                0.0
+            },
+            ..self
+        }
+    }
+}
+
+/// A limiter's two settings, as the Filters dock edits them — mirroring
+/// `media_pp::elements::AudioLimiterOptions`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LimiterSettings {
+    /// The level, in dBFS, nothing comes out over.
+    pub threshold_db: f32,
+    pub release_ms: u32,
+}
+
+impl Default for LimiterSettings {
+    /// A streaming application's limiter starts from these.
+    fn default() -> Self {
+        Self {
+            threshold_db: -6.0,
+            release_ms: 60,
+        }
+    }
+}
+
+impl LimiterSettings {
+    pub const MIN_THRESHOLD_DB: f32 = -60.0;
+
+    /// The same settings within range.
+    pub fn sanitised(self) -> Self {
+        Self {
+            threshold_db: clamp_db(self.threshold_db, Self::MIN_THRESHOLD_DB, 0.0, 0.0),
             ..self
         }
     }
@@ -151,6 +264,34 @@ mod tests {
         }
         .sanitised();
         assert_eq!(settings.close_threshold_db, -30.0);
+    }
+
+    /// What the elements refuse — a ratio under one, a level that is not a
+    /// number — comes back as where each does least, not as an error: a
+    /// value from a database somebody edited.
+    #[test]
+    fn a_compressor_or_limiter_setting_the_element_refuses_is_brought_to_where_it_does_least() {
+        let compressor = CompressorSettings {
+            threshold_db: f32::NAN,
+            ratio: 0.5,
+            output_gain_db: f32::INFINITY,
+            ..CompressorSettings::default()
+        }
+        .sanitised();
+        assert_eq!(
+            (
+                compressor.threshold_db,
+                compressor.ratio,
+                compressor.output_gain_db
+            ),
+            (0.0, 1.0, 0.0)
+        );
+        let limiter = LimiterSettings {
+            threshold_db: -200.0,
+            ..LimiterSettings::default()
+        }
+        .sanitised();
+        assert_eq!(limiter.threshold_db, LimiterSettings::MIN_THRESHOLD_DB);
     }
 
     #[test]

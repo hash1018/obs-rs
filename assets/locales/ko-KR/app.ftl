@@ -259,9 +259,14 @@ filters-noise-suppression-about = RNNoise로 말소리에서 일정한 배경 �
 filters-noise-gate = 노이즈 게이트
 filters-gate-open = 열림 기준
 filters-gate-close = 닫힘 기준
-filters-gate-attack = 어택
 filters-gate-hold = 홀드
-filters-gate-release = 릴리스
+filters-compressor = 컴프레서
+filters-limiter = 리미터
+filters-threshold = 기준
+filters-ratio = 비율
+filters-attack = 어택
+filters-release = 릴리스
+filters-output-gain = 출력 게인
 
 project-unavailable-title = 프로젝트를 열 수 없습니다
 project-unavailable-body = 프로젝트 없이 실행 중입니다. 이번 세션에서 만든 장면·소스·설정은 저장되지 않습니다.

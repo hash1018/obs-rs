@@ -1,7 +1,7 @@
 use crate::domain::{
-    AudioFilterId, AudioFilterKind, AudioSourceId, ChromaKeySettings, ClockFormat, Crop,
-    DisplayCaptureSettings, FilterId, FilterKind, ImageSourceSettings, MediaFileSettings,
-    NoiseGateSettings, RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, Stroke,
+    AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId, ChromaKeySettings,
+    ClockFormat, Crop, DisplayCaptureSettings, FilterId, FilterKind, ImageSourceSettings,
+    MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, Stroke,
     TextAlignment, TextMode, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
     WindowCaptureSettings,
 };
@@ -41,7 +41,9 @@ pub enum AudioCommand {
     MoveFilterLater(AudioFilterId),
     /// Turns a filter off without discarding what it was tuned to.
     SetFilterEnabled(AudioFilterId, bool),
-    SetNoiseGateSettings(AudioFilterId, NoiseGateSettings),
+    /// Replaces a filter's settings. Its kind is the row's and stays so: a
+    /// value of another kind is stored where nothing reads it.
+    SetFilterSettings(AudioFilterId, AudioFilterSettings),
 }
 
 #[derive(Debug, Clone, PartialEq)]

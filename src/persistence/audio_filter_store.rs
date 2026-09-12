@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
     AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId,
-    NoiseGateSettings,
+    CompressorSettings, LimiterSettings, NoiseGateSettings,
 };
 
 use super::database::PersistenceResult;
@@ -34,10 +34,21 @@ impl AudioFilterStore {
                 noise_gate_filter_settings.close_threshold_db,
                 noise_gate_filter_settings.attack_ms,
                 noise_gate_filter_settings.hold_ms,
-                noise_gate_filter_settings.release_ms
+                noise_gate_filter_settings.release_ms,
+                compressor_filter_settings.threshold_db,
+                compressor_filter_settings.ratio,
+                compressor_filter_settings.attack_ms,
+                compressor_filter_settings.release_ms,
+                compressor_filter_settings.output_gain_db,
+                limiter_filter_settings.threshold_db,
+                limiter_filter_settings.release_ms
              FROM audio_source_filters
              LEFT JOIN noise_gate_filter_settings
                  ON noise_gate_filter_settings.filter_id = audio_source_filters.id
+             LEFT JOIN compressor_filter_settings
+                 ON compressor_filter_settings.filter_id = audio_source_filters.id
+             LEFT JOIN limiter_filter_settings
+                 ON limiter_filter_settings.filter_id = audio_source_filters.id
              ORDER BY audio_source_filters.audio_source_id, audio_source_filters.position",
         )?;
         let rows = statement.query_map([], |row| {
@@ -47,6 +58,12 @@ impl AudioFilterStore {
                 Some(AudioFilterKind::NoiseSuppression) => AudioFilterSettings::NoiseSuppression,
                 Some(AudioFilterKind::NoiseGate) => {
                     AudioFilterSettings::NoiseGate(noise_gate_from_row(row)?)
+                }
+                Some(AudioFilterKind::Compressor) => {
+                    AudioFilterSettings::Compressor(compressor_from_row(row)?)
+                }
+                Some(AudioFilterKind::Limiter) => {
+                    AudioFilterSettings::Limiter(limiter_from_row(row)?)
                 }
                 // A kind a newer build wrote. Dropped, as `FilterStore`
                 // drops one: the project is still readable without it.
@@ -91,12 +108,7 @@ impl AudioFilterStore {
             params![owner.0, next_position, kind.storage_name()],
         )?;
         let id = AudioFilterId(transaction.last_insert_rowid());
-        match AudioFilterSettings::default_for(kind) {
-            AudioFilterSettings::NoiseSuppression => {}
-            AudioFilterSettings::NoiseGate(settings) => {
-                write_noise_gate(transaction, id, settings)?;
-            }
-        }
+        write_settings(transaction, id, AudioFilterSettings::default_for(kind))?;
         Ok(id)
     }
 
@@ -171,38 +183,66 @@ impl AudioFilterStore {
         Ok(())
     }
 
-    /// Replaces a gate's settings, put in order on the way in — see
-    /// [`NoiseGateSettings::sanitised`]. Writes a row for a filter of another
-    /// kind too, harmlessly: nothing reads a gate's settings for a filter
-    /// whose kind says it is not one.
-    pub(crate) fn set_noise_gate(
+    /// Replaces a filter's settings, brought within range on the way in —
+    /// see [`AudioFilterSettings::sanitised`]. Settings of another kind than
+    /// the filter's are written too, harmlessly: nothing reads a gate's
+    /// settings for a filter whose kind says it is not one.
+    pub(crate) fn set_settings(
         transaction: &Transaction<'_>,
         id: AudioFilterId,
-        settings: NoiseGateSettings,
+        settings: AudioFilterSettings,
     ) -> PersistenceResult<()> {
-        write_noise_gate(transaction, id, settings)
+        write_settings(transaction, id, settings)
     }
 }
 
-fn write_noise_gate(
+fn write_settings(
     transaction: &Transaction<'_>,
     id: AudioFilterId,
-    settings: NoiseGateSettings,
+    settings: AudioFilterSettings,
 ) -> PersistenceResult<()> {
-    let settings = settings.sanitised();
-    transaction.execute(
-        "INSERT OR REPLACE INTO noise_gate_filter_settings
-             (filter_id, open_threshold_db, close_threshold_db, attack_ms, hold_ms, release_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            id.0,
-            settings.open_threshold_db,
-            settings.close_threshold_db,
-            settings.attack_ms,
-            settings.hold_ms,
-            settings.release_ms,
-        ],
-    )?;
+    match settings.sanitised() {
+        AudioFilterSettings::NoiseSuppression => {}
+        AudioFilterSettings::NoiseGate(settings) => {
+            transaction.execute(
+                "INSERT OR REPLACE INTO noise_gate_filter_settings
+                     (filter_id, open_threshold_db, close_threshold_db, attack_ms, hold_ms,
+                      release_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id.0,
+                    settings.open_threshold_db,
+                    settings.close_threshold_db,
+                    settings.attack_ms,
+                    settings.hold_ms,
+                    settings.release_ms,
+                ],
+            )?;
+        }
+        AudioFilterSettings::Compressor(settings) => {
+            transaction.execute(
+                "INSERT OR REPLACE INTO compressor_filter_settings
+                     (filter_id, threshold_db, ratio, attack_ms, release_ms, output_gain_db)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id.0,
+                    settings.threshold_db,
+                    settings.ratio,
+                    settings.attack_ms,
+                    settings.release_ms,
+                    settings.output_gain_db,
+                ],
+            )?;
+        }
+        AudioFilterSettings::Limiter(settings) => {
+            transaction.execute(
+                "INSERT OR REPLACE INTO limiter_filter_settings
+                     (filter_id, threshold_db, release_ms)
+                 VALUES (?1, ?2, ?3)",
+                params![id.0, settings.threshold_db, settings.release_ms],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -221,6 +261,39 @@ fn noise_gate_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoiseGateSet
         attack_ms: row.get::<_, Option<u32>>(6)?.unwrap_or(defaults.attack_ms),
         hold_ms: row.get::<_, Option<u32>>(7)?.unwrap_or(defaults.hold_ms),
         release_ms: row.get::<_, Option<u32>>(8)?.unwrap_or(defaults.release_ms),
+    }
+    .sanitised())
+}
+
+/// The compressor's columns, with the gate's fallback to defaults.
+fn compressor_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompressorSettings> {
+    let defaults = CompressorSettings::default();
+    Ok(CompressorSettings {
+        threshold_db: row
+            .get::<_, Option<f32>>(9)?
+            .unwrap_or(defaults.threshold_db),
+        ratio: row.get::<_, Option<f32>>(10)?.unwrap_or(defaults.ratio),
+        attack_ms: row.get::<_, Option<u32>>(11)?.unwrap_or(defaults.attack_ms),
+        release_ms: row
+            .get::<_, Option<u32>>(12)?
+            .unwrap_or(defaults.release_ms),
+        output_gain_db: row
+            .get::<_, Option<f32>>(13)?
+            .unwrap_or(defaults.output_gain_db),
+    }
+    .sanitised())
+}
+
+/// The limiter's columns, with the gate's fallback to defaults.
+fn limiter_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LimiterSettings> {
+    let defaults = LimiterSettings::default();
+    Ok(LimiterSettings {
+        threshold_db: row
+            .get::<_, Option<f32>>(14)?
+            .unwrap_or(defaults.threshold_db),
+        release_ms: row
+            .get::<_, Option<u32>>(15)?
+            .unwrap_or(defaults.release_ms),
     }
     .sanitised())
 }
@@ -294,7 +367,11 @@ mod tests {
         };
         database
             .transaction(|transaction| {
-                AudioFilterStore::set_noise_gate(transaction, gate, tuned)?;
+                AudioFilterStore::set_settings(
+                    transaction,
+                    gate,
+                    AudioFilterSettings::NoiseGate(tuned),
+                )?;
                 AudioFilterStore::set_enabled(transaction, gate, false)
             })
             .unwrap();
@@ -307,6 +384,57 @@ mod tests {
                 close_threshold_db: -40.0,
                 ..tuned
             })
+        );
+    }
+
+    /// Each kind's settings come back from its own table, on its own
+    /// filter — three settings tables joined onto one row each must not
+    /// hand one filter another's columns.
+    #[test]
+    fn a_compressor_and_a_limiter_keep_their_own_settings_beside_a_gate() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mic = microphone(&database);
+        let compressor = CompressorSettings {
+            threshold_db: -24.0,
+            ratio: 4.0,
+            attack_ms: 12,
+            release_ms: 250,
+            output_gain_db: 6.0,
+        };
+        let limiter = LimiterSettings {
+            threshold_db: -2.0,
+            release_ms: 90,
+        };
+        database
+            .transaction(|transaction| {
+                AudioFilterStore::add(transaction, mic, AudioFilterKind::NoiseGate)?;
+                let first = AudioFilterStore::add(transaction, mic, AudioFilterKind::Compressor)?;
+                let second = AudioFilterStore::add(transaction, mic, AudioFilterKind::Limiter)?;
+                AudioFilterStore::set_settings(
+                    transaction,
+                    first,
+                    AudioFilterSettings::Compressor(compressor),
+                )?;
+                AudioFilterStore::set_settings(
+                    transaction,
+                    second,
+                    AudioFilterSettings::Limiter(limiter),
+                )
+            })
+            .unwrap();
+
+        let settings: Vec<AudioFilterSettings> = AudioFilterStore::all(database.connection())
+            .unwrap()[&mic]
+            .iter()
+            .map(|filter| filter.settings)
+            .collect();
+        assert_eq!(
+            settings,
+            [
+                AudioFilterSettings::NoiseGate(NoiseGateSettings::default()),
+                AudioFilterSettings::Compressor(compressor),
+                AudioFilterSettings::Limiter(limiter),
+            ]
         );
     }
 }

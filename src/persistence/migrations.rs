@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -393,6 +393,31 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 22;",
         )?;
     }
+    if current_version < 23 {
+        // A compressor and a limiter for the mixer's channels: two more kinds
+        // in `audio_source_filters`, and a settings table each, as migration
+        // 22 laid out. Milliseconds whole, as the gate's are.
+        transaction.execute_batch(
+            "CREATE TABLE compressor_filter_settings (
+                filter_id      INTEGER PRIMARY KEY
+                               REFERENCES audio_source_filters(id) ON DELETE CASCADE,
+                threshold_db   REAL NOT NULL,
+                ratio          REAL NOT NULL CHECK (ratio >= 1),
+                attack_ms      INTEGER NOT NULL CHECK (attack_ms >= 0),
+                release_ms     INTEGER NOT NULL CHECK (release_ms >= 0),
+                output_gain_db REAL NOT NULL
+            );
+
+            CREATE TABLE limiter_filter_settings (
+                filter_id    INTEGER PRIMARY KEY
+                             REFERENCES audio_source_filters(id) ON DELETE CASCADE,
+                threshold_db REAL NOT NULL,
+                release_ms   INTEGER NOT NULL CHECK (release_ms >= 0)
+            );
+
+            PRAGMA user_version = 23;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -452,6 +477,8 @@ mod tests {
             "chroma_key_filter_settings",
             "audio_source_filters",
             "noise_gate_filter_settings",
+            "compressor_filter_settings",
+            "limiter_filter_settings",
         ] {
             assert_eq!(
                 connection
@@ -535,6 +562,8 @@ mod tests {
         connection
             .execute_batch(
                 "UPDATE audio_sources SET monitored = 1;
+                 DROP TABLE limiter_filter_settings;
+                 DROP TABLE compressor_filter_settings;
                  DROP TABLE noise_gate_filter_settings;
                  DROP TABLE audio_source_filters;
                  PRAGMA user_version = 20;",

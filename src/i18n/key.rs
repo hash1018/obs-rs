@@ -90,9 +90,14 @@ text_keys! {
     FiltersNoiseGate              => "filters-noise-gate";
     FiltersGateOpen               => "filters-gate-open";
     FiltersGateClose              => "filters-gate-close";
-    FiltersGateAttack             => "filters-gate-attack";
     FiltersGateHold               => "filters-gate-hold";
-    FiltersGateRelease            => "filters-gate-release";
+    FiltersCompressor             => "filters-compressor";
+    FiltersLimiter                => "filters-limiter";
+    FiltersThreshold              => "filters-threshold";
+    FiltersRatio                  => "filters-ratio";
+    FiltersAttack                 => "filters-attack";
+    FiltersRelease                => "filters-release";
+    FiltersOutputGain             => "filters-output-gain";
     PropertiesNoSelection         => "properties-no-selection";
     PropertiesName                => "properties-name";
     PropertiesKind                => "properties-kind";

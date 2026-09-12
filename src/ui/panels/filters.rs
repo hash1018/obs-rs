@@ -26,8 +26,8 @@ use eframe::egui;
 
 use crate::domain::{
     AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId,
-    ChromaKeyMethod, Filter, FilterId, FilterKind, FilterSettings, NoiseGateSettings, SceneItemId,
-    SourceKind,
+    ChromaKeyMethod, CompressorSettings, Filter, FilterId, FilterKind, FilterSettings,
+    LimiterSettings, NoiseGateSettings, SceneItemId, SourceKind,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{AudioCommand, ProjectCommand, SourceCommand};
@@ -414,7 +414,8 @@ fn show_channel(
     ui.horizontal(|ui| {
         // A menu rather than a button, since there is more than one kind to
         // add — and in the order a streaming application recommends running
-        // them: take the noise out first, then gate what is left.
+        // them: take the noise out first, gate what is left, even it out,
+        // and limit last.
         ui.menu_button("+", |ui| {
             for kind in AudioFilterKind::ALL {
                 if ui.button(i18n.text(audio_kind_key(kind))).clicked() {
@@ -466,7 +467,14 @@ fn show_channel(
         return;
     };
     ui.separator();
-    show_channel_settings(ui, channel, selected, i18n, actions);
+    // Scrolled on its own: a compressor's five rows under a chain of four
+    // are taller than the dock starts out, and the last of them is the one
+    // a compressor is least use without.
+    egui::ScrollArea::vertical()
+        .id_salt("audio-filter-settings")
+        .show(ui, |ui| {
+            show_channel_settings(ui, channel, selected, i18n, actions);
+        });
 }
 
 fn show_channel_settings(
@@ -476,55 +484,160 @@ fn show_channel_settings(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let AudioFilterSettings::NoiseGate(settings) = filter.settings else {
+    let settings = filter.settings;
+    let mut sliders: Vec<egui::Response> = Vec::new();
+    let edited = egui::Grid::new("audio-filter-settings")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| match settings {
+            AudioFilterSettings::NoiseSuppression => None,
+            AudioFilterSettings::NoiseGate(gate) => Some(AudioFilterSettings::NoiseGate(
+                gate_sliders(ui, gate, i18n, &mut sliders),
+            )),
+            AudioFilterSettings::Compressor(compressor) => Some(AudioFilterSettings::Compressor(
+                compressor_sliders(ui, compressor, i18n, &mut sliders),
+            )),
+            AudioFilterSettings::Limiter(limiter) => Some(AudioFilterSettings::Limiter(
+                limiter_sliders(ui, limiter, i18n, &mut sliders),
+            )),
+        })
+        .inner;
+    let Some(edited) = edited else {
         // RNNoise has nothing to set; what is worth saying is what it costs.
         ui.weak(i18n.text(TextKey::FiltersNoiseSuppressionAbout));
         return;
     };
-    let mut edited = settings;
-    let mut sliders: Vec<egui::Response> = Vec::new();
-    egui::Grid::new("noise-gate-settings")
-        .num_columns(2)
-        .spacing([10.0, 6.0])
-        .show(ui, |ui| {
-            let range = NoiseGateSettings::MIN_THRESHOLD_DB..=0.0;
-            ui.label(i18n.text(TextKey::FiltersGateOpen).as_ref());
-            sliders.push(ui.add(
-                egui::Slider::new(&mut edited.open_threshold_db, range.clone()).suffix(" dB"),
-            ));
-            ui.end_row();
 
-            ui.label(i18n.text(TextKey::FiltersGateClose).as_ref());
-            sliders.push(
-                ui.add(egui::Slider::new(&mut edited.close_threshold_db, range).suffix(" dB")),
-            );
-            ui.end_row();
-
-            for (key, value, most) in [
-                (TextKey::FiltersGateAttack, &mut edited.attack_ms, 1_000),
-                (TextKey::FiltersGateHold, &mut edited.hold_ms, 2_000),
-                (TextKey::FiltersGateRelease, &mut edited.release_ms, 2_000),
-            ] {
-                ui.label(i18n.text(key).as_ref());
-                sliders.push(ui.add(egui::Slider::new(value, 0..=most).suffix(" ms")));
-                ui.end_row();
-            }
-        });
-
-    // The close threshold follows the open one down rather than letting the
-    // pair cross, which the gate would refuse.
+    // Within range before it goes anywhere — for a gate, the close threshold
+    // following the open one down rather than letting the pair cross, which
+    // the element would refuse.
     let edited = edited.sanitised();
     let gesture = Gesture::of(&sliders, edited != settings);
     if gesture.drag {
         actions.push(UiAction::DragAudioFilterSettings(
-            channel.id,
-            filter.id,
-            AudioFilterSettings::NoiseGate(edited),
+            channel.id, filter.id, edited,
         ));
     }
     if gesture.record {
-        actions.push(audio(AudioCommand::SetNoiseGateSettings(filter.id, edited)));
+        actions.push(audio(AudioCommand::SetFilterSettings(filter.id, edited)));
     }
+}
+
+/// One labelled slider in a settings grid, kept for [`Gesture::of`].
+fn slider_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    slider: egui::Slider<'_>,
+    sliders: &mut Vec<egui::Response>,
+) {
+    ui.label(label);
+    sliders.push(ui.add(slider));
+    ui.end_row();
+}
+
+fn gate_sliders(
+    ui: &mut egui::Ui,
+    mut edited: NoiseGateSettings,
+    i18n: &LocalizationManager,
+    sliders: &mut Vec<egui::Response>,
+) -> NoiseGateSettings {
+    let range = NoiseGateSettings::MIN_THRESHOLD_DB..=0.0;
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersGateOpen).as_ref(),
+        egui::Slider::new(&mut edited.open_threshold_db, range.clone()).suffix(" dB"),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersGateClose).as_ref(),
+        egui::Slider::new(&mut edited.close_threshold_db, range).suffix(" dB"),
+        sliders,
+    );
+    for (key, value, most) in [
+        (TextKey::FiltersAttack, &mut edited.attack_ms, 1_000),
+        (TextKey::FiltersGateHold, &mut edited.hold_ms, 2_000),
+        (TextKey::FiltersRelease, &mut edited.release_ms, 2_000),
+    ] {
+        slider_row(
+            ui,
+            i18n.text(key).as_ref(),
+            egui::Slider::new(value, 0..=most).suffix(" ms"),
+            sliders,
+        );
+    }
+    edited
+}
+
+/// A streaming application's compressor ranges, so a setting copied from
+/// one fits.
+fn compressor_sliders(
+    ui: &mut egui::Ui,
+    mut edited: CompressorSettings,
+    i18n: &LocalizationManager,
+    sliders: &mut Vec<egui::Response>,
+) -> CompressorSettings {
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersRatio).as_ref(),
+        egui::Slider::new(&mut edited.ratio, 1.0..=CompressorSettings::MAX_RATIO).suffix(":1"),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersThreshold).as_ref(),
+        egui::Slider::new(
+            &mut edited.threshold_db,
+            CompressorSettings::MIN_THRESHOLD_DB..=0.0,
+        )
+        .suffix(" dB"),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersAttack).as_ref(),
+        egui::Slider::new(&mut edited.attack_ms, 1..=500).suffix(" ms"),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersRelease).as_ref(),
+        egui::Slider::new(&mut edited.release_ms, 1..=1_000).suffix(" ms"),
+        sliders,
+    );
+    let gain = CompressorSettings::OUTPUT_GAIN_DB;
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersOutputGain).as_ref(),
+        egui::Slider::new(&mut edited.output_gain_db, -gain..=gain).suffix(" dB"),
+        sliders,
+    );
+    edited
+}
+
+fn limiter_sliders(
+    ui: &mut egui::Ui,
+    mut edited: LimiterSettings,
+    i18n: &LocalizationManager,
+    sliders: &mut Vec<egui::Response>,
+) -> LimiterSettings {
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersThreshold).as_ref(),
+        egui::Slider::new(
+            &mut edited.threshold_db,
+            LimiterSettings::MIN_THRESHOLD_DB..=0.0,
+        )
+        .suffix(" dB"),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersRelease).as_ref(),
+        egui::Slider::new(&mut edited.release_ms, 1..=1_000).suffix(" ms"),
+        sliders,
+    );
+    edited
 }
 
 fn audio(command: AudioCommand) -> UiAction {
@@ -535,6 +648,8 @@ fn audio_kind_key(kind: AudioFilterKind) -> TextKey {
     match kind {
         AudioFilterKind::NoiseSuppression => TextKey::FiltersNoiseSuppression,
         AudioFilterKind::NoiseGate => TextKey::FiltersNoiseGate,
+        AudioFilterKind::Compressor => TextKey::FiltersCompressor,
+        AudioFilterKind::Limiter => TextKey::FiltersLimiter,
     }
 }
 

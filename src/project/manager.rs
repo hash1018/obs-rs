@@ -161,8 +161,8 @@ fn handle_audio_command(
         AudioCommand::SetFilterEnabled(id, enabled) => {
             AudioFilterStore::set_enabled(transaction, id, enabled)
         }
-        AudioCommand::SetNoiseGateSettings(id, settings) => {
-            AudioFilterStore::set_noise_gate(transaction, id, settings)
+        AudioCommand::SetFilterSettings(id, settings) => {
+            AudioFilterStore::set_settings(transaction, id, settings)
         }
     })
 }
