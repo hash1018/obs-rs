@@ -48,6 +48,9 @@ enum AudioCommand {
     /// One filter's settings, mid-gesture — the same split as `Gain`, for a
     /// slider in the Filters dock.
     RetuneFilter(AudioSourceId, AudioFilterId, AudioFilterSettings),
+    /// Whether a push-to-talk or push-to-mute key is silencing one channel —
+    /// see `AudioEngine::set_hotkey_muted`.
+    HotkeyMuted(AudioSourceId, bool),
     /// An endpoint appeared, went, or became the default. Says to look
     /// again, not what changed — see [`crate::capture::watch_audio_devices`].
     DevicesChanged,
@@ -190,6 +193,9 @@ impl AudioManager {
                     let mut gains: Vec<(AudioSourceId, f32)> = Vec::new();
                     let mut retunes: Vec<(AudioSourceId, AudioFilterId, AudioFilterSettings)> =
                         Vec::new();
+                    // In order and all of them, unlike a fader's: a key that
+                    // went down and up in one batch has to end up up.
+                    let mut hotkey_mutes: Vec<(AudioSourceId, bool)> = Vec::new();
                     for command in woken.into_iter().chain(command_rx.try_iter()) {
                         match command {
                             AudioCommand::Project(snapshot) => {
@@ -208,6 +214,7 @@ impl AudioManager {
                                 retunes.retain(|(_, other, _)| *other != filter);
                                 retunes.push((id, filter, settings));
                             }
+                            AudioCommand::HotkeyMuted(id, muted) => hotkey_mutes.push((id, muted)),
                             AudioCommand::DevicesChanged => devices_changed = true,
                             AudioCommand::MixFormat(format) => {
                                 mix_format = format;
@@ -277,6 +284,12 @@ impl AudioManager {
                     }
                     // A bare health tick that found everything running has no
                     // counters to republish and no reason to wake the UI.
+                    // Before the early return below, which is for a pass
+                    // with nothing to republish: a key is not something the
+                    // UI needs telling about, and must not wait for one.
+                    for (id, muted) in hotkey_mutes {
+                        engine.set_hotkey_muted(id, muted);
+                    }
                     if ticked
                         && !project_changed
                         && !devices_changed
@@ -358,6 +371,15 @@ impl AudioManager {
     ) {
         if let Some(commands) = &self.commands {
             let _ = commands.send(AudioCommand::RetuneFilter(id, filter, settings));
+        }
+    }
+
+    /// Silences one channel while a push-to-talk or push-to-mute key says
+    /// to, or lets it be heard again. Not a project edit — see
+    /// `AudioEngine::set_hotkey_muted`.
+    pub fn set_hotkey_muted(&self, id: AudioSourceId, muted: bool) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(AudioCommand::HotkeyMuted(id, muted));
         }
     }
 

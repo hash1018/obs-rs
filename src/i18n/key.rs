@@ -184,6 +184,14 @@ text_keys! {
     HotkeyTogglePause             => "hotkey-toggle-pause";
     HotkeyFullscreen              => "hotkey-fullscreen";
     HotkeyOpenSettings            => "hotkey-open-settings";
+    HotkeyToggleStreaming         => "hotkey-toggle-streaming";
+    HotkeyPushToTalk              => "hotkey-push-to-talk";
+    HotkeyPushToMute              => "hotkey-push-to-mute";
+    HotkeyToggleMute              => "hotkey-toggle-mute";
+    HotkeySwitchScene             => "hotkey-switch-scene";
+    HotkeySectionGeneral          => "hotkey-section-general";
+    HotkeySectionAudio            => "hotkey-section-audio";
+    HotkeySectionScenes           => "hotkey-section-scenes";
     HotkeyPressAKey               => "hotkey-press-a-key";
     HotkeyNone                    => "hotkey-none";
     HotkeyConflict                => "hotkey-conflict";

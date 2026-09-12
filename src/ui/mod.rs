@@ -18,6 +18,7 @@ use crate::snapshots::Snapshots;
 pub use action::{AudioFilterHost, UiAction};
 pub use docking::WorkspaceDocks;
 pub use preview::PreviewZoom;
+pub use shell::hotkeys::{act as act_on_hotkeys, keyboard_taken};
 pub use state::UiState;
 
 pub(super) struct UiResources<'a> {
@@ -32,6 +33,9 @@ pub(super) struct UiResources<'a> {
     /// The latest frame the engine composited, or `None` before the first one
     /// arrives or when no engine is running.
     composite_frame: Option<&'a CompositeFrame>,
+    /// Whether a global hotkey listener is running, which takes every
+    /// hotkey but the window's own away from it — see `shell::hotkeys`.
+    global_hotkeys: bool,
 }
 
 impl<'a> UiResources<'a> {
@@ -44,6 +48,7 @@ impl<'a> UiResources<'a> {
         audio_devices: &'a [AudioDeviceTarget],
         i18n: &'a LocalizationManager,
         composite_frame: Option<&'a CompositeFrame>,
+        global_hotkeys: bool,
     ) -> Self {
         Self {
             snapshots,
@@ -51,6 +56,7 @@ impl<'a> UiResources<'a> {
             audio_devices,
             i18n,
             composite_frame,
+            global_hotkeys,
         }
     }
 }

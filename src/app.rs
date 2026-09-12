@@ -7,6 +7,7 @@ use eframe::egui;
 use crate::capture::AudioDeviceTarget;
 use crate::domain::SceneCanvas;
 use crate::engine::{AudioManager, EngineManager, METER_INTERVAL, MeterWake};
+use crate::hotkey::global::GlobalHotkeys;
 use crate::i18n::{LocalizationManager, install_locale_fonts};
 use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
@@ -26,6 +27,9 @@ pub struct ObsApp {
     /// The audio graph. Separate from the engine because it neither needs a
     /// GPU nor should be lost when one is missing — see `engine::audio`.
     audio: Option<AudioManager>,
+    /// Hotkeys from whichever application has focus, or `None` where there
+    /// is no way to listen for them — see `crate::hotkey::global`.
+    global_hotkeys: Option<GlobalHotkeys>,
     #[cfg(target_os = "linux")]
     system_display_picker: Option<SystemDisplayPicker>,
     localization: LocalizationManager,
@@ -102,6 +106,7 @@ impl ObsApp {
         let resource_repaint_ctx = cc.egui_ctx.clone();
         let project_repaint_ctx = cc.egui_ctx.clone();
         let audio_repaint_ctx = cc.egui_ctx.clone();
+        let hotkey_repaint_ctx = cc.egui_ctx.clone();
         #[cfg(target_os = "linux")]
         let picker_repaint_ctx = cc.egui_ctx.clone();
         // Within an interval rather than now, so a meter's repaint and one the
@@ -168,6 +173,14 @@ impl ObsApp {
         {
             audio.set_monitor_device(settings.audio.monitor_device.clone());
         }
+        // A repaint to wake the application's `logic` pass, which is where
+        // what it heard is acted on — and which runs while the window is
+        // minimised, when a hotkey is the only way to reach it at all.
+        let global_hotkeys =
+            GlobalHotkeys::spawn(move || hotkey_repaint_ctx.request_repaint_after(REPAINT_NOW));
+        if let Some(global) = &global_hotkeys {
+            global.set_bindings(&settings.hotkeys);
+        }
         let mixer = audio.as_ref().and_then(AudioManager::mixer);
         let monitor = audio
             .as_ref()
@@ -220,6 +233,7 @@ impl ObsApp {
             audio_devices: Arc::new(crate::capture::audio_devices()),
             font_picker: None,
             audio,
+            global_hotkeys,
             exiting: false,
             // Filled in on the first pass, which happens before anything can
             // close the window.
@@ -349,6 +363,11 @@ impl ObsApp {
             && let Some(audio) = &self.audio
         {
             audio.set_monitor_device(settings.audio.monitor_device.clone());
+        }
+        if settings.hotkeys != self.settings.hotkeys
+            && let Some(global) = &self.global_hotkeys
+        {
+            global.set_bindings(&settings.hotkeys);
         }
         self.settings = settings;
         if let Err(error) = self.settings_store.save(&self.settings) {
@@ -480,6 +499,33 @@ impl ObsApp {
         for item in &mut self.snapshots.sources.items {
             item.peak_db = engine.media_peak_db(item.id);
             item.position = engine.media_position(item.id);
+        }
+    }
+
+    /// Acts on what the global hotkey listener heard, and keeps what
+    /// push-to-talk silences in step with the bindings.
+    ///
+    /// From `logic` rather than the drawing pass, because that is the one
+    /// eframe still runs while the window is minimised — which is exactly
+    /// when a key is how somebody reaches this application. Run every pass,
+    /// heard or not: a push-to-talk key bound a moment ago silences its
+    /// channel before anything is pressed.
+    fn poll_hotkeys(&mut self, ctx: &egui::Context) {
+        let edges = self
+            .global_hotkeys
+            .as_ref()
+            .map(GlobalHotkeys::edges)
+            .unwrap_or_default();
+        let mut actions = Vec::new();
+        ui::act_on_hotkeys(
+            &mut self.ui_state,
+            &self.snapshots,
+            &self.settings.hotkeys,
+            &edges,
+            &mut actions,
+        );
+        for action in actions {
+            self.handle_ui_action(ctx, action);
         }
     }
 
@@ -661,6 +707,11 @@ impl ObsApp {
                 }
             }
             UiAction::ShowAudioFilters(id) => self.ui_state.show_audio_filters(id),
+            UiAction::SetHotkeyMuted(id, muted) => {
+                if let Some(audio) = &self.audio {
+                    audio.set_hotkey_muted(id, muted);
+                }
+            }
             UiAction::DrawStrokes(item_id, strokes) => {
                 if let Some(engine) = &self.engine {
                     engine.set_drawing_strokes(item_id, strokes);
@@ -825,6 +876,7 @@ impl eframe::App for ObsApp {
         #[cfg(target_os = "linux")]
         self.poll_system_display_picker();
         self.poll_font_picker();
+        self.poll_hotkeys(ctx);
     }
 
     fn on_exit(&mut self) {
@@ -842,10 +894,14 @@ impl eframe::App for ObsApp {
             &self.audio_devices,
             &self.localization,
             composite_frame.as_deref(),
+            self.global_hotkeys.is_some(),
         );
         ui::show(ui, &mut self.ui_state, &resources, &mut self.ui_actions);
 
         let ctx = ui.ctx().clone();
+        if let Some(global) = &self.global_hotkeys {
+            global.set_typing(ui::keyboard_taken(&ctx, &self.ui_state));
+        }
         for index in 0..self.ui_actions.len() {
             let action = self.ui_actions[index].clone();
             self.handle_ui_action(&ctx, action);

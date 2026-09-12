@@ -28,6 +28,7 @@ pub struct UiState {
     pub(super) stats: StatsPanelState,
     pub(super) preview: PreviewViewState,
     pub(super) settings: SettingsDialogState,
+    pub(super) hotkeys: super::shell::hotkeys::HotkeyState,
 }
 
 impl UiState {

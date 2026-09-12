@@ -1,4 +1,4 @@
-mod hotkeys;
+pub(super) mod hotkeys;
 mod menu_bar;
 mod status_bar;
 
@@ -100,6 +100,7 @@ pub fn show(
         state,
         resources.snapshots,
         &resources.settings.hotkeys,
+        resources.global_hotkeys,
         actions,
     );
     menu_bar::show(ui, state, resources.i18n, actions);
@@ -137,6 +138,7 @@ pub fn show(
         &resources.snapshots.status.audio_codecs,
         resources.audio_devices,
         &resources.snapshots.audio,
+        &resources.snapshots.scenes,
         resources.i18n,
         actions,
     );

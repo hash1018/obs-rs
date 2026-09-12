@@ -73,6 +73,10 @@ pub enum UiAction {
     /// own menu is the way in; a Source's sound has the same way in from its
     /// column, beside being selected.
     ShowAudioFilters(AudioFilterHost),
+    /// Whether a push-to-talk or push-to-mute key is silencing one mixer
+    /// channel now. To the audio graph and never the project: a key held
+    /// down is not an edit, and the mute button is left as it was.
+    SetHotkeyMuted(AudioSourceId, bool),
     /// One media file's or stream's gain while the fader is still held. Goes
     /// to the engine rather than the audio graph: their faders live in their
     /// own pipelines, which the video engine owns.

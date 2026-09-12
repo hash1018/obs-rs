@@ -15,12 +15,24 @@
 //! The key names are egui's own rather than a table kept here. A table would
 //! be one more thing to keep in step with the keys egui actually reports, and
 //! this has no reason to disagree with it.
+//!
+//! # Where keys are seen
+//!
+//! [`tracker`] turns which keys are down into hotkeys going down and coming
+//! up, whoever is asking; [`global`] asks the operating system, so a hotkey
+//! works while a game has the keyboard. Where there is no global listener,
+//! the window asks egui with the same rule.
+
+pub mod global;
+pub mod tracker;
 
 use std::fmt;
 use std::str::FromStr;
 
 use eframe::egui::{Key, Modifiers};
 use serde::{Deserialize, Serialize};
+
+use crate::domain::{AudioSourceId, SceneId};
 
 /// One key and the modifiers held with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,38 +204,117 @@ impl From<Binding> for String {
     }
 }
 
-/// Everything a key can be bound to.
+/// The actions with one binding each, whatever the project holds.
 ///
-/// Switching Scenes is deliberately not here. `Ctrl+1` through `Ctrl+9`
-/// select by *position* in the list, which is a convention rather than a
-/// binding: a per-Scene key — the model OBS uses, and the one that survives
-/// reordering — belongs with per-Source bindings, and neither is this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Switching Scenes by position is deliberately not here. `Ctrl+1` through
+/// `Ctrl+9` select by *position* in the list, which is a convention rather
+/// than a binding; a key per Scene — the model OBS uses, and the one that
+/// survives reordering — is [`Hotkey::Scene`], beside the per-channel ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HotkeyAction {
     ToggleRecording,
     TogglePause,
+    ToggleStreaming,
     Fullscreen,
     OpenSettings,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ToggleRecording,
         Self::TogglePause,
+        Self::ToggleStreaming,
         Self::Fullscreen,
         Self::OpenSettings,
     ];
 }
 
-/// What each action is bound to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Anything a key can be bound to: one of the fixed actions, or something
+/// about one mixer channel or one Scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Hotkey {
+    Action(HotkeyAction),
+    /// The channel is silent except while this is held.
+    PushToTalk(AudioSourceId),
+    /// The channel is silent while this is held.
+    PushToMute(AudioSourceId),
+    /// Mutes the channel, or unmutes it — its mute button, from a key.
+    ToggleMute(AudioSourceId),
+    /// Makes this Scene the one shown.
+    Scene(SceneId),
+}
+
+impl Hotkey {
+    /// Whether this acts while another application has focus.
+    ///
+    /// Everything but the two that are about this application's own window:
+    /// making it fullscreen or opening its Settings from inside a game would
+    /// be doing something to a window nobody is looking at.
+    pub fn is_global(self) -> bool {
+        !matches!(
+            self,
+            Self::Action(HotkeyAction::Fullscreen | HotkeyAction::OpenSettings)
+        )
+    }
+
+    /// Whether this lasts as long as its key is held, rather than acting
+    /// once when it goes down.
+    pub fn is_held(self) -> bool {
+        matches!(self, Self::PushToTalk(_) | Self::PushToMute(_))
+    }
+}
+
+impl From<HotkeyAction> for Hotkey {
+    fn from(action: HotkeyAction) -> Self {
+        Self::Action(action)
+    }
+}
+
+/// One mixer channel's keys.
+///
+/// Stored here, with the other bindings, rather than in the project beside
+/// the channel: a key is about the keyboard in front of this machine, as
+/// every other binding is, and the settings page is where all of them are
+/// changed. The channel is named by its project id, which is stable for as
+/// long as the channel exists; one that no longer does leaves a row nothing
+/// reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ChannelHotkeys {
+    pub channel: i64,
+    #[serde(default)]
+    pub push_to_talk: Binding,
+    #[serde(default)]
+    pub push_to_mute: Binding,
+    #[serde(default)]
+    pub toggle_mute: Binding,
+}
+
+/// One Scene's key, on the terms [`ChannelHotkeys`] gives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SceneHotkey {
+    pub scene: i64,
+    #[serde(default)]
+    pub select: Binding,
+}
+
+/// What each hotkey is bound to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct HotkeySettings {
     pub toggle_recording: Binding,
     pub toggle_pause: Binding,
+    pub toggle_streaming: Binding,
     pub fullscreen: Binding,
     pub open_settings: Binding,
+    /// Only the channels and Scenes that have a key, so a file that binds
+    /// none of them says nothing about them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ChannelHotkeys>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<SceneHotkey>,
 }
 
 impl Default for HotkeySettings {
@@ -231,44 +322,128 @@ impl Default for HotkeySettings {
         Self {
             toggle_recording: Chord::ctrl(Key::R).into(),
             toggle_pause: Chord::ctrl(Key::P).into(),
+            // Nothing: a broadcast going out by accident is the one mistake
+            // a default key must not make possible.
+            toggle_streaming: Binding(None),
             fullscreen: Chord::plain(Key::F11).into(),
             open_settings: Chord::ctrl(Key::Comma).into(),
+            channels: Vec::new(),
+            scenes: Vec::new(),
         }
     }
 }
 
 impl HotkeySettings {
-    pub fn binding(&self, action: HotkeyAction) -> Option<Chord> {
-        match action {
-            HotkeyAction::ToggleRecording => self.toggle_recording.0,
-            HotkeyAction::TogglePause => self.toggle_pause.0,
-            HotkeyAction::Fullscreen => self.fullscreen.0,
-            HotkeyAction::OpenSettings => self.open_settings.0,
+    pub fn binding(&self, hotkey: impl Into<Hotkey>) -> Option<Chord> {
+        match hotkey.into() {
+            Hotkey::Action(action) => match action {
+                HotkeyAction::ToggleRecording => self.toggle_recording.0,
+                HotkeyAction::TogglePause => self.toggle_pause.0,
+                HotkeyAction::ToggleStreaming => self.toggle_streaming.0,
+                HotkeyAction::Fullscreen => self.fullscreen.0,
+                HotkeyAction::OpenSettings => self.open_settings.0,
+            },
+            Hotkey::PushToTalk(id) => self.channel(id).and_then(|keys| keys.push_to_talk.0),
+            Hotkey::PushToMute(id) => self.channel(id).and_then(|keys| keys.push_to_mute.0),
+            Hotkey::ToggleMute(id) => self.channel(id).and_then(|keys| keys.toggle_mute.0),
+            Hotkey::Scene(id) => self
+                .scenes
+                .iter()
+                .find(|keys| keys.scene == id.0)
+                .and_then(|keys| keys.select.0),
         }
     }
 
-    pub fn set(&mut self, action: HotkeyAction, chord: Option<Chord>) {
+    pub fn set(&mut self, hotkey: impl Into<Hotkey>, chord: Option<Chord>) {
         let binding = Binding(chord);
-        match action {
-            HotkeyAction::ToggleRecording => self.toggle_recording = binding,
-            HotkeyAction::TogglePause => self.toggle_pause = binding,
-            HotkeyAction::Fullscreen => self.fullscreen = binding,
-            HotkeyAction::OpenSettings => self.open_settings = binding,
+        match hotkey.into() {
+            Hotkey::Action(action) => match action {
+                HotkeyAction::ToggleRecording => self.toggle_recording = binding,
+                HotkeyAction::TogglePause => self.toggle_pause = binding,
+                HotkeyAction::ToggleStreaming => self.toggle_streaming = binding,
+                HotkeyAction::Fullscreen => self.fullscreen = binding,
+                HotkeyAction::OpenSettings => self.open_settings = binding,
+            },
+            Hotkey::PushToTalk(id) => self.channel_mut(id).push_to_talk = binding,
+            Hotkey::PushToMute(id) => self.channel_mut(id).push_to_mute = binding,
+            Hotkey::ToggleMute(id) => self.channel_mut(id).toggle_mute = binding,
+            Hotkey::Scene(id) => match self.scenes.iter_mut().find(|keys| keys.scene == id.0) {
+                Some(keys) => keys.select = binding,
+                None => self.scenes.push(SceneHotkey {
+                    scene: id.0,
+                    select: binding,
+                }),
+            },
         }
+        // A row left with no key in it is dropped, so the file keeps only
+        // what is bound — see the fields' own docs.
+        self.channels.retain(|keys| {
+            keys.push_to_talk.0.is_some()
+                || keys.push_to_mute.0.is_some()
+                || keys.toggle_mute.0.is_some()
+        });
+        self.scenes.retain(|keys| keys.select.0.is_some());
     }
 
-    /// Which *other* action already holds `chord`.
+    /// Every hotkey that has a key, with it.
+    pub fn bound(&self) -> Vec<(Hotkey, Chord)> {
+        let mut bound: Vec<(Hotkey, Chord)> = HotkeyAction::ALL
+            .into_iter()
+            .filter_map(|action| Some((Hotkey::Action(action), self.binding(action)?)))
+            .collect();
+        for keys in &self.channels {
+            let id = AudioSourceId(keys.channel);
+            for (hotkey, binding) in [
+                (Hotkey::PushToTalk(id), keys.push_to_talk),
+                (Hotkey::PushToMute(id), keys.push_to_mute),
+                (Hotkey::ToggleMute(id), keys.toggle_mute),
+            ] {
+                if let Some(chord) = binding.0 {
+                    bound.push((hotkey, chord));
+                }
+            }
+        }
+        for keys in &self.scenes {
+            if let Some(chord) = keys.select.0 {
+                bound.push((Hotkey::Scene(SceneId(keys.scene)), chord));
+            }
+        }
+        bound
+    }
+
+    /// Which *other* hotkey already holds `chord`.
     ///
     /// Said rather than prevented. Refusing the assignment would leave the
     /// user holding a key they cannot use and no way to see why; the page
-    /// takes it and names the other action beside it, which is the same
-    /// information without the dead end. What actually happens if one is left
-    /// standing is that the first action listed takes the key and the second
-    /// never sees it — which is exactly what the warning is about.
-    pub fn conflict(&self, action: HotkeyAction, chord: Chord) -> Option<HotkeyAction> {
-        HotkeyAction::ALL
+    /// takes it and names the other one beside it, which is the same
+    /// information without the dead end. Both act if it is left standing,
+    /// which is exactly what the warning is about.
+    pub fn conflict(&self, hotkey: impl Into<Hotkey>, chord: Chord) -> Option<Hotkey> {
+        let hotkey = hotkey.into();
+        self.bound()
             .into_iter()
-            .find(|&other| other != action && self.binding(other) == Some(chord))
+            .find(|&(other, bound)| other != hotkey && bound == chord)
+            .map(|(other, _)| other)
+    }
+
+    fn channel(&self, id: AudioSourceId) -> Option<&ChannelHotkeys> {
+        self.channels.iter().find(|keys| keys.channel == id.0)
+    }
+
+    fn channel_mut(&mut self, id: AudioSourceId) -> &mut ChannelHotkeys {
+        let index = match self.channels.iter().position(|keys| keys.channel == id.0) {
+            Some(index) => index,
+            None => {
+                self.channels.push(ChannelHotkeys {
+                    channel: id.0,
+                    push_to_talk: Binding(None),
+                    push_to_mute: Binding(None),
+                    toggle_mute: Binding(None),
+                });
+                self.channels.len() - 1
+            }
+        };
+        &mut self.channels[index]
     }
 }
 
@@ -327,7 +502,7 @@ mod tests {
         let mut settings = HotkeySettings::default();
         assert_eq!(
             settings.conflict(HotkeyAction::TogglePause, Chord::ctrl(Key::R)),
-            Some(HotkeyAction::ToggleRecording)
+            Some(Hotkey::Action(HotkeyAction::ToggleRecording))
         );
         // Its own binding is not a conflict with itself.
         assert_eq!(
@@ -340,6 +515,67 @@ mod tests {
             None,
             "nothing holds it once it is cleared"
         );
+    }
+
+    /// A channel's and a Scene's keys are found where they were put, conflict
+    /// with the fixed actions like any other, and leave nothing behind in
+    /// the file once cleared.
+    #[test]
+    fn a_channels_and_a_scenes_keys_are_bindings_like_the_rest() {
+        let mut settings = HotkeySettings::default();
+        let mic = AudioSourceId(2);
+        settings.set(Hotkey::PushToTalk(mic), Some(Chord::plain(Key::V)));
+        settings.set(Hotkey::ToggleMute(mic), Some(Chord::ctrl(Key::M)));
+        settings.set(Hotkey::Scene(SceneId(7)), Some(Chord::plain(Key::F5)));
+
+        assert_eq!(
+            settings.binding(Hotkey::PushToTalk(mic)),
+            Some(Chord::plain(Key::V))
+        );
+        assert_eq!(settings.binding(Hotkey::PushToMute(mic)), None);
+        assert!(
+            settings
+                .bound()
+                .contains(&(Hotkey::Scene(SceneId(7)), Chord::plain(Key::F5)))
+        );
+        assert_eq!(
+            settings.conflict(HotkeyAction::ToggleRecording, Chord::plain(Key::V)),
+            Some(Hotkey::PushToTalk(mic))
+        );
+
+        settings.set(Hotkey::PushToTalk(mic), None);
+        settings.set(Hotkey::ToggleMute(mic), None);
+        settings.set(Hotkey::Scene(SceneId(7)), None);
+        assert!(settings.channels.is_empty() && settings.scenes.is_empty());
+    }
+
+    /// Through the settings file and back, which is where a table of rows
+    /// beside plain keys is easiest to get wrong.
+    #[test]
+    fn a_channels_and_a_scenes_keys_survive_the_settings_file() {
+        let mut settings = HotkeySettings::default();
+        settings.set(
+            Hotkey::PushToTalk(AudioSourceId(2)),
+            Some(Chord::plain(Key::V)),
+        );
+        settings.set(Hotkey::Scene(SceneId(3)), Some(Chord::ctrl(Key::F1)));
+        settings.set(HotkeyAction::ToggleStreaming, Some(Chord::ctrl(Key::S)));
+
+        let written = toml::to_string(&settings).expect("hotkeys are written");
+        let read: HotkeySettings = toml::from_str(&written).expect("and read back");
+        assert_eq!(read, settings, "{written}");
+    }
+
+    /// Only the window's own two stay behind when another application has
+    /// focus, and only push-to-talk and push-to-mute last while held.
+    #[test]
+    fn what_works_elsewhere_and_what_is_held() {
+        assert!(Hotkey::Action(HotkeyAction::ToggleRecording).is_global());
+        assert!(Hotkey::Scene(SceneId(1)).is_global());
+        assert!(!Hotkey::Action(HotkeyAction::Fullscreen).is_global());
+        assert!(!Hotkey::Action(HotkeyAction::OpenSettings).is_global());
+        assert!(Hotkey::PushToMute(AudioSourceId(1)).is_held());
+        assert!(!Hotkey::ToggleMute(AudioSourceId(1)).is_held());
     }
 
     /// Escape is how the capture widget is dismissed, so it can never be a

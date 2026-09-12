@@ -74,13 +74,13 @@ pub(in crate::ui) struct SettingsDialogState {
     page: SettingsPage,
     /// Seeded by [`SettingsDialogState::open_with`]; meaningless while closed.
     draft: AppSettings,
-    /// The action the Hotkeys page is waiting for a key on.
+    /// The hotkey the Hotkeys page is waiting for a key on.
     ///
     /// Held here rather than on the page because it outlives the pass that
     /// started it, and because the hotkey layer has to know: while this is
     /// set it stands down, so the key being bound is not also spent doing
     /// what it is currently bound to.
-    capturing_hotkey: Option<crate::hotkey::HotkeyAction>,
+    capturing_hotkey: Option<crate::hotkey::Hotkey>,
     /// A folder picker that is open, waiting to say what was chosen.
     ///
     /// The dialog it shows is the desktop's own and stays up until the user
@@ -192,6 +192,7 @@ pub(in crate::ui) fn show(
     audio_codecs: &[crate::settings::RecordingAudioCodec],
     audio_devices: &[crate::capture::AudioDeviceTarget],
     audio: &crate::snapshots::AudioSnapshot,
+    scenes: &crate::snapshots::ScenesSnapshot,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -267,6 +268,8 @@ pub(in crate::ui) fn show(
                                         ui,
                                         &mut state.draft,
                                         state.capturing_hotkey,
+                                        audio,
+                                        scenes,
                                         i18n,
                                     );
                                     if outcome.captured {

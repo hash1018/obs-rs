@@ -58,7 +58,7 @@ pub(in crate::engine) use level::Meter;
 pub use level::{METER_INTERVAL, MeterWake};
 pub use manager::AudioManager;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
@@ -169,6 +169,9 @@ struct OpenAudioSource {
     /// `device` is kept: a `Tee`'s branches are settled when it is built, so
     /// a change here is a reopen rather than a handle call.
     monitored: bool,
+    /// Its mute button, as the project last said — what a hotkey letting go
+    /// returns the channel to. See [`AudioEngine::set_hotkey_muted`].
+    muted: bool,
 }
 
 /// What plays the monitor mix, and what it was built against.
@@ -222,6 +225,10 @@ pub(super) struct AudioEngine {
     levels: Levels,
     /// Handed to every source's meter as it opens.
     meter_wake: MeterWake,
+    /// The channels a push-to-talk or push-to-mute key is silencing right
+    /// now — see [`Self::set_hotkey_muted`]. Kept whether or not the channel
+    /// is open, so one that opens while a key says so opens silent.
+    hotkey_muted: HashSet<AudioSourceId>,
 }
 
 struct RunningMixer {
@@ -264,6 +271,7 @@ impl AudioEngine {
             sources: HashMap::new(),
             levels: Levels::default(),
             meter_wake,
+            hotkey_muted: HashSet::new(),
         }
     }
 
@@ -430,6 +438,24 @@ impl AudioEngine {
         }
     }
 
+    /// Silences one channel for as long as a hotkey says to, or lets it be
+    /// heard again — push-to-talk and push-to-mute.
+    ///
+    /// Over its mute button rather than instead of it: a channel muted in
+    /// the mixer stays muted whatever a key does, and letting go of a key
+    /// never unmutes what the button muted. Nothing of it reaches the
+    /// project — a key held down is not an edit.
+    pub(super) fn set_hotkey_muted(&mut self, id: AudioSourceId, muted: bool) {
+        let changed = if muted {
+            self.hotkey_muted.insert(id)
+        } else {
+            self.hotkey_muted.remove(&id)
+        };
+        if changed && let Some(open) = self.sources.get(&id) {
+            open.volume.set_muted(open.muted || muted);
+        }
+    }
+
     /// Retunes one open source's filter, for a slider being dragged — the
     /// same split as [`Self::set_gain_db`], for the same reason.
     pub(super) fn retune_filter(
@@ -486,7 +512,9 @@ impl AudioEngine {
                 // are all that can have changed.
                 Some(open) if open.device == source.device && open.monitored == wanted => {
                     let _ = open.volume.set_gain_db(source.gain_db);
-                    open.volume.set_muted(source.muted);
+                    open.muted = source.muted;
+                    open.volume
+                        .set_muted(source.muted || self.hotkey_muted.contains(&source.id));
                     if let Err(error) = open.filters.apply(&source.filters) {
                         eprintln!("could not change the filters on {}: {error}", source.name);
                     }
@@ -573,7 +601,16 @@ impl AudioEngine {
         let monitored = source_monitors(source, monitor.is_some());
 
         let meter = Meter::new(self.meter_wake.clone());
-        match open_source(&mixer, monitor.as_ref(), &name, source, monitored, meter) {
+        let muted = source.muted || self.hotkey_muted.contains(&source.id);
+        match open_source(
+            &mixer,
+            monitor.as_ref(),
+            &name,
+            source,
+            monitored,
+            muted,
+            meter,
+        ) {
             Ok((open, peak)) => {
                 self.levels.track(source.id, peak);
                 self.sources.insert(source.id, open);
@@ -680,6 +717,9 @@ fn open_source(
     name: &str,
     source: &AudioSourceSnapshot,
     monitored: bool,
+    // Whether it opens silent, which is its mute button or a hotkey holding
+    // it down — decided by the caller, which knows about both.
+    silent: bool,
     mut meter: Meter,
 ) -> Result<(OpenAudioSource, Arc<AtomicU32>), BackendError> {
     let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
@@ -703,7 +743,7 @@ fn open_source(
 
     let (volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
     let _ = volume_handle.set_gain_db(source.gain_db);
-    volume_handle.set_muted(source.muted);
+    volume_handle.set_muted(silent);
 
     let peak = Arc::new(AtomicU32::new(0));
     let meter = AppSink::new(format!("{name}-meter"), {
@@ -757,6 +797,7 @@ fn open_source(
             filters: filter_rack,
             device: source.device.clone(),
             monitored,
+            muted: source.muted,
         },
         peak,
     ))
@@ -817,6 +858,7 @@ mod tests {
             filters,
             device: None,
             monitored: false,
+            muted: false,
         }
     }
 
@@ -834,6 +876,7 @@ mod tests {
             sources: sources.into_iter().collect(),
             levels,
             meter_wake: MeterWake::new(|| {}),
+            hotkey_muted: HashSet::new(),
         }
     }
 
