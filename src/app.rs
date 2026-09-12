@@ -158,6 +158,7 @@ impl ObsApp {
         // one thing that can act on what comes down it — and there is one
         // receiver. See `engine::trouble`.
         let audio_troubles = audio.as_mut().and_then(AudioManager::take_troubles);
+        let audio_load = audio.as_ref().map(AudioManager::load).unwrap_or_default();
         // The stored endpoint has to be sent as well as the format, which
         // `spawn` takes. Without this monitoring only came on after the
         // Settings dialog was opened and changed — the setting was read at
@@ -199,6 +200,7 @@ impl ObsApp {
                         mixer,
                         monitor,
                         troubles: audio_troubles,
+                        load: audio_load,
                         meter_wake,
                     },
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
@@ -268,6 +270,7 @@ impl ObsApp {
         self.snapshots.status.streaming_elapsed = engine.streaming();
         self.snapshots.status.streaming_error = engine.streaming_error();
         self.snapshots.status.streaming_reconnecting = engine.streaming_reconnecting();
+        self.snapshots.status.output_load = engine.output_load();
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
         self.snapshots.status.source_status = engine.source_status();

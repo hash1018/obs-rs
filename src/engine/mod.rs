@@ -14,6 +14,7 @@
 
 mod audio;
 mod backend;
+pub(in crate::engine) mod load;
 mod output;
 mod preview;
 mod status;
@@ -157,6 +158,8 @@ struct EngineSetup {
     /// `None` on a machine whose audio never started, which is also a
     /// machine with no mix for an output's audio track to fail on.
     audio_troubles: Option<mpsc::Receiver<Trouble>>,
+    /// What the audio thread's own outputs are costing — see `load`.
+    audio_load: Arc<ArcSwapOption<load::Load>>,
     /// For the meters of Sources that bring their own sound — see
     /// `AudioLink::meter_wake`.
     meter_wake: MeterWake,
@@ -179,6 +182,13 @@ struct Published {
     /// while paused it is what the elapsed time is measured *to*, so the
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
+    /// What share of the last second the outputs spent holding up whatever
+    /// feeds them — `f32` bits, so the UI reads it without a lock.
+    ///
+    /// Published from the engine loop rather than computed by the UI: it is
+    /// the difference between two readings, and only the loop knows when it
+    /// took them.
+    output_load: Arc<AtomicU32>,
     /// Whether a dropped broadcast is being retried.
     ///
     /// A flag beside the clock rather than a third instant: what the status
@@ -253,6 +263,9 @@ pub struct AudioLink {
     /// files and streams. One between them, so the limit it keeps is on the
     /// window rather than on each half — see [`MeterWake`].
     pub meter_wake: MeterWake,
+    /// What its own outputs are costing, republished each pass — see
+    /// [`load`].
+    pub load: Arc<ArcSwapOption<load::Load>>,
 }
 
 pub struct OutputSettings {
@@ -278,6 +291,8 @@ pub struct EngineManager {
     /// Whether a dropped broadcast is being retried — see
     /// `Published::streaming_reconnecting`.
     streaming_reconnecting: Arc<AtomicBool>,
+    /// What the outputs are costing — see `Published::output_load`.
+    output_load: Arc<AtomicU32>,
     /// The SceneItems drawing nothing — see `Published::source_status`.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
     /// What each playing media file measures — see `Published::media_meters`.
@@ -312,6 +327,7 @@ impl EngineManager {
             mixer,
             monitor,
             troubles: audio_troubles,
+            load: audio_load,
             meter_wake,
         } = audio;
         let size = [canvas.width as u32, canvas.height as u32];
@@ -324,6 +340,7 @@ impl EngineManager {
         let streaming_since = Arc::new(ArcSwapOption::empty());
         let streaming_error = Arc::new(ArcSwapOption::empty());
         let streaming_reconnecting = Arc::new(AtomicBool::new(false));
+        let output_load = Arc::new(AtomicU32::new(0));
         let source_status = Arc::new(ArcSwapOption::empty());
         let media_meters = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
@@ -339,6 +356,7 @@ impl EngineManager {
             let streaming_since = Arc::clone(&streaming_since);
             let streaming_error = Arc::clone(&streaming_error);
             let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
+            let output_load = Arc::clone(&output_load);
             let source_status = Arc::clone(&source_status);
             let media_meters = Arc::clone(&media_meters);
             let encoders = Arc::clone(&encoders);
@@ -357,6 +375,7 @@ impl EngineManager {
                     streaming_since,
                     streaming_error,
                     streaming_reconnecting,
+                    output_load,
                     source_status,
                     media_meters,
                     encoders,
@@ -366,6 +385,7 @@ impl EngineManager {
                     size,
                     project,
                     audio_troubles,
+                    audio_load,
                     meter_wake,
                     recording: OutputState {
                         settings: outputs.recording,
@@ -403,6 +423,7 @@ impl EngineManager {
             streaming_since,
             streaming_error,
             streaming_reconnecting,
+            output_load,
             source_status,
             media_meters,
             encoders,
@@ -580,6 +601,12 @@ impl EngineManager {
         self.streaming_reconnecting.load(Ordering::Acquire)
     }
 
+    /// What share of the last interval the outputs spent holding up the
+    /// compositor and the mixer — see `engine::load`.
+    pub fn output_load(&self) -> f32 {
+        f32::from_bits(self.output_load.load(Ordering::Acquire))
+    }
+
     /// Whether the running recording is paused.
     pub fn recording_paused(&self) -> bool {
         self.recording_paused_at.load().is_some()
@@ -713,6 +740,7 @@ fn run(
         project,
         mut recording,
         audio_troubles,
+        audio_load,
         meter_wake,
     } = setup;
     // Shared rather than moved: both the sink that publishes a frame and the
@@ -779,6 +807,8 @@ fn run(
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
     let mut looked_for_missing = Instant::now();
+    // The reading the next one is measured against — see `engine::load`.
+    let mut last_load = (Instant::now(), load::Load::default());
     // `recording` is owned by this loop rather than shared: only the commands
     // below reach it, and a settings change arrives on the same channel a
     // start does, so one can never land half-way through a recording being
@@ -827,6 +857,7 @@ fn run(
                     continue;
                 }
                 looked_for_missing = Instant::now();
+                last_load = publish_output_load(&engine, &published, &audio_load, last_load);
                 status::notice_closed_windows(&backend, &mut open, &scene);
                 status::notice_ended_media(&backend, &mut open, &scene);
                 status::notice_dropped_streams(&backend, &mut open, &scene);
@@ -997,6 +1028,35 @@ fn watch_outputs(
     {
         request_broadcast(engine, state, published);
     }
+}
+
+/// Works out what the outputs cost over the interval just ended, and
+/// publishes it.
+///
+/// Both pipelines, added together: an output's video branch is on the
+/// compositor's and its audio on the audio thread's, and either can be the
+/// one that is behind. The audio side arrives already read — see
+/// `AudioManager::load`.
+///
+/// Answers the reading to measure the next interval against.
+fn publish_output_load(
+    engine: &Engine<'_>,
+    published: &Published,
+    audio_load: &ArcSwapOption<load::Load>,
+    last: (Instant, load::Load),
+) -> (Instant, load::Load) {
+    let now = Instant::now();
+    let total = load::Load::read(&engine.backend.preview.stats()).merge(
+        audio_load
+            .load_full()
+            .map_or_else(load::Load::default, |load| *load),
+    );
+    let (_, before) = last;
+    let share = total.since(before).pressure();
+    published
+        .output_load
+        .store(share.to_bits(), Ordering::Release);
+    (now, total)
 }
 
 /// Redraws every Source that follows the clock rather than an edit.
@@ -1940,6 +2000,7 @@ mod tests {
             streaming_since: Arc::new(ArcSwapOption::empty()),
             streaming_error: Arc::new(ArcSwapOption::empty()),
             streaming_reconnecting: Arc::new(AtomicBool::new(false)),
+            output_load: Arc::new(AtomicU32::new(0)),
         }
     }
 

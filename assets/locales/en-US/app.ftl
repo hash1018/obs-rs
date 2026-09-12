@@ -278,3 +278,6 @@ settings-streaming-reconnect = Reconnect
 settings-streaming-reconnect-never = Never
 settings-streaming-reconnect-after = After { $seconds } s
 status-streaming-reconnecting = The broadcast dropped; reconnecting
+status-lag = How much of the last second the outputs made the compositor wait
+status-lag-noticeable = An output is falling behind — the encoder, the disk, or the upstream link
+status-lag-severe = An output is holding up the compositor for much of the time

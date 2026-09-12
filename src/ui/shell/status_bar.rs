@@ -36,6 +36,18 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                     ui.separator();
                     ui.monospace(format_optional_percent("CPU", status.cpu_percent));
                     ui.separator();
+                    let lag = format_lag(status.output_load);
+                    match lag_mark(ui.visuals(), status.output_load) {
+                        Some((colour, reason)) => {
+                            ui.monospace(egui::RichText::new(lag).color(colour))
+                                .on_hover_text(i18n.text(reason));
+                        }
+                        None => {
+                            ui.monospace(lag)
+                                .on_hover_text(i18n.text(TextKey::StatusLag));
+                        }
+                    }
+                    ui.separator();
                     ui.monospace(format_memory(status.memory))
                         .on_hover_text(memory_tooltip(status.memory, i18n));
                     ui.separator();
@@ -92,6 +104,41 @@ fn recording_mark(
         (RECORDING_COLOR, TextKey::StatusRecording)
     })
 }
+
+/// What the outputs cost, as a share of the second just gone.
+///
+/// A recording's and a broadcast's queues block rather than drop — a frame
+/// missing from a file is worse than one arriving late — so when an encoder
+/// or a disk or an upstream link falls behind, what gives is the compositor,
+/// which waits. This is how much of its time went that way.
+///
+/// Held at a fixed width like every other segment here, so the bar does not
+/// move as the number does.
+fn format_lag(share: f32) -> String {
+    format!("LAG {:>5.1}%", (share * 100.0).clamp(0.0, 999.9))
+}
+
+/// What the lag reading is coloured, and the line that says why.
+///
+/// Nothing until it is worth reading. A few per cent is an encoder that
+/// caught up, and colouring that would train the eye to ignore the one
+/// reading that matters. Past a quarter of the time it is the warning
+/// colour; past half, the same red a running recording gets, because at
+/// that point the compositor is spending more time waiting than the
+/// Preview has left to be smooth in.
+fn lag_mark(visuals: &egui::Visuals, share: f32) -> Option<(egui::Color32, TextKey)> {
+    if share >= LAG_SEVERE {
+        Some((RECORDING_COLOR, TextKey::StatusLagSevere))
+    } else if share >= LAG_NOTICEABLE {
+        Some((visuals.warn_fg_color, TextKey::StatusLagNoticeable))
+    } else {
+        None
+    }
+}
+
+/// Where a reading stops being noise and starts being news.
+const LAG_NOTICEABLE: f32 = 0.25;
+const LAG_SEVERE: f32 = 0.5;
 
 /// What the broadcast clock is coloured, and the line that says why.
 ///
@@ -330,6 +377,33 @@ mod tests {
                 "{label} changes width when it starts"
             );
         }
+    }
+
+    /// The lag reading holds its width like everything else on this bar: a
+    /// segment that grew a character as the number rose would shift every
+    /// reading to the right of it, at the moment they are worth reading.
+    #[test]
+    fn the_lag_reading_keeps_a_stable_width_and_is_marked_only_when_it_matters() {
+        let idle = format_lag(0.0).len();
+        for share in [0.0, 0.004, 0.25, 0.5, 1.0, 9.99] {
+            assert_eq!(format_lag(share).len(), idle, "at {share}");
+        }
+        assert_eq!(format_lag(0.0), "LAG   0.0%");
+        assert_eq!(format_lag(0.25), "LAG  25.0%");
+
+        let visuals = egui::Visuals::dark();
+        assert!(
+            lag_mark(&visuals, 0.0).is_none() && lag_mark(&visuals, 0.24).is_none(),
+            "an encoder that caught up is not news"
+        );
+        assert_eq!(
+            lag_mark(&visuals, 0.25).map(|(_, reason)| reason),
+            Some(TextKey::StatusLagNoticeable)
+        );
+        assert_eq!(
+            lag_mark(&visuals, 0.5).map(|(_, reason)| reason),
+            Some(TextKey::StatusLagSevere)
+        );
     }
 
     #[test]

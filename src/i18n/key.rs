@@ -313,4 +313,7 @@ text_keys! {
     SettingsStreamingReconnectNever   => "settings-streaming-reconnect-never";
     SettingsStreamingReconnectAfter   => "settings-streaming-reconnect-after";
     StatusStreamingReconnecting       => "status-streaming-reconnecting";
+    StatusLag                         => "status-lag";
+    StatusLagNoticeable               => "status-lag-noticeable";
+    StatusLagSevere                   => "status-lag-severe";
 }

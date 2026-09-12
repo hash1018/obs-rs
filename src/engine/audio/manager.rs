@@ -86,6 +86,13 @@ pub struct AudioManager {
     /// `None` until a monitoring endpoint is chosen, and `None` again when
     /// one is taken away.
     monitor: Arc<ArcSwapOption<MixerHandle>>,
+    /// What this thread's outputs have cost, republished each pass.
+    ///
+    /// A slot rather than a channel, unlike the failures below: this is a
+    /// running total and not a sequence of events, so the newest reading is
+    /// the only one worth having — two of them and the time between give
+    /// the rate.
+    load: Arc<ArcSwapOption<crate::engine::load::Load>>,
     /// What has failed on this thread's pipelines, on its way to the engine
     /// loop.
     ///
@@ -119,6 +126,8 @@ impl AudioManager {
         let devices = Arc::new(ArcSwapOption::empty());
         let monitor: Arc<ArcSwapOption<MixerHandle>> = Arc::new(ArcSwapOption::empty());
         let (troubles_tx, troubles) = mpsc::channel::<crate::engine::Trouble>();
+        let load: Arc<ArcSwapOption<crate::engine::load::Load>> = Arc::new(ArcSwapOption::empty());
+        let published_load = Arc::clone(&load);
         // The engine is built on its own thread and stays there — it holds
         // FFmpeg state that is not `Send`, so it cannot be made here and
         // moved. Only the mixer's `Tee` comes back, over this channel: a
@@ -247,6 +256,7 @@ impl AudioManager {
                     // a failed muxer is exactly the thing a bare health tick
                     // exists to notice — and the only thing on this thread
                     // that nothing else would ever mention.
+                    published_load.store(Some(Arc::new(engine.load())));
                     for trouble in engine.troubles() {
                         // A closed channel means the engine is gone, which is
                         // not this thread's problem to solve.
@@ -277,6 +287,7 @@ impl AudioManager {
             devices,
             monitor,
             troubles: Some(troubles),
+            load,
             // Waits only for the mixer to be built, which is the worker's
             // first act. An `Err` means it never got that far, which is the
             // same answer as a mixer that failed: record without audio.
@@ -294,6 +305,12 @@ impl AudioManager {
     /// Dropped if the source is not open. A gain arriving for something with
     /// no capture behind it has nothing to set, and the next `apply` carries
     /// the value anyway.
+    /// What this thread's outputs have cost so far, or `None` before the
+    /// first pass.
+    pub fn load(&self) -> Arc<ArcSwapOption<crate::engine::load::Load>> {
+        Arc::clone(&self.load)
+    }
+
     /// Takes the channel this thread reports failures on.
     ///
     /// Once, by whoever builds the engine: there is one receiver, and the

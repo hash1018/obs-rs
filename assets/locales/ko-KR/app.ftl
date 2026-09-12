@@ -278,3 +278,6 @@ settings-streaming-reconnect = 재접속
 settings-streaming-reconnect-never = 안 함
 settings-streaming-reconnect-after = { $seconds }초 후
 status-streaming-reconnecting = 송출이 끊겼습니다. 재접속 중
+status-lag = 지난 1초 중 출력이 컴포지터를 붙잡은 비율
+status-lag-noticeable = 출력이 밀리고 있습니다 — 인코더, 디스크, 또는 업링크
+status-lag-severe = 출력이 컴포지터를 상당 시간 붙잡고 있습니다

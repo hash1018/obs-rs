@@ -45,6 +45,9 @@ pub struct StatusSnapshot {
     /// this is not simply off, and the elapsed time it would otherwise show
     /// is a broadcast that is not happening.
     pub streaming_reconnecting: bool,
+    /// What share of the last second the outputs spent holding up whatever
+    /// feeds them — see `engine::load`. Zero on a machine doing neither.
+    pub output_load: f32,
     /// The SceneItems whose Source is not running, and why, from the engine.
     ///
     /// The Sources list says so beside them, which is the only thing that

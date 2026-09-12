@@ -261,6 +261,19 @@ impl AudioEngine {
         }
     }
 
+    /// What this thread's outputs have cost, as running totals.
+    ///
+    /// An output's audio branch is on the mix pipeline, so its queue is
+    /// counted here and nowhere else — the same split that makes this
+    /// thread forward its own failures. See `engine::load`.
+    pub(super) fn load(&self) -> crate::engine::load::Load {
+        self.mixer
+            .as_ref()
+            .map_or_else(crate::engine::load::Load::default, |mixer| {
+                crate::engine::load::Load::read(&mixer.pipeline.stats())
+            })
+    }
+
     /// What has gone wrong on this thread's own pipelines since it was last
     /// asked.
     ///
