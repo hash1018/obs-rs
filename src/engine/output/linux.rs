@@ -147,7 +147,7 @@ impl Backend {
         // Only when the file is smaller than the canvas.
         if size != self.size {
             branch = branch.pipe(CudaScaler::new(
-                "record-scale",
+                format!("{}-scale", kind.prefix()),
                 &self.device,
                 width,
                 height,
@@ -165,14 +165,14 @@ impl Backend {
             // is why the hardware path is the default.
             RecordEncoder::Software(encoder) => branch
                 .pipe(CudaDownload::new(
-                    "record-download",
+                    format!("{}-download", kind.prefix()),
                     &self.device,
                     CudaFrameFormat::Nv12,
                     width,
                     height,
                 ))
                 .pipe(SwScaler::new(
-                    "record-convert",
+                    format!("{}-convert", kind.prefix()),
                     ffmpeg::format::Pixel::YUV420P,
                     width,
                     height,
