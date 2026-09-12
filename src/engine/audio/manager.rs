@@ -16,7 +16,7 @@ use media_pp::elements::{MixFormat, MixerHandle, TeeHandle};
 use media_pp::stats::PipelineStats;
 
 use crate::capture::AudioDeviceTarget;
-use crate::domain::AudioSourceId;
+use crate::domain::{AudioFilterId, AudioFilterSettings, AudioSourceId};
 use crate::snapshots::AudioSnapshot;
 
 use super::{AudioEngine, Levels, MeterWake};
@@ -45,6 +45,9 @@ enum AudioCommand {
     /// is what the audio hears in the meantime. Same split the Preview's own
     /// drag makes between the compositor and the project.
     Gain(AudioSourceId, f32),
+    /// One filter's settings, mid-gesture — the same split as `Gain`, for a
+    /// slider in the Filters dock.
+    RetuneFilter(AudioSourceId, AudioFilterId, AudioFilterSettings),
     /// An endpoint appeared, went, or became the default. Says to look
     /// again, not what changed — see [`crate::capture::watch_audio_devices`].
     DevicesChanged,
@@ -185,6 +188,8 @@ impl AudioManager {
                     let mut project_changed = false;
                     let mut ending = false;
                     let mut gains: Vec<(AudioSourceId, f32)> = Vec::new();
+                    let mut retunes: Vec<(AudioSourceId, AudioFilterId, AudioFilterSettings)> =
+                        Vec::new();
                     for command in woken.into_iter().chain(command_rx.try_iter()) {
                         match command {
                             AudioCommand::Project(snapshot) => {
@@ -197,6 +202,11 @@ impl AudioManager {
                                 // fader is now.
                                 gains.retain(|(other, _)| *other != id);
                                 gains.push((id, gain_db));
+                            }
+                            AudioCommand::RetuneFilter(id, filter, settings) => {
+                                // Last one wins per filter, as per fader.
+                                retunes.retain(|(_, other, _)| *other != filter);
+                                retunes.push((id, filter, settings));
                             }
                             AudioCommand::DevicesChanged => devices_changed = true,
                             AudioCommand::MixFormat(format) => {
@@ -267,14 +277,23 @@ impl AudioManager {
                     }
                     // A bare health tick that found everything running has no
                     // counters to republish and no reason to wake the UI.
-                    if ticked && !project_changed && !devices_changed && gains.is_empty() {
+                    if ticked
+                        && !project_changed
+                        && !devices_changed
+                        && gains.is_empty()
+                        && retunes.is_empty()
+                    {
                         continue;
                     }
                     // After any apply, not before: a project that arrived in
                     // the same batch carries the gain from before the drag,
                     // and applying it second would undo every frame of one.
+                    // The same holds for a filter's settings.
                     for (id, gain_db) in gains {
                         engine.set_gain_db(id, gain_db);
+                    }
+                    for (id, filter, settings) in retunes {
+                        engine.retune_filter(id, filter, &settings);
                     }
                     // Cloned, not taken: an apply that changed nothing must
                     // leave the engine holding the counters it is still
@@ -326,6 +345,19 @@ impl AudioManager {
     pub fn set_gain_db(&self, id: AudioSourceId, gain_db: f32) {
         if let Some(commands) = &self.commands {
             let _ = commands.send(AudioCommand::Gain(id, gain_db));
+        }
+    }
+
+    /// Retunes one filter now, without waiting for the project — the
+    /// Filters dock's slider, as [`Self::set_gain_db`] is the fader.
+    pub fn retune_filter(
+        &self,
+        id: AudioSourceId,
+        filter: AudioFilterId,
+        settings: AudioFilterSettings,
+    ) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(AudioCommand::RetuneFilter(id, filter, settings));
         }
     }
 

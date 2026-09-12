@@ -101,6 +101,7 @@ x11rb = { version = "0.13.2", features = ["randr"] }
 version = "0.2"
 features = [
     "cuda",
+    "rnnoise",
     "pipewire-screen-capture",
     "pipewire-audio-capture",
     "pipewire-audio-renderer",
@@ -111,6 +112,7 @@ features = [
 version = "0.2"
 features = [
     "d3d11",
+    "rnnoise",
     "dxgi-capture",
     "wasapi-capture",
     "wasapi-renderer",

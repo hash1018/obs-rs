@@ -1,8 +1,9 @@
 use crate::domain::{
-    AudioSourceId, ChromaKeySettings, ClockFormat, Crop, DisplayCaptureSettings, FilterId,
-    FilterKind, ImageSourceSettings, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId,
-    SceneItemId, SourceKind, Stroke, TextAlignment, TextMode, TimerFormat, Transform,
-    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings,
+    AudioFilterId, AudioFilterKind, AudioSourceId, ChromaKeySettings, ClockFormat, Crop,
+    DisplayCaptureSettings, FilterId, FilterKind, ImageSourceSettings, MediaFileSettings,
+    NoiseGateSettings, RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, Stroke,
+    TextAlignment, TextMode, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
+    WindowCaptureSettings,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,11 +17,6 @@ pub enum ProjectCommand {
 ///
 /// Carries no Scene, because audio is not in one — see
 /// [`crate::domain::AudioSourceId`].
-// Every variant is a `Set` because every one of them is: the mixer has no
-// add or remove, only the three values a channel holds. Dropping the verb
-// would leave `AudioCommand::Device(..)` reading as a noun where the rest of
-// this file reads as instructions.
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioCommand {
     /// Gain in decibels. Clamped where it is stored rather than here, so
@@ -31,6 +27,21 @@ pub enum AudioCommand {
     SetDevice(AudioSourceId, Option<String>),
     /// Whether this source is played back to the person running obs-rs.
     SetMonitored(AudioSourceId, bool),
+    /// Appends a filter to the end of a channel's chain. Everything after
+    /// adding one names the filter itself — see
+    /// [`crate::domain::AudioFilterId`].
+    AddFilter {
+        audio_source_id: AudioSourceId,
+        kind: AudioFilterKind,
+    },
+    RemoveFilter(AudioFilterId),
+    /// Earlier in the chain, which is nearer the device and higher in the
+    /// list.
+    MoveFilterEarlier(AudioFilterId),
+    MoveFilterLater(AudioFilterId),
+    /// Turns a filter off without discarding what it was tuned to.
+    SetFilterEnabled(AudioFilterId, bool),
+    SetNoiseGateSettings(AudioFilterId, NoiseGateSettings),
 }
 
 #[derive(Debug, Clone, PartialEq)]

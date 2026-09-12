@@ -624,6 +624,30 @@ impl ObsApp {
                     source.gain_db = gain_db;
                 }
             }
+            UiAction::DragAudioFilterSettings(id, filter_id, settings) => {
+                if let Some(audio) = &self.audio {
+                    audio.retune_filter(id, filter_id, settings);
+                }
+                // Into the snapshot too, for the reason `DragAudioGain` does
+                // it: the slider reads back from there, and would spring back
+                // under the pointer until the project heard.
+                if let Some(filter) = self
+                    .snapshots
+                    .audio
+                    .items
+                    .iter_mut()
+                    .find(|source| source.id == id)
+                    .and_then(|source| {
+                        source
+                            .filters
+                            .iter_mut()
+                            .find(|filter| filter.id == filter_id)
+                    })
+                {
+                    filter.settings = settings;
+                }
+            }
+            UiAction::ShowAudioFilters(id) => self.ui_state.show_audio_filters(id),
             UiAction::DrawStrokes(item_id, strokes) => {
                 if let Some(engine) = &self.engine {
                     engine.set_drawing_strokes(item_id, strokes);

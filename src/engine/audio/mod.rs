@@ -13,13 +13,16 @@
 //! # Shape
 //!
 //! ```text
-//! pipeline "audio-1"  CaptureSource ─ AudioVolume ─ Tee ┬─ AppSink   (meters)
-//!                                                       └─┐
-//! pipeline "audio-2"  CaptureSource ─ AudioVolume ─ Tee ┬─ AppSink
-//!                                                       └─┤
-//!                                                         ↓
-//! pipeline "audio-mix"                    AudioMixer ─ Tee ─ (a recording, when one runs)
+//! pipeline "audio-1"  CaptureSource ─ Rack ─ AudioVolume ─ Tee ┬─ AppSink   (meters)
+//!                                                              └─┐
+//! pipeline "audio-2"  CaptureSource ─ Rack ─ AudioVolume ─ Tee ┬─ AppSink
+//!                                                              └─┤
+//!                                                                ↓
+//! pipeline "audio-mix"                           AudioMixer ─ Tee ─ (a recording, when one runs)
 //! ```
+//!
+//! The rack holds the channel's filters — noise suppression, a gate — and is
+//! empty, a wire, on a channel with none. See [`filters`].
 //!
 //! One pipeline each, not one between them. A `Pipeline`'s sources are fixed
 //! when it is built, so anything that has to be reopened has to be alone in
@@ -44,6 +47,7 @@
 //! mixer again — nothing else stops, and the mix keeps its timeline.
 
 mod device;
+mod filters;
 mod level;
 mod manager;
 
@@ -71,7 +75,7 @@ use media_pp::{
 };
 
 use crate::capture::AudioDeviceTarget;
-use crate::domain::AudioSourceId;
+use crate::domain::{AudioFilterId, AudioFilterSettings, AudioSourceId};
 use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
 use super::backend::BackendError;
@@ -156,6 +160,8 @@ struct OpenAudioSource {
     /// [`monitor_registration`] of this.
     name: String,
     volume: AudioVolumeHandle,
+    /// The channel's filters, which change without a reopen.
+    filters: filters::AudioFilterRack,
     /// What this was opened with, so a snapshot naming something else is
     /// recognised as needing a reopen rather than a handle call.
     device: Option<String>,
@@ -413,14 +419,6 @@ impl AudioEngine {
         self.monitor.as_ref().map(|mixer| mixer.handle.clone())
     }
 
-    /// Brings the running sources in line with what the project holds and
-    /// what the machine currently has plugged in.
-    ///
-    /// Gain and mute are handle calls on a source that is already open. A
-    /// device change, or a source appearing or going, touches only that
-    /// source. Called again on every endpoint change too, which is what
-    /// opens a source whose device has just arrived — and closes one whose
-    /// device has just left.
     /// Sets one open source's gain, for a fader being dragged.
     ///
     /// Nothing to do for a source with no capture behind it: there is no
@@ -432,6 +430,28 @@ impl AudioEngine {
         }
     }
 
+    /// Retunes one open source's filter, for a slider being dragged — the
+    /// same split as [`Self::set_gain_db`], for the same reason.
+    pub(super) fn retune_filter(
+        &mut self,
+        id: AudioSourceId,
+        filter: AudioFilterId,
+        settings: &AudioFilterSettings,
+    ) {
+        if let Some(open) = self.sources.get(&id) {
+            open.filters.retune(filter, settings);
+        }
+    }
+
+    /// Brings the running sources in line with what the project holds and
+    /// what the machine currently has plugged in.
+    ///
+    /// Gain, mute and filters are handle calls on a source that is already
+    /// open — a filter added or removed refills the source's rack, which does
+    /// not reopen its capture. A device change, or a source appearing or
+    /// going, touches only that source. Called again on every endpoint change
+    /// too, which is what opens a source whose device has just arrived — and
+    /// closes one whose device has just left.
     pub(super) fn apply(&mut self, snapshot: &AudioSnapshot, devices: &[AudioDeviceTarget]) {
         if self.mixer.is_none() {
             return;
@@ -460,13 +480,16 @@ impl AudioEngine {
                 continue;
             }
             let wanted = source_monitors(source, self.monitor_output.is_some());
-            match self.sources.get(&source.id) {
+            match self.sources.get_mut(&source.id) {
                 // Already open on the endpoint asked for, and feeding the
-                // mixes it should: the fader and the mute button are all that
-                // can have changed.
+                // mixes it should: the fader, the mute button and the filters
+                // are all that can have changed.
                 Some(open) if open.device == source.device && open.monitored == wanted => {
                     let _ = open.volume.set_gain_db(source.gain_db);
                     open.volume.set_muted(source.muted);
+                    if let Err(error) = open.filters.apply(&source.filters) {
+                        eprintln!("could not change the filters on {}: {error}", source.name);
+                    }
                 }
                 _ => self.reopen(source),
             }
@@ -668,7 +691,9 @@ fn open_source(
         ),
         _ => None,
     };
-    let capture = device::open_capture(name, source.kind, source.device.as_deref())?;
+    let (capture, capture_format) =
+        device::open_capture(name, source.kind, source.device.as_deref())?;
+    let (rack, mut filter_rack) = filters::rack(name, capture_format);
 
     let (volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
     let _ = volume_handle.set_gain_db(source.gain_db);
@@ -703,10 +728,19 @@ fn open_source(
         // rather than a `Sink` — it is what a chain ends *at*. Attaching it
         // to the fader's pad on its own would link the same buffers but
         // record the fan-out as the capture's; see `ChainBuilder::to_branch`.
-        let faded = context.branch().pipe(volume).to_branch(tee)?;
+        // The filters before the fader, as a mixing desk has them: a gate
+        // listens to what the microphone heard, and pulling the fader down
+        // must not be what closes it.
+        let faded = context.branch().pipe(rack).pipe(volume).to_branch(tee)?;
         context.attach(source_element, 0, faded)?;
         Ok(())
     })?;
+    // Filled before the first buffer, so a channel opens already filtered.
+    // A filter that cannot be built costs the filters and not the channel —
+    // the microphone is still worth recording unfiltered.
+    if let Err(error) = filter_rack.apply(&source.filters) {
+        eprintln!("could not put the filters on {}: {error}", source.name);
+    }
     pipeline.run()?;
 
     Ok((
@@ -714,6 +748,7 @@ fn open_source(
             pipeline,
             name: name.to_owned(),
             volume: volume_handle,
+            filters: filter_rack,
             device: source.device.clone(),
             monitored,
         },
@@ -760,10 +795,19 @@ mod tests {
     /// real endpoint, and this test is about what happens after one dies.
     fn open(name: &str, pipeline: Arc<Pipeline>) -> OpenAudioSource {
         let (_volume, handle) = AudioVolume::new(format!("{name}-volume"));
+        let (_rack, filters) = filters::rack(
+            name,
+            media_pp::elements::AudioFormat::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                48_000,
+                2,
+            ),
+        );
         OpenAudioSource {
             pipeline,
             name: name.to_owned(),
             volume: handle,
+            filters,
             device: None,
             monitored: false,
         }
@@ -883,6 +927,7 @@ mod tests {
             monitored: true,
             peak_db: None,
             running: true,
+            filters: Vec::new(),
         };
 
         assert!(

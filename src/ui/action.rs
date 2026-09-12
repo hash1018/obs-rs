@@ -48,6 +48,18 @@ pub enum UiAction {
     /// does: what is heard has to follow the pointer, and the edit is
     /// recorded once when the gesture ends.
     DragAudioGain(AudioSourceId, f32),
+    /// One mixer channel's filter while its slider is still held — to the
+    /// audio graph, for the reason `DragAudioGain` goes there: a gate is set
+    /// by listening to it.
+    DragAudioFilterSettings(
+        AudioSourceId,
+        crate::domain::AudioFilterId,
+        crate::domain::AudioFilterSettings,
+    ),
+    /// Open the Filters dock on one mixer channel's filters. A channel is in
+    /// no Scene, so nothing the editor can select stands for it — the
+    /// channel's own menu is the way in.
+    ShowAudioFilters(AudioSourceId),
     /// One media file Source's gain while the fader is still held. Goes to
     /// the engine rather than the audio graph: a file's fader lives in its
     /// own pipeline, which the video engine owns.

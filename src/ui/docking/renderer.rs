@@ -301,6 +301,7 @@ fn show_panel(
                 &mut child,
                 content.editor,
                 &content.snapshots.sources,
+                &content.snapshots.audio,
                 content.panels.filters,
                 content.i18n,
                 content.actions,

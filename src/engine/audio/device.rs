@@ -42,7 +42,13 @@ pub(super) fn open_capture(
     name: &str,
     kind: AudioSourceKind,
     device: Option<&str>,
-) -> Result<media_pp::elements::WasapiCaptureSource, BackendError> {
+) -> Result<
+    (
+        media_pp::elements::WasapiCaptureSource,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
     use media_pp::elements::{
         WasapiCaptureOptions, WasapiCaptureSource, WasapiDevice, WasapiDeviceKind,
     };
@@ -58,7 +64,10 @@ pub(super) fn open_capture(
         |device| &device.id,
         |device| device.kind == wanted && device.is_default,
     )?;
-    Ok(WasapiCaptureSource::open(name, WasapiCaptureOptions { device })?.0)
+    Ok(WasapiCaptureSource::open(
+        name,
+        WasapiCaptureOptions { device },
+    )?)
 }
 
 #[cfg(target_os = "linux")]
@@ -66,7 +75,13 @@ pub(super) fn open_capture(
     name: &str,
     kind: AudioSourceKind,
     device: Option<&str>,
-) -> Result<media_pp::elements::PipeWireAudioCaptureSource, BackendError> {
+) -> Result<
+    (
+        media_pp::elements::PipeWireAudioCaptureSource,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
     use media_pp::elements::{
         PipeWireAudioCaptureOptions, PipeWireAudioCaptureSource, PipeWireAudioDevice,
         PipeWireAudioDeviceKind,
@@ -86,7 +101,10 @@ pub(super) fn open_capture(
         |device| &device.name,
         |device| device.kind == wanted && device.is_default,
     )?;
-    Ok(PipeWireAudioCaptureSource::open(name, PipeWireAudioCaptureOptions { device })?.0)
+    Ok(PipeWireAudioCaptureSource::open(
+        name,
+        PipeWireAudioCaptureOptions { device },
+    )?)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
@@ -94,7 +112,13 @@ pub(super) fn open_capture(
     _name: &str,
     _kind: AudioSourceKind,
     _device: Option<&str>,
-) -> Result<media_pp::elements::TestAudioSource, BackendError> {
+) -> Result<
+    (
+        media_pp::elements::TestAudioSource,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
     Err("no audio capture is written for this platform yet".into())
 }
 
@@ -206,6 +230,7 @@ mod tests {
             monitored: false,
             peak_db: None,
             running: true,
+            filters: Vec::new(),
         }
     }
 

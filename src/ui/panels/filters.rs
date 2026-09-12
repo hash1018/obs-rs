@@ -14,13 +14,24 @@
 //! one changes it in every Scene that Source appears in — which is what the
 //! header says, in as many words, because the two docks sit side by side and
 //! otherwise look like they are talking about the same thing.
+//!
+//! # And a mixer channel's
+//!
+//! Desktop Audio and the microphone are in no Scene, so selecting something
+//! in the Preview can never point this dock at them. A channel's own menu in
+//! the Audio Mixer does instead, and the dock shows that channel's filters
+//! until something is next selected in the Preview.
 
 use eframe::egui;
 
-use crate::domain::{ChromaKeyMethod, Filter, FilterId, FilterKind, FilterSettings, SourceKind};
+use crate::domain::{
+    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId,
+    ChromaKeyMethod, Filter, FilterId, FilterKind, FilterSettings, NoiseGateSettings, SceneItemId,
+    SourceKind,
+};
 use crate::i18n::{LocalizationManager, TextKey};
-use crate::project::{ProjectCommand, SourceCommand};
-use crate::snapshots::{SceneItemSnapshot, SourcesSnapshot};
+use crate::project::{AudioCommand, ProjectCommand, SourceCommand};
+use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot, SceneItemSnapshot, SourcesSnapshot};
 
 use super::super::UiAction;
 use super::super::editor::SceneEditorState;
@@ -38,13 +49,30 @@ pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
     editor: &SceneEditorState,
     snapshot: &SourcesSnapshot,
+    audio: &AudioSnapshot,
     state: &mut FiltersPanelState,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let Some(item) = editor
-        .selected_item_id()
-        .and_then(|id| snapshot.items.iter().find(|item| item.id == id))
+    // A mixer channel chosen from its own menu stays shown until something
+    // else is chosen in the Preview: that is the other way this dock is
+    // pointed at something, and the more recent of the two wins.
+    let selected_item = editor.selected_item_id();
+    if state.seen_item != selected_item {
+        state.seen_item = selected_item;
+        if selected_item.is_some() {
+            state.audio = None;
+        }
+    }
+    if let Some(channel) = state
+        .audio
+        .and_then(|id| audio.items.iter().find(|channel| channel.id == id))
+    {
+        show_channel(ui, channel, state, i18n, actions);
+        return;
+    }
+
+    let Some(item) = selected_item.and_then(|id| snapshot.items.iter().find(|item| item.id == id))
     else {
         ui.weak(i18n.text(TextKey::FiltersNoSelection));
         return;
@@ -87,11 +115,28 @@ pub(in crate::ui) fn show(
     show_settings(ui, item, selected, i18n, actions);
 }
 
-/// What the panel remembers between frames, which is only which row is open
-/// below.
+/// What the panel remembers between frames: which row is open below, and
+/// whether it is showing a mixer channel rather than the selected Source.
 #[derive(Default)]
 pub(in crate::ui) struct FiltersPanelState {
     selected: Option<FilterId>,
+    /// The mixer channel whose filters are shown, when one was chosen from
+    /// its menu more recently than anything was selected in the Preview.
+    audio: Option<AudioSourceId>,
+    audio_selected: Option<AudioFilterId>,
+    /// The Preview's selection as last seen, so a new one is noticed and
+    /// takes the dock back from a channel.
+    seen_item: Option<SceneItemId>,
+}
+
+impl FiltersPanelState {
+    /// Points the dock at one mixer channel — see `UiState::show_audio_filters`.
+    pub(in crate::ui) fn show_audio(&mut self, id: AudioSourceId) {
+        if self.audio != Some(id) {
+            self.audio_selected = None;
+        }
+        self.audio = Some(id);
+    }
 }
 
 fn show_list(
@@ -307,6 +352,189 @@ fn method_key(method: ChromaKeyMethod) -> TextKey {
         ChromaKeyMethod::Green => TextKey::FiltersChromaKeyGreen,
         ChromaKeyMethod::Blue => TextKey::FiltersChromaKeyBlue,
         ChromaKeyMethod::Custom => TextKey::FiltersChromaKeyCustomMethod,
+    }
+}
+
+// ---- A mixer channel's filters ----------------------------------------
+//
+// The same list, toolbar and settings as a Source's, over the channel's own
+// filters and commands. Kept beside them rather than made generic over both:
+// the two share a layout and nothing else — different ids, different kinds,
+// different places the edits go.
+
+fn show_channel(
+    ui: &mut egui::Ui,
+    channel: &AudioSourceSnapshot,
+    state: &mut FiltersPanelState,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.horizontal(|ui| {
+        ui.strong(&channel.name);
+        ui.weak(i18n.text(TextKey::FiltersOnTheChannel));
+    });
+    ui.separator();
+
+    if state
+        .audio_selected
+        .is_some_and(|id| !channel.filters.iter().any(|filter| filter.id == id))
+    {
+        state.audio_selected = None;
+    }
+
+    if channel.filters.is_empty() {
+        ui.weak(i18n.text(TextKey::FiltersEmpty));
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("audio-filters")
+            .max_height(140.0)
+            .show(ui, |ui| {
+                for filter in &channel.filters {
+                    ui.horizontal(|ui| {
+                        let mut enabled = filter.enabled;
+                        if ui.checkbox(&mut enabled, "").changed() {
+                            actions.push(audio(AudioCommand::SetFilterEnabled(filter.id, enabled)));
+                        }
+                        let label = i18n.text(audio_kind_key(filter.settings.kind()));
+                        if ui
+                            .selectable_label(
+                                state.audio_selected == Some(filter.id),
+                                label.as_ref(),
+                            )
+                            .clicked()
+                        {
+                            state.audio_selected = Some(filter.id);
+                        }
+                    });
+                }
+            });
+    }
+    ui.separator();
+
+    ui.horizontal(|ui| {
+        // A menu rather than a button, since there is more than one kind to
+        // add — and in the order a streaming application recommends running
+        // them: take the noise out first, then gate what is left.
+        ui.menu_button("+", |ui| {
+            for kind in AudioFilterKind::ALL {
+                if ui.button(i18n.text(audio_kind_key(kind))).clicked() {
+                    actions.push(audio(AudioCommand::AddFilter {
+                        audio_source_id: channel.id,
+                        kind,
+                    }));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(i18n.text(TextKey::FiltersAdd));
+
+        let selected = state.audio_selected;
+        ui.add_enabled_ui(selected.is_some(), |ui| {
+            if ui
+                .button("\u{2212}")
+                .on_hover_text(i18n.text(TextKey::FiltersRemove))
+                .clicked()
+                && let Some(id) = selected
+            {
+                actions.push(audio(AudioCommand::RemoveFilter(id)));
+                state.audio_selected = None;
+            }
+            if ui
+                .button("\u{2191}")
+                .on_hover_text(i18n.text(TextKey::FiltersMoveUp))
+                .clicked()
+                && let Some(id) = selected
+            {
+                actions.push(audio(AudioCommand::MoveFilterEarlier(id)));
+            }
+            if ui
+                .button("\u{2193}")
+                .on_hover_text(i18n.text(TextKey::FiltersMoveDown))
+                .clicked()
+                && let Some(id) = selected
+            {
+                actions.push(audio(AudioCommand::MoveFilterLater(id)));
+            }
+        });
+    });
+
+    let Some(selected) = state
+        .audio_selected
+        .and_then(|id| channel.filters.iter().find(|filter| filter.id == id))
+    else {
+        return;
+    };
+    ui.separator();
+    show_channel_settings(ui, channel, selected, i18n, actions);
+}
+
+fn show_channel_settings(
+    ui: &mut egui::Ui,
+    channel: &AudioSourceSnapshot,
+    filter: &AudioFilter,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let AudioFilterSettings::NoiseGate(settings) = filter.settings else {
+        // RNNoise has nothing to set; what is worth saying is what it costs.
+        ui.weak(i18n.text(TextKey::FiltersNoiseSuppressionAbout));
+        return;
+    };
+    let mut edited = settings;
+    let mut sliders: Vec<egui::Response> = Vec::new();
+    egui::Grid::new("noise-gate-settings")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            let range = NoiseGateSettings::MIN_THRESHOLD_DB..=0.0;
+            ui.label(i18n.text(TextKey::FiltersGateOpen).as_ref());
+            sliders.push(ui.add(
+                egui::Slider::new(&mut edited.open_threshold_db, range.clone()).suffix(" dB"),
+            ));
+            ui.end_row();
+
+            ui.label(i18n.text(TextKey::FiltersGateClose).as_ref());
+            sliders.push(
+                ui.add(egui::Slider::new(&mut edited.close_threshold_db, range).suffix(" dB")),
+            );
+            ui.end_row();
+
+            for (key, value, most) in [
+                (TextKey::FiltersGateAttack, &mut edited.attack_ms, 1_000),
+                (TextKey::FiltersGateHold, &mut edited.hold_ms, 2_000),
+                (TextKey::FiltersGateRelease, &mut edited.release_ms, 2_000),
+            ] {
+                ui.label(i18n.text(key).as_ref());
+                sliders.push(ui.add(egui::Slider::new(value, 0..=most).suffix(" ms")));
+                ui.end_row();
+            }
+        });
+
+    // The close threshold follows the open one down rather than letting the
+    // pair cross, which the gate would refuse.
+    let edited = edited.sanitised();
+    let gesture = Gesture::of(&sliders, edited != settings);
+    if gesture.drag {
+        actions.push(UiAction::DragAudioFilterSettings(
+            channel.id,
+            filter.id,
+            AudioFilterSettings::NoiseGate(edited),
+        ));
+    }
+    if gesture.record {
+        actions.push(audio(AudioCommand::SetNoiseGateSettings(filter.id, edited)));
+    }
+}
+
+fn audio(command: AudioCommand) -> UiAction {
+    UiAction::Project(ProjectCommand::Audio(command))
+}
+
+fn audio_kind_key(kind: AudioFilterKind) -> TextKey {
+    match kind {
+        AudioFilterKind::NoiseSuppression => TextKey::FiltersNoiseSuppression,
+        AudioFilterKind::NoiseGate => TextKey::FiltersNoiseGate,
     }
 }
 

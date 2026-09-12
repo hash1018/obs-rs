@@ -84,6 +84,15 @@ text_keys! {
     FiltersChromaKeyGreen         => "filters-chroma-key-green";
     FiltersChromaKeyBlue          => "filters-chroma-key-blue";
     FiltersChromaKeyCustomMethod  => "filters-chroma-key-custom-method";
+    FiltersOnTheChannel           => "filters-on-the-channel";
+    FiltersNoiseSuppression       => "filters-noise-suppression";
+    FiltersNoiseSuppressionAbout  => "filters-noise-suppression-about";
+    FiltersNoiseGate              => "filters-noise-gate";
+    FiltersGateOpen               => "filters-gate-open";
+    FiltersGateClose              => "filters-gate-close";
+    FiltersGateAttack             => "filters-gate-attack";
+    FiltersGateHold               => "filters-gate-hold";
+    FiltersGateRelease            => "filters-gate-release";
     PropertiesNoSelection         => "properties-no-selection";
     PropertiesName                => "properties-name";
     PropertiesKind                => "properties-kind";
@@ -154,6 +163,7 @@ text_keys! {
     AudioKindInput                => "audio-kind-input";
     AudioDeviceDefault            => "audio-device-default";
     AudioNoDevices                => "audio-no-devices";
+    AudioFilters                  => "audio-filters";
     AudioClipped                  => "audio-clipped";
     ControlStartRecording         => "control-start-recording";
     ControlPauseRecording         => "control-pause-recording";

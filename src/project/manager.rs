@@ -3,8 +3,8 @@ use std::thread::{self, JoinHandle};
 
 use crate::domain::{Scene, SceneItem, Source};
 use crate::persistence::{
-    AudioStore, FilterNeighbour, FilterStore, PersistenceResult, ProjectDatabase, SceneStore,
-    SourceStore,
+    AudioFilterStore, AudioStore, FilterNeighbour, FilterStore, PersistenceResult, ProjectDatabase,
+    SceneStore, SourceStore,
 };
 use crate::snapshots::{
     AudioSnapshot, AudioSourceSnapshot, SceneItemSnapshot, SceneSnapshot, ScenesSnapshot,
@@ -146,6 +146,23 @@ fn handle_audio_command(
         }
         AudioCommand::SetMonitored(id, monitored) => {
             AudioStore::set_monitored(transaction, id, monitored)
+        }
+        AudioCommand::AddFilter {
+            audio_source_id,
+            kind,
+        } => AudioFilterStore::add(transaction, audio_source_id, kind).map(|_| ()),
+        AudioCommand::RemoveFilter(id) => AudioFilterStore::remove(transaction, id),
+        AudioCommand::MoveFilterEarlier(id) => {
+            AudioFilterStore::swap_with_neighbour(transaction, id, FilterNeighbour::Earlier)
+        }
+        AudioCommand::MoveFilterLater(id) => {
+            AudioFilterStore::swap_with_neighbour(transaction, id, FilterNeighbour::Later)
+        }
+        AudioCommand::SetFilterEnabled(id, enabled) => {
+            AudioFilterStore::set_enabled(transaction, id, enabled)
+        }
+        AudioCommand::SetNoiseGateSettings(id, settings) => {
+            AudioFilterStore::set_noise_gate(transaction, id, settings)
         }
     })
 }
@@ -427,9 +444,11 @@ fn project_snapshot(
 /// `peak_db` is `None` for every one of them — the meter is drawn from
 /// whatever measures the audio, and nothing does yet.
 fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot> {
+    let mut filters = AudioFilterStore::all(database.connection())?;
     let items = AudioStore::list(database.connection())?
         .into_iter()
         .map(|source| AudioSourceSnapshot {
+            filters: filters.remove(&source.id).unwrap_or_default(),
             id: source.id,
             name: source.name,
             kind: source.kind,

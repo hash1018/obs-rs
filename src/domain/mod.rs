@@ -52,6 +52,7 @@ macro_rules! stored_by_name {
 }
 
 mod audio;
+mod audio_filter;
 mod canvas;
 mod filter;
 mod scene;
@@ -59,6 +60,9 @@ mod scene_item;
 mod source;
 
 pub use audio::{AudioSource, AudioSourceId, AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB};
+pub use audio_filter::{
+    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, NoiseGateSettings,
+};
 pub use canvas::SceneCanvas;
 pub use filter::{
     ChromaKeyMethod, ChromaKeySettings, Filter, FilterId, FilterKind, FilterSettings,

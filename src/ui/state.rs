@@ -65,6 +65,15 @@ impl UiState {
         self.exit_confirm_open = true;
     }
 
+    /// Opens the Filters dock on one mixer channel's filters, opening the
+    /// dock itself if it was closed — a menu item that answered by changing
+    /// a dock nobody can see would look like it did nothing.
+    pub fn show_audio_filters(&mut self, id: crate::domain::AudioSourceId) {
+        self.filters.show_audio(id);
+        self.dock_layout
+            .set_open(super::docking::DockPanel::Filters, true);
+    }
+
     /// Opens the Settings dialog on a copy of what is currently set.
     ///
     /// The draft is seeded by the caller's settings rather than read from

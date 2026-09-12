@@ -232,6 +232,7 @@ mod tests {
                 monitored: false,
                 peak_db: None,
                 running: true,
+                filters: Vec::new(),
             }],
         }
     }

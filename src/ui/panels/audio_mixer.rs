@@ -482,6 +482,13 @@ fn show_name(
                 if !listed {
                     ui.weak(i18n.text(TextKey::AudioNoDevices));
                 }
+                ui.separator();
+                // The way in to this channel's filters. It is in no Scene, so
+                // selecting something in the Preview can never stand for it.
+                if ui.button(i18n.text(TextKey::AudioFilters)).clicked() {
+                    actions.push(UiAction::ShowAudioFilters(source.source));
+                    ui.close();
+                }
             },
         )
     });

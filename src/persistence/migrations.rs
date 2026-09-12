@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -353,6 +353,46 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 21;",
         )?;
     }
+    if current_version < 22 {
+        // Filters on the mixer's channels: noise suppression and a gate.
+        //
+        // A table of their own rather than rows in `source_filters`, because
+        // what they hang off is not a Source. A mixer channel is an
+        // `audio_sources` row, which is in no Scene, and a filter row that
+        // could point at either would need two nullable owners and a check
+        // that exactly one is set — and would let a command meant for one
+        // kind of filter land on the other, since the ids would share one
+        // sequence. The shape is otherwise the one `source_filters` has, and
+        // for its reasons: ordered within an owner, a settings table per
+        // kind that has any.
+        //
+        // Noise suppression has no settings, so it has no table.
+        transaction.execute_batch(
+            "CREATE TABLE audio_source_filters (
+                id              INTEGER PRIMARY KEY,
+                audio_source_id INTEGER NOT NULL
+                                REFERENCES audio_sources(id) ON DELETE CASCADE,
+                position        INTEGER NOT NULL,
+                kind            TEXT NOT NULL,
+                enabled         INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE INDEX audio_source_filters_source_idx
+                ON audio_source_filters(audio_source_id, position);
+
+            CREATE TABLE noise_gate_filter_settings (
+                filter_id          INTEGER PRIMARY KEY
+                                   REFERENCES audio_source_filters(id) ON DELETE CASCADE,
+                open_threshold_db  REAL NOT NULL,
+                close_threshold_db REAL NOT NULL,
+                attack_ms          INTEGER NOT NULL CHECK (attack_ms >= 0),
+                hold_ms            INTEGER NOT NULL CHECK (hold_ms >= 0),
+                release_ms         INTEGER NOT NULL CHECK (release_ms >= 0)
+            );
+
+            PRAGMA user_version = 22;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -407,7 +447,12 @@ mod tests {
                 .unwrap(),
             1
         );
-        for table in ["source_filters", "chroma_key_filter_settings"] {
+        for table in [
+            "source_filters",
+            "chroma_key_filter_settings",
+            "audio_source_filters",
+            "noise_gate_filter_settings",
+        ] {
             assert_eq!(
                 connection
                     .query_row::<i64, _, _>(
@@ -484,9 +529,14 @@ mod tests {
     fn a_monitored_desktop_is_cleared_and_a_monitored_microphone_is_kept() {
         let mut connection = Connection::open_in_memory().unwrap();
         run(&mut connection).unwrap();
+        // Back to 20 — taking with it what the later steps added, so running
+        // again carries the database forward from 20 rather than tripping
+        // over tables a project at 20 would not have.
         connection
             .execute_batch(
                 "UPDATE audio_sources SET monitored = 1;
+                 DROP TABLE noise_gate_filter_settings;
+                 DROP TABLE audio_source_filters;
                  PRAGMA user_version = 20;",
             )
             .unwrap();

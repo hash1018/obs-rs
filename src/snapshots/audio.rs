@@ -1,4 +1,4 @@
-use crate::domain::{AudioSourceId, AudioSourceKind};
+use crate::domain::{AudioFilter, AudioSourceId, AudioSourceKind};
 
 /// What the audio mixer dock draws.
 ///
@@ -46,4 +46,6 @@ pub struct AudioSourceSnapshot {
     /// not about what the user asked for. It defaults to shown, so a source
     /// is hidden only once something has positively said it is not running.
     pub running: bool,
+    /// What is done to the sound before the fader, in the order it is done.
+    pub filters: Vec<AudioFilter>,
 }
