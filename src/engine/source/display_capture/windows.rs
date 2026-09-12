@@ -163,6 +163,28 @@ impl CaptureRegistry {
         }
     }
 
+    /// What one item's branch of a capture is doing, for the Stats dock.
+    ///
+    /// Only that branch's elements: the capture itself is every sharing
+    /// item's, and reported per item it would be counted once for each. The
+    /// branch ends in the item's own compositor input, which is the element
+    /// the dock reads a Source from anyway — whether frames are reaching
+    /// the Canvas, and when they stopped.
+    pub(in crate::engine) fn stats(
+        &self,
+        monitor: &str,
+        branch: BranchId,
+    ) -> Option<media_pp::stats::PipelineStats> {
+        // The pipeline is taken out of the lock before it is read: a reading
+        // takes the graph's own lock, and nothing about it needs this one.
+        let pipeline = Arc::clone(&self.lock().get(monitor)?.pipeline);
+        let mut stats = pipeline.stats();
+        stats
+            .elements
+            .retain(|element| element.branch == Some(branch));
+        Some(stats)
+    }
+
     /// Tells every open capture to emit at `fps`.
     ///
     /// A handle call rather than a reopen: the compositor's rate is a setting,
@@ -336,9 +358,15 @@ mod tests {
 
     /// A branch end that counts the pictures reaching it.
     fn counting() -> (Box<dyn Sink>, Arc<AtomicUsize>) {
+        counting_as("count")
+    }
+
+    /// The same, under a name of its own — what the Stats dock reads a
+    /// Source's compositor input by.
+    fn counting_as(name: &str) -> (Box<dyn Sink>, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&count);
-        let sink = AppSink::new("count", move |buffer: MediaBuffer| {
+        let sink = AppSink::new(name, move |buffer: MediaBuffer| {
             if matches!(buffer, MediaBuffer::Video(_)) {
                 seen.fetch_add(1, Ordering::SeqCst);
             }
@@ -458,5 +486,61 @@ mod tests {
         assert!(!moves(&count), "paused once nothing shown draws from it");
 
         captures.detach(&monitor, hidden);
+    }
+
+    /// Each item sharing a capture is reported by its own branch, and only
+    /// by that.
+    ///
+    /// The Stats dock reads a Source from its compositor input. A shared
+    /// capture's pipeline holds every sharing item's input, so reading all of
+    /// it for each item would credit one item with another's frames — and
+    /// reading none of it, which is what this replaced, left a Display
+    /// Capture with no row at all.
+    #[test]
+    fn each_item_sharing_a_capture_is_reported_by_its_own_branch() {
+        let _display = DISPLAY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (device, monitor) = match a_display() {
+            Ok(found) => found,
+            Err(reason) => return eprintln!("skipped: {reason}"),
+        };
+        let captures = CaptureRegistry::default();
+
+        let (sink, first_count) = counting_as("scene-item-1");
+        let (first, _) = match captures.attach(&monitor, &device, 30, sink) {
+            Ok(attached) => attached,
+            Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
+        };
+        let (sink, _) = counting_as("scene-item-2");
+        let (second, _) = captures
+            .attach(&monitor, &device, 30, sink)
+            .expect("join the open capture");
+        assert!(moves(&first_count), "the capture is delivering");
+
+        let names = |branch| -> Vec<String> {
+            captures
+                .stats(&monitor, branch)
+                .expect("the capture is open")
+                .elements
+                .iter()
+                .map(|element| element.name.to_string())
+                .collect()
+        };
+        assert_eq!(names(first), ["scene-item-1"]);
+        assert_eq!(names(second), ["scene-item-2"]);
+        let delivered = captures
+            .stats(&monitor, first)
+            .expect("the capture is open")
+            .elements[0]
+            .buffers_in;
+        assert!(delivered > 0, "the branch's own count is what is read");
+
+        captures.detach(&monitor, second);
+        captures.detach(&monitor, first);
+        assert!(
+            captures.stats(&monitor, first).is_none(),
+            "a capture that has gone has nothing to report"
+        );
     }
 }

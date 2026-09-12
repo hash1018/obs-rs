@@ -399,13 +399,17 @@ pub(in crate::engine) enum RunningSource {
 impl RunningSource {
     /// What this Source's own pipeline is doing, for the Stats dock.
     ///
-    /// `None` for a share of a capture other items also draw from: the
-    /// pipeline behind it belongs to the registry rather than to this item,
-    /// and reporting it per item would count one capture several times.
+    /// For a share of a capture other items also draw from, only this
+    /// item's branch of it — see [`CaptureRegistry::stats`]. `None` once
+    /// the capture has gone.
     pub(in crate::engine) fn stats(&self) -> Option<media_pp::stats::PipelineStats> {
         match self {
             Self::Owned(pipeline) => Some(pipeline.stats()),
-            Self::Shared { .. } => None,
+            Self::Shared {
+                captures,
+                monitor,
+                branch,
+            } => captures.stats(monitor, *branch),
         }
     }
 

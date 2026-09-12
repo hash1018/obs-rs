@@ -219,12 +219,6 @@ mod tests {
     }
 }
 
-/// One reading of everything the Stats dock shows.
-///
-/// Built here rather than in the dock because the numbers underneath are
-/// running totals: a rate is the difference between two readings, and only
-/// the loop that took them knows how far apart they were. What the dock
-/// receives is already the answer.
 /// What one reading of one element says, as the fold reads it.
 ///
 /// A view of [`ElementStats`] rather than the thing itself: it is the few
@@ -274,6 +268,12 @@ pub fn elements(stats: &PipelineStats) -> Vec<Element<'_>> {
     stats.elements.iter().map(Element::from).collect()
 }
 
+/// One reading of everything the Stats dock shows.
+///
+/// Built here rather than in the dock because the numbers underneath are
+/// running totals: a rate is the difference between two readings, and only
+/// the loop that took them knows how far apart they were. What the dock
+/// receives is already the answer.
 pub struct Reading {
     /// Totals as they last stood, kept to measure the next reading against.
     previous: std::collections::HashMap<String, Totals>,
