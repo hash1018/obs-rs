@@ -116,6 +116,13 @@ enum EngineCommand {
     /// counterpart of `Colour`, and on this thread rather than the audio one
     /// because a file's fader belongs to its own pipeline.
     MediaGain(SceneItemId, f32),
+    /// One of a Source's own audio filters mid-drag, as `MediaGain` is its
+    /// fader's.
+    AudioFilterSettings(
+        SceneItemId,
+        crate::domain::AudioFilterId,
+        crate::domain::AudioFilterSettings,
+    ),
     /// Move one media file Source to a position in its own file.
     ///
     /// Not a project edit: where a clip is playing from is not something to
@@ -699,6 +706,19 @@ impl EngineManager {
     /// the pointer, and the project is told once when the gesture ends.
     pub fn set_media_gain_db(&self, item: SceneItemId, gain_db: f32) {
         let _ = self.commands.send(EngineCommand::MediaGain(item, gain_db));
+    }
+
+    /// One of a Source's own audio filters while its slider is still held —
+    /// the file's or the stream's, as `set_media_gain_db` is its fader.
+    pub fn set_source_audio_filter_settings(
+        &self,
+        item: SceneItemId,
+        filter: crate::domain::AudioFilterId,
+        settings: crate::domain::AudioFilterSettings,
+    ) {
+        let _ = self
+            .commands
+            .send(EngineCommand::AudioFilterSettings(item, filter, settings));
     }
 
     /// One filter's settings while its slider is still held.
@@ -1460,6 +1480,12 @@ fn apply_command(
             }
             false
         }
+        EngineCommand::AudioFilterSettings(item_id, filter_id, settings) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id) {
+                source::set_audio_filter_settings(source, filter_id, &settings);
+            }
+            false
+        }
         EngineCommand::FilterSettings(item_id, filter_id, settings) => {
             if let Some(SourceState::Open(source)) = open.get(&item_id)
                 && let Some(filter) = source.filters.iter().find(|open| open.id == filter_id)
@@ -2098,6 +2124,7 @@ mod tests {
     fn window_item(id: i64, target: WindowCaptureTarget) -> SceneItemSnapshot {
         SceneItemSnapshot {
             filters: Vec::new(),
+            audio_filters: Vec::new(),
             peak_db: None,
             position: None,
             id: SceneItemId(id),

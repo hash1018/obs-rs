@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use crate::domain::{
-    Crop, Filter, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings, Transform,
+    AudioFilter, Crop, Filter, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings,
+    Transform,
 };
 
 #[derive(Clone)]
@@ -114,6 +115,9 @@ pub struct SceneItemSnapshot {
     /// carry the same list — see [`crate::domain::Filter`]. Empty for most
     /// Sources, and cheap to clone when it is.
     pub filters: Vec<Filter>,
+    /// What is done to this Source's own sound before its fader, in order.
+    /// The Source's, like `filters`; empty for every kind without sound.
+    pub audio_filters: Vec<AudioFilter>,
     /// The Source's own size in Canvas units, before `transform` scales it.
     pub source_size: [f32; 2],
     pub visible: bool,
@@ -144,6 +148,7 @@ mod tests {
     fn item(source_size: [f32; 2], crop: Crop) -> SceneItemSnapshot {
         SceneItemSnapshot {
             filters: Vec::new(),
+            audio_filters: Vec::new(),
             id: SceneItemId(1),
             name: "Drawing".into(),
             kind: SourceKind::Drawing,

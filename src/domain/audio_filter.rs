@@ -10,10 +10,32 @@
 //! Separate ids follow from separate rows. A [`super::FilterId`] and an
 //! [`AudioFilterId`] can hold the same number, and a command naming one can
 //! never be read as naming the other.
+//!
+//! # Two owners, one kind of filter
+//!
+//! A mixer channel is not the only thing with sound: a media file and a
+//! live stream carry their own, and it wants the same four filters for the
+//! same reasons — a clip recorded with a fan behind it, a stream too quiet
+//! against the microphone. So an audio filter hangs off either, and is the
+//! same filter wherever it hangs: one id, one set of commands, one row
+//! shape. Only adding one has to say where — see [`AudioFilterOwner`].
+
+use super::{AudioSourceId, SourceId};
 
 /// Row identity for one audio filter, assigned by the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AudioFilterId(pub i64);
+
+/// What an audio filter hangs off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AudioFilterOwner {
+    /// A mixer channel: a device the person broadcasting has, in no Scene.
+    Channel(AudioSourceId),
+    /// A Source that carries its own sound — a media file or a stream. The
+    /// Source's rather than the SceneItem's, as its picture filters are, so
+    /// a clip used in two Scenes sounds the same in both.
+    Source(SourceId),
+}
 
 stored_by_name! {
     /// What an audio filter does.

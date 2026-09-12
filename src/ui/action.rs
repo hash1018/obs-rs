@@ -4,6 +4,18 @@ use crate::{
     project::ProjectCommand,
 };
 
+/// Whose sound the audio filters being shown or dragged are on, as the UI
+/// reaches it.
+///
+/// A Source is reached through an item, which is what the Preview selects
+/// and the mixer draws a column for; the project stores its filters against
+/// the Source behind it — see `crate::domain::AudioFilterOwner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFilterHost {
+    Channel(AudioSourceId),
+    SceneItem(SceneItemId),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiAction {
     Exit,
@@ -48,18 +60,19 @@ pub enum UiAction {
     /// does: what is heard has to follow the pointer, and the edit is
     /// recorded once when the gesture ends.
     DragAudioGain(AudioSourceId, f32),
-    /// One mixer channel's filter while its slider is still held — to the
-    /// audio graph, for the reason `DragAudioGain` goes there: a gate is set
-    /// by listening to it.
+    /// One audio filter while its slider is still held — to whichever graph
+    /// carries that sound, for the reason `DragAudioGain` goes there: a gate
+    /// is set by listening to it.
     DragAudioFilterSettings(
-        AudioSourceId,
+        AudioFilterHost,
         crate::domain::AudioFilterId,
         crate::domain::AudioFilterSettings,
     ),
-    /// Open the Filters dock on one mixer channel's filters. A channel is in
-    /// no Scene, so nothing the editor can select stands for it — the
-    /// channel's own menu is the way in.
-    ShowAudioFilters(AudioSourceId),
+    /// Open the Filters dock on one sound's filters. A channel is in no
+    /// Scene, so nothing the editor can select stands for it — the channel's
+    /// own menu is the way in; a Source's sound has the same way in from its
+    /// column, beside being selected.
+    ShowAudioFilters(AudioFilterHost),
     /// One media file Source's gain while the fader is still held. Goes to
     /// the engine rather than the audio graph: a file's fader lives in its
     /// own pipeline, which the video engine owns.

@@ -254,6 +254,7 @@ filters-chroma-key-green = Green
 filters-chroma-key-blue = Blue
 filters-chroma-key-custom-method = Custom
 filters-on-the-channel = on the mixer channel, before its fader
+filters-on-the-source-sound = on the source's own sound, in every scene, before its fader
 filters-noise-suppression = Noise Suppression
 filters-noise-suppression-about = Takes steady background noise out of speech, with RNNoise. Nothing to set; the sound reaches the mix 10 ms later.
 filters-noise-gate = Noise Gate

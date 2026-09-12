@@ -172,7 +172,7 @@ fn monitor_command(id: ChannelId, monitored: bool) -> UiAction {
     }
 }
 
-use super::super::UiAction;
+use super::super::{AudioFilterHost, UiAction};
 use super::elide;
 use super::toolbar;
 
@@ -397,9 +397,10 @@ fn show_name(
     actions: &mut Vec<UiAction>,
 ) {
     let Some(source) = &channel.device else {
-        // A media file has no endpoint to choose, so its name is a label
-        // rather than a menu. It is renamed where it lives, in the Sources
-        // dock, and this follows.
+        // A media file has no endpoint to choose, so its name opens a menu
+        // with the one thing it does have — its filters — rather than the
+        // device list a channel's does. It is renamed where it lives, in the
+        // Sources dock, and this follows.
         //
         // Painted from a galley rather than added as a `Label`, for the two
         // things a Source name needs that a label in a column this narrow
@@ -411,14 +412,28 @@ fn show_name(
         let elided = galley.elided;
         let (rect, response) = ui.allocate_exact_size(
             egui::vec2(SOURCE_WIDTH, galley.size().y),
-            egui::Sense::hover(),
+            egui::Sense::click(),
         );
         let left = rect.center().x - galley.size().x / 2.0;
         ui.painter().galley(
             egui::pos2(left, rect.top()),
             galley,
-            ui.visuals().strong_text_color(),
+            // Lit under the pointer as a menu button is, so a name that
+            // opens something looks like it does.
+            if response.hovered() {
+                ui.visuals().widgets.hovered.fg_stroke.color
+            } else {
+                ui.visuals().strong_text_color()
+            },
         );
+        if let ChannelId::SceneItem(item) = channel.id {
+            egui::Popup::menu(&response).show(|ui| {
+                if ui.button(i18n.text(TextKey::AudioFilters)).clicked() {
+                    actions.push(UiAction::ShowAudioFilters(AudioFilterHost::SceneItem(item)));
+                    ui.close();
+                }
+            });
+        }
         let kind = i18n.text(TextKey::AudioKindMediaFile);
         response.on_hover_text(if elided {
             format!("{kind} · {}", channel.name)
@@ -486,7 +501,9 @@ fn show_name(
                 // The way in to this channel's filters. It is in no Scene, so
                 // selecting something in the Preview can never stand for it.
                 if ui.button(i18n.text(TextKey::AudioFilters)).clicked() {
-                    actions.push(UiAction::ShowAudioFilters(source.source));
+                    actions.push(UiAction::ShowAudioFilters(AudioFilterHost::Channel(
+                        source.source,
+                    )));
                     ui.close();
                 }
             },

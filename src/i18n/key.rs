@@ -85,6 +85,7 @@ text_keys! {
     FiltersChromaKeyBlue          => "filters-chroma-key-blue";
     FiltersChromaKeyCustomMethod  => "filters-chroma-key-custom-method";
     FiltersOnTheChannel           => "filters-on-the-channel";
+    FiltersOnTheSourceSound       => "filters-on-the-source-sound";
     FiltersNoiseSuppression       => "filters-noise-suppression";
     FiltersNoiseSuppressionAbout  => "filters-noise-suppression-about";
     FiltersNoiseGate              => "filters-noise-gate";

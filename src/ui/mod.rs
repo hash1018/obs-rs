@@ -15,7 +15,7 @@ use crate::engine::CompositeFrame;
 use crate::i18n::LocalizationManager;
 use crate::snapshots::Snapshots;
 
-pub use action::UiAction;
+pub use action::{AudioFilterHost, UiAction};
 pub use docking::WorkspaceDocks;
 pub use preview::PreviewZoom;
 pub use state::UiState;

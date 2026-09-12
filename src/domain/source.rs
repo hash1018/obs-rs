@@ -600,6 +600,10 @@ pub struct Source {
     /// Scenes is keyed in both. Empty for every kind and every Source that
     /// has never been given one, which is most of them.
     pub filters: Vec<Filter>,
+    /// What is done to this Source's own sound before its fader, in order —
+    /// see [`AudioFilterOwner::Source`](super::AudioFilterOwner::Source).
+    /// Empty for every kind without sound.
+    pub audio_filters: Vec<super::AudioFilter>,
 }
 
 #[cfg(test)]

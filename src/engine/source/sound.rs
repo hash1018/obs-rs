@@ -6,14 +6,25 @@
 //! why this is a module rather than a copy in each.
 //!
 //! ```text
-//! packets ─ SwDecoder ─ Queue ─ Pacer ─ AudioVolume ─ Tee ┬ AppSink (meter)
-//!                                                         ├ AudioMixer (recording)
-//!                                                         └ AudioMixer (monitor)
+//! packets ─ SwDecoder ─ Queue ─ Pacer ─ Rack ─ AudioVolume ─ Tee ┬ AppSink (meter)
+//!                                                                ├ AudioMixer (recording)
+//!                                                                └ AudioMixer (monitor)
 //! ```
 //!
 //! The `Tee` hangs off the *fader*, so the meter shows what the fader let
 //! through rather than what arrived at it: pulling one down empties its
 //! meter, and so does muting.
+//!
+//! # The filters sit after the `Pacer`
+//!
+//! The `Rack` holds the Source's audio filters, before the fader as a mixer
+//! channel's are. After the `Pacer` rather than before it, for two reasons.
+//! A bridge in the rack — the resampler it takes on for a filter that needs
+//! another format — counts the `pts` it puts out in samples, and the `Pacer`
+//! is told the stream's own time base; ahead of it, one would have it
+//! waiting on the wrong clock. And after it, a slider moved while a clip
+//! plays is heard a frame later rather than a queue's depth later. Nothing
+//! downstream reads `pts` again: the mixer counts its own samples.
 //!
 //! # The monitor branch comes and goes while it plays
 //!
@@ -30,11 +41,14 @@ use std::time::Duration;
 
 use media_pp::element::{Context, Sink, Source as SourceElement};
 use media_pp::elements::{
-    AppSink, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, SwDecoder, TeeBuilder, TeeHandle,
+    AppSink, AudioFormat, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, Rack, SwDecoder,
+    TeeBuilder, TeeHandle,
 };
 use media_pp::ffmpeg;
 use media_pp::graph::BranchId;
 
+use crate::domain::{AudioFilter, AudioFilterId, AudioFilterSettings};
+use crate::engine::audio::filters::{self, AudioFilterRack};
 use crate::engine::audio::{Meter, MeterWake};
 use crate::engine::backend::BackendError;
 use crate::engine::source::MediaMeters;
@@ -65,6 +79,11 @@ pub(in crate::engine) struct Sound {
     index: usize,
     time_base: ffmpeg::Rational,
     decoder: SwDecoder,
+    /// Where the Source's audio filters go, and the way back to it.
+    rack: Rack,
+    filters: AudioFilterRack,
+    /// What goes in it before the first buffer, so a clip starts filtered.
+    initial_filters: Vec<AudioFilter>,
     fader: AudioVolume,
     /// What the Audio Mixer dock moves, and what it reads.
     pub(in crate::engine) volume: AudioVolumeHandle,
@@ -124,9 +143,31 @@ pub(in crate::engine) struct SoundRouting {
     name: String,
     monitored: bool,
     branch: Option<BranchId>,
+    /// The Source's audio filters, which change while it plays for the
+    /// reason the monitor branch does: reopening a file restarts it.
+    filters: AudioFilterRack,
 }
 
 impl SoundRouting {
+    /// Brings the filters in line with what the project holds. One that
+    /// cannot be built costs the filters and not the sound, as on a mixer
+    /// channel.
+    pub(in crate::engine) fn apply_filters(&mut self, filters: &[AudioFilter]) {
+        if let Err(error) = self.filters.apply(filters) {
+            eprintln!("could not put the audio filters on {}: {error}", self.name);
+        }
+    }
+
+    /// One filter's settings while its slider is still held — see
+    /// [`AudioFilterRack::retune`].
+    pub(in crate::engine) fn retune_filter(
+        &self,
+        id: AudioFilterId,
+        settings: &AudioFilterSettings,
+    ) {
+        self.filters.retune(id, settings);
+    }
+
     /// Puts the monitor branch on or takes it off.
     ///
     /// The recording's branch is not here at all: it is on the `Tee` from the
@@ -184,20 +225,38 @@ impl SoundRouting {
     }
 }
 
+/// What the project says a Source's sound should be when it opens: where its
+/// fader is, and what filters it goes through first.
+pub(in crate::engine) struct SoundSettings<'a> {
+    pub(in crate::engine) gain_db: f32,
+    pub(in crate::engine) muted: bool,
+    pub(in crate::engine) filters: &'a [AudioFilter],
+}
+
 /// Builds it, or answers `None` for a Source with no sound and for a machine
 /// whose mixer never started — the picture is worth showing either way.
 pub(in crate::engine) fn build(
     name: &str,
     track: Option<Track>,
     mixer: Option<&MixerHandle>,
-    gain_db: f32,
-    muted: bool,
+    settings: SoundSettings<'_>,
     meters: &Arc<MediaMeters>,
     meter_wake: &MeterWake,
 ) -> Result<Option<Sound>, BackendError> {
+    let SoundSettings {
+        gain_db,
+        muted,
+        filters: audio_filters,
+    } = settings;
     let (Some(track), Some(mixer)) = (track, mixer) else {
         return Ok(None);
     };
+    // Read before the parameters are moved into the decoder.
+    let (rack, filters) = filters::rack(
+        &mixer_name(name),
+        declared_format(&track.params),
+        track.time_base,
+    );
     let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
 
     // The fader lives in this pipeline rather than the audio thread's,
@@ -225,6 +284,9 @@ pub(in crate::engine) fn build(
         index: track.index,
         time_base: track.time_base,
         decoder,
+        rack,
+        filters,
+        initial_filters: audio_filters.to_vec(),
         fader,
         volume,
         mix,
@@ -261,10 +323,11 @@ pub(in crate::engine) fn attach<S: SourceElement>(
             Some(limit) => Pacer::with_discontinuity_limit("audio-pacer", sound.time_base, limit)?,
             None => Pacer::new("audio-pacer", sound.time_base)?,
         })
+        .pipe(sound.rack)
         .pipe(sound.fader)
         .to_branch(tee_branch)?;
     context.attach(source, sound.index, faded)?;
-    Ok(SoundRouting {
+    let mut routing = SoundRouting {
         tee,
         name: name.to_owned(),
         // Not yet. The first reconcile after this puts the branch on if the
@@ -272,5 +335,30 @@ pub(in crate::engine) fn attach<S: SourceElement>(
         // change.
         monitored: false,
         branch: None,
-    })
+        filters: sound.filters,
+    };
+    // Filled now, before the pipeline runs, unlike the monitor branch: a
+    // reconcile would put them in too, but a clip's first moments would
+    // have played unfiltered by then.
+    routing.apply_filters(&sound.initial_filters);
+    Ok(routing)
+}
+
+/// What the decoder will hand the rack, as the stream declares it — what a
+/// bridge is decided from.
+///
+/// A declaration rather than a measurement, so what it cannot say is filled
+/// in with what makes the rack convert rather than trust it: a bridge takes
+/// whatever actually arrives, whatever it was told to expect.
+fn declared_format(params: &ffmpeg::codec::Parameters) -> AudioFormat {
+    let declared = ffmpeg::codec::context::Context::from_parameters(params.clone())
+        .ok()
+        .and_then(|context| context.decoder().audio().ok())
+        .map(|audio| (audio.format(), audio.rate(), audio.channels()));
+    let (format, rate, channels) = declared.unwrap_or((ffmpeg::format::Sample::None, 0, 0));
+    AudioFormat::new(
+        format,
+        if rate == 0 { 48_000 } else { rate },
+        if channels == 0 { 2 } else { channels },
+    )
 }

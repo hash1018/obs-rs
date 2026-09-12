@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -201,8 +201,15 @@ PRAGMA user_version = 17;
 "#;
 
 pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
+    run_to(connection, SCHEMA_VERSION)
+}
+
+/// Carries the database forward as far as `target`, which is
+/// [`SCHEMA_VERSION`] everywhere but a test that needs one from before a
+/// step to prove what the step does to it.
+fn run_to(connection: &mut Connection, target: i64) -> PersistenceResult<()> {
     let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if current_version >= SCHEMA_VERSION {
+    if current_version >= target {
         return Ok(());
     }
     // Zero is a database that does not exist yet, which every new project
@@ -219,11 +226,35 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
         .into());
     }
 
+    // Migration 24 rebuilds a table other tables point at, and SQLite allows
+    // that only with foreign keys off: dropping the old table with them on
+    // is an implicit delete of every row in it, which cascades — every
+    // filter's settings would go with it. The switch is refused inside a
+    // transaction, so it is thrown out here and put back however the
+    // migration ends; `foreign_key_check` inside the transaction stands in
+    // for what it would have enforced.
+    let enforced: bool = connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    connection.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    let migrated = migrate(connection, current_version, target);
+    if enforced {
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+    }
+    migrated
+}
+
+fn migrate(
+    connection: &mut Connection,
+    current_version: i64,
+    target: i64,
+) -> PersistenceResult<()> {
+    // Whether step `n` is one this database still needs, and one it was
+    // asked to be carried to.
+    let step = |n: i64| current_version < n && n <= target;
     let transaction = connection.transaction()?;
     if current_version == 0 {
         transaction.execute_batch(BASELINE)?;
     }
-    if current_version < 18 {
+    if step(18) {
         // Filters, and the first one: a chroma key.
         //
         // They hang off the Source rather than the SceneItem, which is where
@@ -269,7 +300,7 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 18;",
         )?;
     }
-    if current_version < 19 {
+    if step(19) {
         // A Text Source.
         //
         // `width`/`height` are the box glyphs are drawn into rather than
@@ -303,7 +334,7 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 19;",
         )?;
     }
-    if current_version < 20 {
+    if step(20) {
         // What a Text Source says, as opposed to how it looks: a typed line,
         // the wall clock, or a stopwatch of its own.
         //
@@ -337,7 +368,7 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 20;",
         )?;
     }
-    if current_version < 21 {
+    if step(21) {
         // Clears a flag nothing can clear any more.
         //
         // Monitoring was offered on every channel for a while before Desktop
@@ -353,7 +384,7 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 21;",
         )?;
     }
-    if current_version < 22 {
+    if step(22) {
         // Filters on the mixer's channels: noise suppression and a gate.
         //
         // A table of their own rather than rows in `source_filters`, because
@@ -393,7 +424,7 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
             PRAGMA user_version = 22;",
         )?;
     }
-    if current_version < 23 {
+    if step(23) {
         // A compressor and a limiter for the mixer's channels: two more kinds
         // in `audio_source_filters`, and a settings table each, as migration
         // 22 laid out. Milliseconds whole, as the gate's are.
@@ -417,6 +448,63 @@ pub(super) fn run(connection: &mut Connection) -> PersistenceResult<()> {
 
             PRAGMA user_version = 23;",
         )?;
+    }
+    if step(24) {
+        // Audio filters on a Source's own sound — a media file's, a
+        // stream's — as well as on a mixer channel.
+        //
+        // In the same table rather than one beside it, so they are the same
+        // filters: one id sequence, one set of commands, and the settings
+        // tables of migrations 22 and 23 serving both. What changes is the
+        // owner, which becomes one of two columns with a check that exactly
+        // one is set. Migration 22 turned that shape down for picture and
+        // audio filters sharing a table, and for a reason that does not
+        // apply here: there it would have let a command for one kind of
+        // filter land on the other, and here there is only one kind.
+        //
+        // `audio_source_id` was `NOT NULL`, and SQLite cannot relax that in
+        // place, so the table is rebuilt — see `run_to` for what that asks
+        // of foreign keys. The index goes with the old table, so it is made
+        // again, and one beside it for the new owner. The ids are carried across as they were, which is
+        // what keeps every settings row attached to its filter.
+        transaction.execute_batch(
+            "CREATE TABLE audio_filters_rebuilt (
+                id              INTEGER PRIMARY KEY,
+                audio_source_id INTEGER
+                                REFERENCES audio_sources(id) ON DELETE CASCADE,
+                source_id       INTEGER
+                                REFERENCES sources(id) ON DELETE CASCADE,
+                position        INTEGER NOT NULL,
+                kind            TEXT NOT NULL,
+                enabled         INTEGER NOT NULL DEFAULT 1,
+                CHECK ((audio_source_id IS NULL) <> (source_id IS NULL))
+            );
+
+            INSERT INTO audio_filters_rebuilt
+                (id, audio_source_id, source_id, position, kind, enabled)
+            SELECT id, audio_source_id, NULL, position, kind, enabled
+            FROM audio_source_filters;
+
+            DROP TABLE audio_source_filters;
+            ALTER TABLE audio_filters_rebuilt RENAME TO audio_source_filters;
+
+            CREATE INDEX audio_source_filters_source_idx
+                ON audio_source_filters(audio_source_id, position);
+            CREATE INDEX audio_source_filters_owning_source_idx
+                ON audio_source_filters(source_id, position);
+
+            PRAGMA user_version = 24;",
+        )?;
+        let dangling: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        if dangling > 0 {
+            return Err(format!(
+                "rebuilding the audio filter table left {dangling} rows pointing at nothing"
+            )
+            .into());
+        }
     }
     transaction.commit()?;
     Ok(())
@@ -528,6 +616,89 @@ mod tests {
         );
     }
 
+    /// The rebuild that lets a Source own audio filters carries a channel's
+    /// through untouched — the same id, so its settings row is still its
+    /// own — and the rebuilt table still cascades and still insists on
+    /// exactly one owner. Run with foreign keys on, as the application
+    /// opens every project, since that is the setting the rebuild has to
+    /// step around and put back.
+    #[test]
+    fn a_channels_filters_come_through_the_rebuild_that_lets_a_source_have_them() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .unwrap();
+        run_to(&mut connection, 23).unwrap();
+        let microphone: i64 = connection
+            .query_row(
+                "SELECT id FROM audio_sources WHERE kind = 'input'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO audio_source_filters (id, audio_source_id, position, kind, enabled)
+                 VALUES (7, ?1, 0, 'noise_gate', 0)",
+                [microphone],
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO noise_gate_filter_settings
+                     (filter_id, open_threshold_db, close_threshold_db, attack_ms, hold_ms,
+                      release_ms)
+                 VALUES (7, -40, -45, 10, 300, 200);",
+            )
+            .unwrap();
+
+        run(&mut connection).unwrap();
+
+        let enforced: bool = connection
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .unwrap();
+        assert!(enforced, "foreign keys are back on once it is done");
+        let (owner, source, enabled, open): (i64, Option<i64>, bool, f32) = connection
+            .query_row(
+                "SELECT f.audio_source_id, f.source_id, f.enabled, g.open_threshold_db
+                 FROM audio_source_filters f
+                 JOIN noise_gate_filter_settings g ON g.filter_id = f.id
+                 WHERE f.id = 7",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (owner, source, enabled, open),
+            (microphone, None, false, -40.0)
+        );
+
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO audio_source_filters (position, kind) VALUES (0, 'limiter')",
+                    [],
+                )
+                .is_err(),
+            "a filter with no owner is refused"
+        );
+
+        connection
+            .execute("DELETE FROM audio_sources WHERE id = ?1", [microphone])
+            .unwrap();
+        let left: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM noise_gate_filter_settings",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            left, 0,
+            "and removing the channel still takes its filters with it"
+        );
+    }
+
     /// Sources that existed before monitoring did have never been played
     /// back, and `off` is the mode that says so. Anything else would start
     /// somebody's microphone talking into their own speakers on the first
@@ -555,19 +726,9 @@ mod tests {
     #[test]
     fn a_monitored_desktop_is_cleared_and_a_monitored_microphone_is_kept() {
         let mut connection = Connection::open_in_memory().unwrap();
-        run(&mut connection).unwrap();
-        // Back to 20 — taking with it what the later steps added, so running
-        // again carries the database forward from 20 rather than tripping
-        // over tables a project at 20 would not have.
+        run_to(&mut connection, 20).unwrap();
         connection
-            .execute_batch(
-                "UPDATE audio_sources SET monitored = 1;
-                 DROP TABLE limiter_filter_settings;
-                 DROP TABLE compressor_filter_settings;
-                 DROP TABLE noise_gate_filter_settings;
-                 DROP TABLE audio_source_filters;
-                 PRAGMA user_version = 20;",
-            )
+            .execute_batch("UPDATE audio_sources SET monitored = 1;")
             .unwrap();
 
         run(&mut connection).unwrap();

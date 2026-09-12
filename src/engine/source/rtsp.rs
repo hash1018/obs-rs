@@ -280,8 +280,11 @@ pub(in crate::engine) fn open(
         &name,
         chosen.audio,
         mixer,
-        settings.gain_db,
-        super::muted(settings.muted, item.visible),
+        sound::SoundSettings {
+            gain_db: settings.gain_db,
+            muted: super::muted(settings.muted, item.visible),
+            filters: &item.audio_filters,
+        },
         &meters,
         meter_wake,
     )?
@@ -362,8 +365,11 @@ pub(in crate::engine) fn open(
         &name,
         chosen.audio,
         mixer,
-        settings.gain_db,
-        super::muted(settings.muted, item.visible),
+        sound::SoundSettings {
+            gain_db: settings.gain_db,
+            muted: super::muted(settings.muted, item.visible),
+            filters: &item.audio_filters,
+        },
         &meters,
         meter_wake,
     )?

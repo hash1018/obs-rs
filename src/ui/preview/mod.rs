@@ -1290,6 +1290,7 @@ mod tests {
     fn color_item() -> SceneItemSnapshot {
         SceneItemSnapshot {
             filters: Vec::new(),
+            audio_filters: Vec::new(),
             id: SceneItemId(1),
             name: "Color Source".into(),
             kind: SourceKind::Color,
@@ -1542,6 +1543,7 @@ mod tests {
     fn display_capture_item() -> SceneItemSnapshot {
         SceneItemSnapshot {
             filters: Vec::new(),
+            audio_filters: Vec::new(),
             id: SceneItemId(2),
             name: "Display Capture".into(),
             kind: SourceKind::DisplayCapture,

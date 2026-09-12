@@ -1,16 +1,18 @@
-//! Reading and writing the filters on a mixer channel.
+//! Reading and writing audio filters, on a mixer channel or on a Source's
+//! own sound.
 //!
 //! The audio twin of [`FilterStore`](super::FilterStore), over its own tables
-//! — see migration 22 for why they are not the same ones. The operations are
-//! the same five, and so is what they promise.
+//! — see migration 22 for why they are not the same ones, and 24 for why
+//! both owners share these. The operations are the same five, and so is what
+//! they promise; only adding one names the owner.
 
 use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId,
-    CompressorSettings, LimiterSettings, NoiseGateSettings,
+    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterOwner, AudioFilterSettings,
+    AudioSourceId, CompressorSettings, LimiterSettings, NoiseGateSettings, SourceId,
 };
 
 use super::database::PersistenceResult;
@@ -19,15 +21,16 @@ use super::filter_store::FilterNeighbour;
 pub(crate) struct AudioFilterStore;
 
 impl AudioFilterStore {
-    /// Every channel's filters, in the order each applies them. A channel
-    /// with none is absent rather than present with an empty list.
+    /// Every owner's filters, in the order each applies them. An owner with
+    /// none is absent rather than present with an empty list.
     pub(crate) fn all(
         connection: &Connection,
-    ) -> PersistenceResult<HashMap<AudioSourceId, Vec<AudioFilter>>> {
+    ) -> PersistenceResult<HashMap<AudioFilterOwner, Vec<AudioFilter>>> {
         let mut statement = connection.prepare(
             "SELECT
                 audio_source_filters.id,
                 audio_source_filters.audio_source_id,
+                audio_source_filters.source_id,
                 audio_source_filters.kind,
                 audio_source_filters.enabled,
                 noise_gate_filter_settings.open_threshold_db,
@@ -49,11 +52,16 @@ impl AudioFilterStore {
                  ON compressor_filter_settings.filter_id = audio_source_filters.id
              LEFT JOIN limiter_filter_settings
                  ON limiter_filter_settings.filter_id = audio_source_filters.id
-             ORDER BY audio_source_filters.audio_source_id, audio_source_filters.position",
+             ORDER BY audio_source_filters.position",
         )?;
         let rows = statement.query_map([], |row| {
-            let owner = AudioSourceId(row.get(1)?);
-            let kind: String = row.get(2)?;
+            // Exactly one is set, which the table checks.
+            let owner = match (row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?) {
+                (Some(channel), _) => AudioFilterOwner::Channel(AudioSourceId(channel)),
+                (None, Some(source)) => AudioFilterOwner::Source(SourceId(source)),
+                (None, None) => return Ok(None),
+            };
+            let kind: String = row.get(3)?;
             let settings = match AudioFilterKind::from_storage_name(&kind) {
                 Some(AudioFilterKind::NoiseSuppression) => AudioFilterSettings::NoiseSuppression,
                 Some(AudioFilterKind::NoiseGate) => {
@@ -73,13 +81,15 @@ impl AudioFilterStore {
                 owner,
                 AudioFilter {
                     id: AudioFilterId(row.get(0)?),
-                    enabled: row.get(3)?,
+                    enabled: row.get(4)?,
                     settings,
                 },
             )))
         })?;
 
-        let mut by_owner: HashMap<AudioSourceId, Vec<AudioFilter>> = HashMap::new();
+        // Ordered by position alone, which is enough: each owner's rows keep
+        // their relative order as they are sorted into its list.
+        let mut by_owner: HashMap<AudioFilterOwner, Vec<AudioFilter>> = HashMap::new();
         for row in rows {
             if let Some((owner, filter)) = row? {
                 by_owner.entry(owner).or_default().push(filter);
@@ -88,24 +98,26 @@ impl AudioFilterStore {
         Ok(by_owner)
     }
 
-    /// Appends one filter of `kind` to the end of the channel's chain, with
+    /// Appends one filter of `kind` to the end of its owner's chain, with
     /// the settings that kind starts on — the end, so the filters already
     /// there hear what they heard before.
     pub(crate) fn add(
         transaction: &Transaction<'_>,
-        owner: AudioSourceId,
+        owner: AudioFilterOwner,
         kind: AudioFilterKind,
     ) -> PersistenceResult<AudioFilterId> {
+        let (channel, source) = owner_columns(owner);
         let next_position: i64 = transaction.query_row(
             "SELECT COALESCE(MAX(position) + 1, 0) FROM audio_source_filters
-             WHERE audio_source_id = ?1",
-            params![owner.0],
+             WHERE audio_source_id IS ?1 AND source_id IS ?2",
+            params![channel, source],
             |row| row.get(0),
         )?;
         transaction.execute(
-            "INSERT INTO audio_source_filters (audio_source_id, position, kind, enabled)
-             VALUES (?1, ?2, ?3, 1)",
-            params![owner.0, next_position, kind.storage_name()],
+            "INSERT INTO audio_source_filters
+                 (audio_source_id, source_id, position, kind, enabled)
+             VALUES (?1, ?2, ?3, ?4, 1)",
+            params![channel, source, next_position, kind.storage_name()],
         )?;
         let id = AudioFilterId(transaction.last_insert_rowid());
         write_settings(transaction, id, AudioFilterSettings::default_for(kind))?;
@@ -125,36 +137,45 @@ impl AudioFilterStore {
     }
 
     /// Swaps one filter with its neighbour on the given side, within its own
-    /// channel. One already at that end is left alone.
+    /// owner's chain. One already at that end is left alone.
     pub(crate) fn swap_with_neighbour(
         transaction: &Transaction<'_>,
         id: AudioFilterId,
         neighbour: FilterNeighbour,
     ) -> PersistenceResult<()> {
-        let Some((owner, position)) = transaction
+        let Some((channel, source, position)) = transaction
             .query_row(
-                "SELECT audio_source_id, position FROM audio_source_filters WHERE id = ?1",
+                "SELECT audio_source_id, source_id, position FROM audio_source_filters
+                 WHERE id = ?1",
                 params![id.0],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
             )
             .optional()?
         else {
             return Ok(());
         };
+        // `IS` rather than `=`, so the owner column that is unset matches
+        // its own unset rather than nothing.
         let query = match neighbour {
             FilterNeighbour::Earlier => {
                 "SELECT id, position FROM audio_source_filters
-                 WHERE audio_source_id = ?1 AND position < ?2
+                 WHERE audio_source_id IS ?1 AND source_id IS ?2 AND position < ?3
                  ORDER BY position DESC LIMIT 1"
             }
             FilterNeighbour::Later => {
                 "SELECT id, position FROM audio_source_filters
-                 WHERE audio_source_id = ?1 AND position > ?2
+                 WHERE audio_source_id IS ?1 AND source_id IS ?2 AND position > ?3
                  ORDER BY position ASC LIMIT 1"
             }
         };
         let Some((other_id, other_position)) = transaction
-            .query_row(query, params![owner, position], |row| {
+            .query_row(query, params![channel, source, position], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
             })
             .optional()?
@@ -193,6 +214,14 @@ impl AudioFilterStore {
         settings: AudioFilterSettings,
     ) -> PersistenceResult<()> {
         write_settings(transaction, id, settings)
+    }
+}
+
+/// The two owner columns for `owner`, one set and the other not.
+fn owner_columns(owner: AudioFilterOwner) -> (Option<i64>, Option<i64>) {
+    match owner {
+        AudioFilterOwner::Channel(id) => (Some(id.0), None),
+        AudioFilterOwner::Source(id) => (None, Some(id.0)),
     }
 }
 
@@ -253,14 +282,14 @@ fn noise_gate_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoiseGateSet
     let defaults = NoiseGateSettings::default();
     Ok(NoiseGateSettings {
         open_threshold_db: row
-            .get::<_, Option<f32>>(4)?
+            .get::<_, Option<f32>>(5)?
             .unwrap_or(defaults.open_threshold_db),
         close_threshold_db: row
-            .get::<_, Option<f32>>(5)?
+            .get::<_, Option<f32>>(6)?
             .unwrap_or(defaults.close_threshold_db),
-        attack_ms: row.get::<_, Option<u32>>(6)?.unwrap_or(defaults.attack_ms),
-        hold_ms: row.get::<_, Option<u32>>(7)?.unwrap_or(defaults.hold_ms),
-        release_ms: row.get::<_, Option<u32>>(8)?.unwrap_or(defaults.release_ms),
+        attack_ms: row.get::<_, Option<u32>>(7)?.unwrap_or(defaults.attack_ms),
+        hold_ms: row.get::<_, Option<u32>>(8)?.unwrap_or(defaults.hold_ms),
+        release_ms: row.get::<_, Option<u32>>(9)?.unwrap_or(defaults.release_ms),
     }
     .sanitised())
 }
@@ -270,15 +299,15 @@ fn compressor_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompressorSe
     let defaults = CompressorSettings::default();
     Ok(CompressorSettings {
         threshold_db: row
-            .get::<_, Option<f32>>(9)?
+            .get::<_, Option<f32>>(10)?
             .unwrap_or(defaults.threshold_db),
-        ratio: row.get::<_, Option<f32>>(10)?.unwrap_or(defaults.ratio),
-        attack_ms: row.get::<_, Option<u32>>(11)?.unwrap_or(defaults.attack_ms),
+        ratio: row.get::<_, Option<f32>>(11)?.unwrap_or(defaults.ratio),
+        attack_ms: row.get::<_, Option<u32>>(12)?.unwrap_or(defaults.attack_ms),
         release_ms: row
-            .get::<_, Option<u32>>(12)?
+            .get::<_, Option<u32>>(13)?
             .unwrap_or(defaults.release_ms),
         output_gain_db: row
-            .get::<_, Option<f32>>(13)?
+            .get::<_, Option<f32>>(14)?
             .unwrap_or(defaults.output_gain_db),
     }
     .sanitised())
@@ -289,10 +318,10 @@ fn limiter_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LimiterSettings
     let defaults = LimiterSettings::default();
     Ok(LimiterSettings {
         threshold_db: row
-            .get::<_, Option<f32>>(14)?
+            .get::<_, Option<f32>>(15)?
             .unwrap_or(defaults.threshold_db),
         release_ms: row
-            .get::<_, Option<u32>>(15)?
+            .get::<_, Option<u32>>(16)?
             .unwrap_or(defaults.release_ms),
     }
     .sanitised())
@@ -303,8 +332,8 @@ mod tests {
     use super::*;
     use crate::persistence::{AudioStore, ProjectDatabase};
 
-    fn microphone(database: &ProjectDatabase) -> AudioSourceId {
-        AudioStore::list(database.connection()).unwrap()[1].id
+    fn microphone(database: &ProjectDatabase) -> AudioFilterOwner {
+        AudioFilterOwner::Channel(AudioStore::list(database.connection()).unwrap()[1].id)
     }
 
     /// Added at the end, read back in order, reordered by a swap within the

@@ -222,6 +222,9 @@ pub(in crate::engine) fn refresh_media_file(
             crate::engine::audio::monitors(monitored, monitor.is_some()),
             monitor,
         );
+        // A file's and a stream's alike: both carry their sound through
+        // the same branch, and it is the Source's list either way.
+        routing.apply_filters(&item.audio_filters);
     }
 
     let SourceSettings::MediaFile(settings) = &item.settings else {
@@ -268,6 +271,20 @@ pub(in crate::engine) fn set_media_gain_db(source: &OpenSource, gain_db: f32) {
         && let Some(volume) = &media.volume
     {
         let _ = volume.set_gain_db(gain_db);
+    }
+}
+
+/// One of a Source's own audio filters, while its slider is still held —
+/// the fader's split again: the handle now, the project once let go.
+pub(in crate::engine) fn set_audio_filter_settings(
+    source: &OpenSource,
+    id: crate::domain::AudioFilterId,
+    settings: &crate::domain::AudioFilterSettings,
+) {
+    if let Some(media) = &source.media_file
+        && let Some(routing) = &media.sound
+    {
+        routing.retune_filter(id, settings);
     }
 }
 

@@ -1,23 +1,26 @@
-//! Turning a mixer channel's stored filters into elements in its chain.
+//! Turning stored audio filters into elements in a chain — a mixer
+//! channel's, or a Source's own sound.
 //!
 //! The audio twin of `engine::source::filters`, and a rack for the same
 //! reason: a filter added, removed or reordered is swapped in between two
-//! buffers rather than by reopening the capture — which for a microphone is
-//! a gap in what it records, and for Desktop Audio the same.
+//! buffers rather than by reopening what feeds it — which for a microphone
+//! is a gap in what it records, and for a media file a restart from the
+//! beginning.
 //!
-//! The rack sits between the capture and the fader, which is where a
-//! streaming application puts a channel's filters and where they belong: a
-//! gate listens to what the microphone heard, not to what was left after the
-//! fader, or pulling the fader down would close it.
+//! The rack sits just before the fader, which is where a streaming
+//! application puts a channel's filters and where they belong: a gate
+//! listens to what the microphone heard, not to what was left after the
+//! fader, or pulling the fader down would close it. On a Source's sound
+//! that is after its `Pacer` too — see `engine::source::sound`.
 //!
 //! # The bridge
 //!
 //! Every filter takes `f32`, and noise suppression takes 48 kHz only. A
-//! capture is usually both already — it is what the endpoints run at — but
-//! one that is not gets an [`AudioResampler`] at the head of the rack while
-//! a filter needs it, the way a picture rack gets its colour conversion. It
-//! goes with the last filter that needed it, and the channel is back to what
-//! it cost before.
+//! capture is usually both already — it is what the endpoints run at — and
+//! so is most decoded sound, but one that is not gets an [`AudioResampler`]
+//! at the head of the rack while a filter needs it, the way a picture rack
+//! gets its colour conversion. It goes with the last filter that needed it,
+//! and the chain is back to what it cost before.
 //!
 //! # What changes cost
 //!
@@ -58,28 +61,36 @@ enum Tuner {
     Limiter(AudioLimiterHandle),
 }
 
-/// A channel's rack, and what refilling it needs.
+/// A rack, and what refilling it needs.
 ///
-/// Held by the open source rather than by its branch — see the picture
-/// rack's own `FilterRack` for the reasoning, which is the same.
-pub(super) struct AudioFilterRack {
+/// Held by the open channel or Source rather than by its branch — see the
+/// picture rack's own `FilterRack` for the reasoning, which is the same.
+pub(in crate::engine) struct AudioFilterRack {
     handle: RackHandle,
     name: String,
     /// What the capture delivers, which is what the rack is handed and so
     /// what a bridge would convert from.
     capture: AudioFormat,
+    /// What the `pts` of what it is handed count in, which a bridge needs to
+    /// carry them across.
+    time_base: ffmpeg::Rational,
     /// What is in the rack now: the filters that are on, in order.
     running: Vec<(AudioFilterId, AudioFilterKind)>,
     /// The ones among them with settings, which change without a refill.
     tuners: HashMap<AudioFilterId, Tuner>,
 }
 
-/// Creates a channel's rack, empty, and the way back to it.
+/// Creates a rack, empty, and the way back to it — for a channel, or for a
+/// Source's own sound.
 ///
 /// Its contracts are declared rather than derived — what is in it changes —
 /// and say the one thing true whatever it holds: decoded audio in system
 /// memory.
-pub(super) fn rack(name: &str, capture: AudioFormat) -> (Rack, AudioFilterRack) {
+pub(in crate::engine) fn rack(
+    name: &str,
+    capture: AudioFormat,
+    time_base: ffmpeg::Rational,
+) -> (Rack, AudioFilterRack) {
     let port = PortContract::frame(MediaKind::AudioFrame, MemoryDomain::System);
     let (rack, handle) = Rack::new(
         format!("{name}-filters"),
@@ -92,6 +103,7 @@ pub(super) fn rack(name: &str, capture: AudioFormat) -> (Rack, AudioFilterRack) 
             handle,
             name: name.to_owned(),
             capture,
+            time_base,
             running: Vec::new(),
             tuners: HashMap::new(),
         },
@@ -106,7 +118,7 @@ impl AudioFilterRack {
     /// swapped. Atomic from the caller's side, as the picture rack's is:
     /// every element is built before anything is swapped, so one that fails
     /// to build leaves the rack running what it was.
-    pub(super) fn apply(&mut self, filters: &[AudioFilter]) -> Result<(), BackendError> {
+    pub(in crate::engine) fn apply(&mut self, filters: &[AudioFilter]) -> Result<(), BackendError> {
         if shape(filters) == self.running {
             for filter in filters {
                 self.retune(filter.id, &filter.settings);
@@ -126,7 +138,7 @@ impl AudioFilterRack {
     /// project hears once the gesture ends, as the fader's does.
     ///
     /// Every mapping below sanitises first, so none of these can be refused.
-    pub(super) fn retune(&self, id: AudioFilterId, settings: &AudioFilterSettings) {
+    pub(in crate::engine) fn retune(&self, id: AudioFilterId, settings: &AudioFilterSettings) {
         match (self.tuners.get(&id), settings) {
             (Some(Tuner::Gate(handle)), AudioFilterSettings::NoiseGate(settings)) => {
                 let _ = handle.set_options(gate_options(*settings));
@@ -149,9 +161,7 @@ impl AudioFilterRack {
                 AudioResampler::new(
                     format!("{}-filter-format", self.name),
                     target,
-                    // Both captures count their `pts` in samples at their own
-                    // rate — see `time_base` on either.
-                    ffmpeg::Rational::new(1, self.capture.sample_rate as i32),
+                    self.time_base,
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?,
             ));

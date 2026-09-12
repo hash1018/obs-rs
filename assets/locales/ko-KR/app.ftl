@@ -254,6 +254,7 @@ filters-chroma-key-green = 초록
 filters-chroma-key-blue = 파랑
 filters-chroma-key-custom-method = 사용자 지정
 filters-on-the-channel = 믹서 채널에 적용, 페이더 앞에서
+filters-on-the-source-sound = 소스 자체의 소리에 적용, 모든 장면에서, 페이더 앞에서
 filters-noise-suppression = 노이즈 제거
 filters-noise-suppression-about = RNNoise로 말소리에서 일정한 배경 소음을 걷어 냅니다. 따로 설정할 것은 없고, 소리가 믹스에 10ms 늦게 들어갑니다.
 filters-noise-gate = 노이즈 게이트

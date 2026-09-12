@@ -1,7 +1,7 @@
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
-use crate::domain::{Scene, SceneItem, Source};
+use crate::domain::{AudioFilterOwner, Scene, SceneItem, Source};
 use crate::persistence::{
     AudioFilterStore, AudioStore, FilterNeighbour, FilterStore, PersistenceResult, ProjectDatabase,
     SceneStore, SourceStore,
@@ -150,7 +150,12 @@ fn handle_audio_command(
         AudioCommand::AddFilter {
             audio_source_id,
             kind,
-        } => AudioFilterStore::add(transaction, audio_source_id, kind).map(|_| ()),
+        } => AudioFilterStore::add(
+            transaction,
+            AudioFilterOwner::Channel(audio_source_id),
+            kind,
+        )
+        .map(|_| ()),
         AudioCommand::RemoveFilter(id) => AudioFilterStore::remove(transaction, id),
         AudioCommand::MoveFilterEarlier(id) => {
             AudioFilterStore::swap_with_neighbour(transaction, id, FilterNeighbour::Earlier)
@@ -314,6 +319,14 @@ fn handle_source_command(
             let source_id = SourceStore::source_of(transaction, scene_item_id)?;
             FilterStore::add(transaction, source_id, kind).map(|_| ())
         }
+        SourceCommand::AddAudioFilter {
+            scene_item_id,
+            kind,
+        } => {
+            let source_id = SourceStore::source_of(transaction, scene_item_id)?;
+            AudioFilterStore::add(transaction, AudioFilterOwner::Source(source_id), kind)
+                .map(|_| ())
+        }
         SourceCommand::RemoveFilter(filter_id) => FilterStore::remove(transaction, filter_id),
         SourceCommand::MoveFilterEarlier(filter_id) => {
             FilterStore::swap_with_neighbour(transaction, filter_id, FilterNeighbour::Earlier)
@@ -399,6 +412,7 @@ fn sources_snapshot(
                 kind,
                 settings,
                 filters,
+                audio_filters,
             } = source;
             debug_assert!(z_index >= 0);
             SceneItemSnapshot {
@@ -408,6 +422,7 @@ fn sources_snapshot(
                 source_size: settings.source_size(canvas),
                 settings,
                 filters,
+                audio_filters,
                 visible,
                 locked,
                 transform,
@@ -448,7 +463,9 @@ fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot
     let items = AudioStore::list(database.connection())?
         .into_iter()
         .map(|source| AudioSourceSnapshot {
-            filters: filters.remove(&source.id).unwrap_or_default(),
+            filters: filters
+                .remove(&AudioFilterOwner::Channel(source.id))
+                .unwrap_or_default(),
             id: source.id,
             name: source.name,
             kind: source.kind,
@@ -483,7 +500,7 @@ fn publish_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{SourceSettings, Stroke};
+    use crate::domain::{AudioFilterKind, SourceSettings, Stroke};
 
     /// The whole filter chain through the commands that make it: added,
     /// ordered, retuned, turned off and removed, read back from the database
@@ -1081,6 +1098,84 @@ mod tests {
                     && !settings.looping
                     && settings.size_hint == Some([1280, 720])
         ));
+    }
+
+    /// A file's audio filters are its Source's: added through the item,
+    /// shown on it, kept apart from the mixer channels' — and handled after
+    /// that by the same commands a channel's filters take. Deleting the item
+    /// takes its Source, and the filters with it.
+    #[test]
+    fn a_media_files_audio_filters_hang_off_its_source_and_go_with_it() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(
+            &mut database,
+            SourceCommand::AddMediaFile {
+                scene_id,
+                settings: crate::domain::MediaFileSettings {
+                    path: std::path::PathBuf::from("/media/talk.mp4"),
+                    looping: false,
+                    size_hint: None,
+                    has_audio: true,
+                    gain_db: 0.0,
+                    muted: false,
+                    duration: None,
+                    paused: false,
+                    monitored: false,
+                },
+            },
+        )
+        .unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item = sources.items[0].id;
+
+        for kind in [AudioFilterKind::NoiseGate, AudioFilterKind::Limiter] {
+            handle_source_command(
+                &mut database,
+                SourceCommand::AddAudioFilter {
+                    scene_item_id: item,
+                    kind,
+                },
+            )
+            .unwrap();
+        }
+        let (_, sources, audio) = project_snapshot(&database).unwrap();
+        let filters = &sources.items[0].audio_filters;
+        assert_eq!(
+            filters
+                .iter()
+                .map(|filter| filter.settings.kind())
+                .collect::<Vec<_>>(),
+            [AudioFilterKind::NoiseGate, AudioFilterKind::Limiter]
+        );
+        assert!(
+            audio.items.iter().all(|channel| channel.filters.is_empty()),
+            "no mixer channel picked them up"
+        );
+
+        let limiter = filters[1].id;
+        handle_audio_command(&mut database, AudioCommand::MoveFilterEarlier(limiter)).unwrap();
+        handle_audio_command(
+            &mut database,
+            AudioCommand::SetFilterEnabled(limiter, false),
+        )
+        .unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let first = &sources.items[0].audio_filters[0];
+        assert_eq!((first.id, first.enabled), (limiter, false));
+
+        handle_source_command(&mut database, SourceCommand::Delete(item)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(sources.items.is_empty());
+        assert!(
+            AudioFilterStore::all(database.connection())
+                .unwrap()
+                .is_empty(),
+            "the Source went, and its filters with it"
+        );
     }
 
     /// Two files can share a name and live in different folders, which is

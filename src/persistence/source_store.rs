@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    ClockFormat, ColorSourceSettings, Crop, DEFAULT_FONT_SIZE, DisplayCaptureSettings,
-    DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB,
-    MediaFileSettings, RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem,
-    SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke, TextAlignment, TextMode,
-    TextSourceSettings, TextTimer, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
-    WindowCaptureSettings, WindowCaptureTarget,
+    AudioFilterOwner, ClockFormat, ColorSourceSettings, Crop, DEFAULT_FONT_SIZE,
+    DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings,
+    MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneCanvas,
+    SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke,
+    TextAlignment, TextMode, TextSourceSettings, TextTimer, TimerFormat, Transform,
+    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
 };
 
-use super::{FilterStore, PersistenceResult};
+use super::{AudioFilterStore, FilterStore, PersistenceResult};
 
 /// A stroke's points as they are stored: pairs of little-endian `f32`.
 ///
@@ -397,12 +397,14 @@ impl SourceStore {
                         // rows per Source, which the join above cannot carry
                         // without multiplying every SceneItem by them.
                         filters: Vec::new(),
+                        audio_filters: Vec::new(),
                     },
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let source_ids: Vec<SourceId> = rows.iter().map(|(_, source)| source.id).collect();
         let filters = FilterStore::for_sources(connection, &source_ids)?;
+        let audio_filters = AudioFilterStore::all(connection)?;
         for (_, source) in &mut rows {
             if let SourceSettings::Drawing(settings) = &mut source.settings {
                 settings.strokes = Self::strokes(connection, source.id)?;
@@ -410,6 +412,10 @@ impl SourceStore {
             // Cloned rather than taken: one Source can stand behind more than
             // one SceneItem, and the second one must not come back bare.
             source.filters = filters.get(&source.id).cloned().unwrap_or_default();
+            source.audio_filters = audio_filters
+                .get(&AudioFilterOwner::Source(source.id))
+                .cloned()
+                .unwrap_or_default();
         }
         Ok(rows)
     }

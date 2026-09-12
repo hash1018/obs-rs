@@ -21,20 +21,26 @@
 //! in the Preview can never point this dock at them. A channel's own menu in
 //! the Audio Mixer does instead, and the dock shows that channel's filters
 //! until something is next selected in the Preview.
+//!
+//! # And a Source's own sound
+//!
+//! A media file or a stream with a sound track has audio filters of its
+//! own, and is reached both ways: selected in the Preview, where it has no
+//! picture filters to show instead, and from its column in the Audio Mixer.
 
 use eframe::egui;
 
 use crate::domain::{
-    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId,
-    ChromaKeyMethod, CompressorSettings, Filter, FilterId, FilterKind, FilterSettings,
-    LimiterSettings, NoiseGateSettings, SceneItemId, SourceKind,
+    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, ChromaKeyMethod,
+    CompressorSettings, Filter, FilterId, FilterKind, FilterSettings, LimiterSettings,
+    NoiseGateSettings, SceneItemId, SourceKind, SourceSettings,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{AudioCommand, ProjectCommand, SourceCommand};
-use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot, SceneItemSnapshot, SourcesSnapshot};
+use crate::snapshots::{AudioSnapshot, SceneItemSnapshot, SourcesSnapshot};
 
-use super::super::UiAction;
 use super::super::editor::SceneEditorState;
+use super::super::{AudioFilterHost, UiAction};
 
 /// Which Source kinds the engine actually runs filters for.
 ///
@@ -64,11 +70,8 @@ pub(in crate::ui) fn show(
             state.audio = None;
         }
     }
-    if let Some(channel) = state
-        .audio
-        .and_then(|id| audio.items.iter().find(|channel| channel.id == id))
-    {
-        show_channel(ui, channel, state, i18n, actions);
+    if let Some(sound) = state.audio.and_then(|host| sound_of(host, snapshot, audio)) {
+        show_sound(ui, sound, state, i18n, actions);
         return;
     }
 
@@ -77,6 +80,14 @@ pub(in crate::ui) fn show(
         ui.weak(i18n.text(TextKey::FiltersNoSelection));
         return;
     };
+
+    // A Source with sound of its own shows that sound's filters. No kind
+    // that has one takes picture filters yet, so there is nothing for the
+    // two to share the dock over.
+    if let Some(sound) = item_sound(item) {
+        show_sound(ui, sound, state, i18n, actions);
+        return;
+    }
 
     if !accepts_filters(item.kind) {
         ui.weak(i18n.text(TextKey::FiltersUnsupportedKind));
@@ -116,13 +127,14 @@ pub(in crate::ui) fn show(
 }
 
 /// What the panel remembers between frames: which row is open below, and
-/// whether it is showing a mixer channel rather than the selected Source.
+/// whether it is showing a sound chosen from the Audio Mixer rather than the
+/// selected Source.
 #[derive(Default)]
 pub(in crate::ui) struct FiltersPanelState {
     selected: Option<FilterId>,
-    /// The mixer channel whose filters are shown, when one was chosen from
-    /// its menu more recently than anything was selected in the Preview.
-    audio: Option<AudioSourceId>,
+    /// The sound whose filters are shown, when it was chosen from its mixer
+    /// column more recently than anything was selected in the Preview.
+    audio: Option<AudioFilterHost>,
     audio_selected: Option<AudioFilterId>,
     /// The Preview's selection as last seen, so a new one is noticed and
     /// takes the dock back from a channel.
@@ -130,13 +142,63 @@ pub(in crate::ui) struct FiltersPanelState {
 }
 
 impl FiltersPanelState {
-    /// Points the dock at one mixer channel — see `UiState::show_audio_filters`.
-    pub(in crate::ui) fn show_audio(&mut self, id: AudioSourceId) {
-        if self.audio != Some(id) {
+    /// Points the dock at one sound — see `UiState::show_audio_filters`.
+    pub(in crate::ui) fn show_audio(&mut self, host: AudioFilterHost) {
+        if self.audio != Some(host) {
             self.audio_selected = None;
         }
-        self.audio = Some(id);
+        self.audio = Some(host);
     }
+}
+
+/// One sound's filter chain, whichever owns it — what the audio half of this
+/// dock draws.
+struct Sound<'a> {
+    host: AudioFilterHost,
+    name: &'a str,
+    filters: &'a [AudioFilter],
+}
+
+/// The sound `host` names, if it is still there to show — a channel whose
+/// device went, or an item deleted in another window, is not.
+fn sound_of<'a>(
+    host: AudioFilterHost,
+    sources: &'a SourcesSnapshot,
+    audio: &'a AudioSnapshot,
+) -> Option<Sound<'a>> {
+    match host {
+        AudioFilterHost::Channel(id) => {
+            audio
+                .items
+                .iter()
+                .find(|channel| channel.id == id)
+                .map(|channel| Sound {
+                    host,
+                    name: &channel.name,
+                    filters: &channel.filters,
+                })
+        }
+        AudioFilterHost::SceneItem(id) => sources
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .and_then(item_sound),
+    }
+}
+
+/// A Source's own sound, for the kinds that carry one and the Sources of
+/// them that do: a media file or a stream with a sound track.
+fn item_sound(item: &SceneItemSnapshot) -> Option<Sound<'_>> {
+    let has_sound = match &item.settings {
+        SourceSettings::MediaFile(settings) => settings.has_audio,
+        SourceSettings::Rtsp(settings) => settings.has_audio,
+        _ => false,
+    };
+    has_sound.then_some(Sound {
+        host: AudioFilterHost::SceneItem(item.id),
+        name: &item.name,
+        filters: &item.audio_filters,
+    })
 }
 
 fn show_list(
@@ -355,41 +417,45 @@ fn method_key(method: ChromaKeyMethod) -> TextKey {
     }
 }
 
-// ---- A mixer channel's filters ----------------------------------------
+// ---- A sound's filters -------------------------------------------------
 //
-// The same list, toolbar and settings as a Source's, over the channel's own
-// filters and commands. Kept beside them rather than made generic over both:
+// The same list, toolbar and settings as a Source's picture filters, over a
+// sound's own filters and commands — a mixer channel's, or a Source's own
+// sound. Kept beside the picture ones rather than made generic over both:
 // the two share a layout and nothing else — different ids, different kinds,
 // different places the edits go.
 
-fn show_channel(
+fn show_sound(
     ui: &mut egui::Ui,
-    channel: &AudioSourceSnapshot,
+    sound: Sound<'_>,
     state: &mut FiltersPanelState,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     ui.horizontal(|ui| {
-        ui.strong(&channel.name);
-        ui.weak(i18n.text(TextKey::FiltersOnTheChannel));
+        ui.strong(sound.name);
+        ui.weak(i18n.text(match sound.host {
+            AudioFilterHost::Channel(_) => TextKey::FiltersOnTheChannel,
+            AudioFilterHost::SceneItem(_) => TextKey::FiltersOnTheSourceSound,
+        }));
     });
     ui.separator();
 
     if state
         .audio_selected
-        .is_some_and(|id| !channel.filters.iter().any(|filter| filter.id == id))
+        .is_some_and(|id| !sound.filters.iter().any(|filter| filter.id == id))
     {
         state.audio_selected = None;
     }
 
-    if channel.filters.is_empty() {
+    if sound.filters.is_empty() {
         ui.weak(i18n.text(TextKey::FiltersEmpty));
     } else {
         egui::ScrollArea::vertical()
             .id_salt("audio-filters")
             .max_height(140.0)
             .show(ui, |ui| {
-                for filter in &channel.filters {
+                for filter in sound.filters {
                     ui.horizontal(|ui| {
                         let mut enabled = filter.enabled;
                         if ui.checkbox(&mut enabled, "").changed() {
@@ -419,10 +485,7 @@ fn show_channel(
         ui.menu_button("+", |ui| {
             for kind in AudioFilterKind::ALL {
                 if ui.button(i18n.text(audio_kind_key(kind))).clicked() {
-                    actions.push(audio(AudioCommand::AddFilter {
-                        audio_source_id: channel.id,
-                        kind,
-                    }));
+                    actions.push(add_filter(sound.host, kind));
                     ui.close();
                 }
             }
@@ -462,7 +525,7 @@ fn show_channel(
 
     let Some(selected) = state
         .audio_selected
-        .and_then(|id| channel.filters.iter().find(|filter| filter.id == id))
+        .and_then(|id| sound.filters.iter().find(|filter| filter.id == id))
     else {
         return;
     };
@@ -473,13 +536,13 @@ fn show_channel(
     egui::ScrollArea::vertical()
         .id_salt("audio-filter-settings")
         .show(ui, |ui| {
-            show_channel_settings(ui, channel, selected, i18n, actions);
+            show_sound_settings(ui, sound.host, selected, i18n, actions);
         });
 }
 
-fn show_channel_settings(
+fn show_sound_settings(
     ui: &mut egui::Ui,
-    channel: &AudioSourceSnapshot,
+    host: AudioFilterHost,
     filter: &AudioFilter,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
@@ -514,9 +577,7 @@ fn show_channel_settings(
     let edited = edited.sanitised();
     let gesture = Gesture::of(&sliders, edited != settings);
     if gesture.drag {
-        actions.push(UiAction::DragAudioFilterSettings(
-            channel.id, filter.id, edited,
-        ));
+        actions.push(UiAction::DragAudioFilterSettings(host, filter.id, edited));
     }
     if gesture.record {
         actions.push(audio(AudioCommand::SetFilterSettings(filter.id, edited)));
@@ -644,6 +705,21 @@ fn audio(command: AudioCommand) -> UiAction {
     UiAction::Project(ProjectCommand::Audio(command))
 }
 
+/// The one command that has to say whose chain it is for: everything after
+/// adding a filter names the filter, wherever it hangs.
+fn add_filter(host: AudioFilterHost, kind: AudioFilterKind) -> UiAction {
+    match host {
+        AudioFilterHost::Channel(audio_source_id) => audio(AudioCommand::AddFilter {
+            audio_source_id,
+            kind,
+        }),
+        AudioFilterHost::SceneItem(scene_item_id) => command(SourceCommand::AddAudioFilter {
+            scene_item_id,
+            kind,
+        }),
+    }
+}
+
 fn audio_kind_key(kind: AudioFilterKind) -> TextKey {
     match kind {
         AudioFilterKind::NoiseSuppression => TextKey::FiltersNoiseSuppression,
@@ -655,7 +731,52 @@ fn audio_kind_key(kind: AudioFilterKind) -> TextKey {
 
 #[cfg(test)]
 mod tests {
-    use super::Gesture;
+    use super::{AudioFilterHost, Gesture, item_sound};
+    use crate::domain::{
+        Crop, MediaFileSettings, SceneItemId, SourceKind, SourceSettings, Transform,
+    };
+    use crate::snapshots::SceneItemSnapshot;
+
+    fn clip(has_audio: bool) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            filters: Vec::new(),
+            audio_filters: Vec::new(),
+            id: SceneItemId(4),
+            name: "Clip".to_owned(),
+            kind: SourceKind::MediaFile,
+            settings: SourceSettings::MediaFile(MediaFileSettings {
+                path: std::path::PathBuf::from("/videos/clip.mp4"),
+                looping: false,
+                size_hint: None,
+                has_audio,
+                gain_db: 0.0,
+                muted: false,
+                duration: None,
+                paused: false,
+                monitored: false,
+            }),
+            source_size: [1920.0, 1080.0],
+            visible: true,
+            locked: false,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            peak_db: None,
+            position: None,
+        }
+    }
+
+    /// A file with a sound track has a chain to show, reached through its
+    /// item; one without has nothing an audio filter could hear, and gets
+    /// the sentence a kind without filters gets rather than an empty chain
+    /// whose Add would do nothing.
+    #[test]
+    fn only_a_source_with_a_sound_track_has_audio_filters_to_show() {
+        assert_eq!(
+            item_sound(&clip(true)).map(|sound| sound.host),
+            Some(AudioFilterHost::SceneItem(SceneItemId(4)))
+        );
+        assert!(item_sound(&clip(false)).is_none());
+    }
 
     /// A slider dragged over three frames and let go on the fourth. Each
     /// frame of the drag goes to what is running and writes the value into

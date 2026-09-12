@@ -61,8 +61,8 @@ mod source;
 
 pub use audio::{AudioSource, AudioSourceId, AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB};
 pub use audio_filter::{
-    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, CompressorSettings,
-    LimiterSettings, NoiseGateSettings,
+    AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterOwner, AudioFilterSettings,
+    CompressorSettings, LimiterSettings, NoiseGateSettings,
 };
 pub use canvas::SceneCanvas;
 pub use filter::{

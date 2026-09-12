@@ -47,7 +47,7 @@
 //! mixer again — nothing else stops, and the mix keeps its timeline.
 
 mod device;
-mod filters;
+pub(in crate::engine) mod filters;
 mod level;
 mod manager;
 
@@ -693,7 +693,13 @@ fn open_source(
     };
     let (capture, capture_format) =
         device::open_capture(name, source.kind, source.device.as_deref())?;
-    let (rack, mut filter_rack) = filters::rack(name, capture_format);
+    // Both captures count their `pts` in samples at their own rate — see
+    // `time_base` on either.
+    let (rack, mut filter_rack) = filters::rack(
+        name,
+        capture_format,
+        ffmpeg::Rational::new(1, capture_format.sample_rate as i32),
+    );
 
     let (volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
     let _ = volume_handle.set_gain_db(source.gain_db);
@@ -802,6 +808,7 @@ mod tests {
                 48_000,
                 2,
             ),
+            ffmpeg::Rational::new(1, 48_000),
         );
         OpenAudioSource {
             pipeline,

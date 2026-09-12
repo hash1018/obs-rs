@@ -103,6 +103,15 @@ pub enum SourceCommand {
         scene_item_id: SceneItemId,
         kind: FilterKind,
     },
+    /// Appends an audio filter to the end of the chain on this item's
+    /// Source's own sound. Named by the item, as a picture filter is added,
+    /// and stored against the Source behind it; everything after adding one
+    /// is an [`AudioCommand`] naming the filter, the same ones a mixer
+    /// channel's filters take.
+    AddAudioFilter {
+        scene_item_id: SceneItemId,
+        kind: AudioFilterKind,
+    },
     /// Filters carry their own identity once they exist, so everything after
     /// adding one addresses it directly rather than through an item.
     #[allow(dead_code)]

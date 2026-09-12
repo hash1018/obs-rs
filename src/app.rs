@@ -12,7 +12,7 @@ use crate::project::{ProjectManager, ProjectUpdate};
 use crate::resources::ResourceManager;
 use crate::settings::{AppSettings, SettingsStore, WindowGeometry};
 use crate::snapshots::Snapshots;
-use crate::ui::{self, UiAction, UiState};
+use crate::ui::{self, AudioFilterHost, UiAction, UiState};
 
 #[cfg(target_os = "linux")]
 use crate::capture::linux::{SystemDisplayPicker, SystemDisplayPickerUpdate};
@@ -624,25 +624,38 @@ impl ObsApp {
                     source.gain_db = gain_db;
                 }
             }
-            UiAction::DragAudioFilterSettings(id, filter_id, settings) => {
-                if let Some(audio) = &self.audio {
-                    audio.retune_filter(id, filter_id, settings);
-                }
+            UiAction::DragAudioFilterSettings(host, filter_id, settings) => {
                 // Into the snapshot too, for the reason `DragAudioGain` does
                 // it: the slider reads back from there, and would spring back
                 // under the pointer until the project heard.
-                if let Some(filter) = self
-                    .snapshots
-                    .audio
-                    .items
-                    .iter_mut()
-                    .find(|source| source.id == id)
-                    .and_then(|source| {
-                        source
-                            .filters
+                let filters = match host {
+                    AudioFilterHost::Channel(id) => {
+                        if let Some(audio) = &self.audio {
+                            audio.retune_filter(id, filter_id, settings);
+                        }
+                        self.snapshots
+                            .audio
+                            .items
                             .iter_mut()
-                            .find(|filter| filter.id == filter_id)
-                    })
+                            .find(|source| source.id == id)
+                            .map(|source| &mut source.filters)
+                    }
+                    // A Source's sound is in its own pipeline, which the
+                    // video engine owns — see `DragMediaGain`.
+                    AudioFilterHost::SceneItem(id) => {
+                        if let Some(engine) = &self.engine {
+                            engine.set_source_audio_filter_settings(id, filter_id, settings);
+                        }
+                        self.snapshots
+                            .sources
+                            .items
+                            .iter_mut()
+                            .find(|item| item.id == id)
+                            .map(|item| &mut item.audio_filters)
+                    }
+                };
+                if let Some(filter) =
+                    filters.and_then(|filters| filters.iter_mut().find(|f| f.id == filter_id))
                 {
                     filter.settings = settings;
                 }
