@@ -316,4 +316,15 @@ text_keys! {
     StatusLag                         => "status-lag";
     StatusLagNoticeable               => "status-lag-noticeable";
     StatusLagSevere                   => "status-lag-severe";
+    DockStats                         => "dock-stats";
+    StatsNothingRunning               => "stats-nothing-running";
+    StatsSubject                      => "stats-subject";
+    StatsRate                         => "stats-rate";
+    StatsBusy                         => "stats-busy";
+    StatsQueue                        => "stats-queue";
+    StatsIdle                         => "stats-idle";
+    StatsCompositor                   => "stats-compositor";
+    StatsRecording                    => "stats-recording";
+    StatsBroadcast                    => "stats-broadcast";
+    StatsErrors                       => "stats-errors";
 }

@@ -1,11 +1,13 @@
 mod audio;
 mod scenes;
 mod sources;
+mod stats;
 mod status;
 
 pub use audio::{AudioSnapshot, AudioSourceSnapshot};
 pub use scenes::{SceneSnapshot, ScenesSnapshot};
 pub use sources::{SceneItemSnapshot, SourcesSnapshot};
+pub use stats::{Role, StatsRow, StatsSnapshot, Subject};
 pub use status::{SourceStatus, StatusSnapshot};
 
 /// Read-only application state consumed while drawing one UI frame.
@@ -15,6 +17,7 @@ pub use status::{SourceStatus, StatusSnapshot};
 #[derive(Default)]
 pub struct Snapshots {
     pub audio: AudioSnapshot,
+    pub stats: StatsSnapshot,
     pub scenes: ScenesSnapshot,
     pub sources: SourcesSnapshot,
     pub status: StatusSnapshot,

@@ -247,6 +247,7 @@ fn show_panel(
             DockPanel::Controls => TextKey::DockControls,
             DockPanel::Properties => TextKey::DockProperties,
             DockPanel::Filters => TextKey::DockFilters,
+            DockPanel::Stats => TextKey::DockStats,
         }),
         egui::TextStyle::Heading.resolve(child.style()),
         child.visuals().strong_text_color(),
@@ -293,6 +294,9 @@ fn show_panel(
                 content.i18n,
                 content.actions,
             );
+        }
+        DockPanel::Stats => {
+            panels::stats::show(&mut child, &content.snapshots.stats, content.i18n);
         }
         DockPanel::Filters => {
             panels::filters::show(

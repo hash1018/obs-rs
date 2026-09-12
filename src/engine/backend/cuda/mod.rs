@@ -392,6 +392,11 @@ pub(in crate::engine) struct RunningSource(
 );
 
 impl RunningSource {
+    /// What this Source's own pipeline is doing, for the Stats dock.
+    pub(in crate::engine) fn stats(&self) -> Option<media_pp::stats::PipelineStats> {
+        Some(self.0.stats())
+    }
+
     pub(in crate::engine) fn pause(&self) {
         self.0.pause();
     }

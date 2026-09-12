@@ -17,6 +17,7 @@ pub enum DockPanel {
     Controls,
     Properties,
     Filters,
+    Stats,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ impl Default for DockLayout {
                         DockPanel::Sources,
                         DockPanel::Properties,
                         DockPanel::Filters,
+                        DockPanel::Stats,
                         DockPanel::AudioMixer,
                         DockPanel::Controls,
                     ]),
@@ -114,6 +116,10 @@ impl Default for DockLayout {
                 // Closed by default: it is empty for every Source that has no
                 // filters, which is every Source until one is added.
                 (DockPanel::Filters, DockState::closed()),
+                // Closed by default, as OBS's own is: it answers a question
+                // nobody has until something is wrong, and the status bar's
+                // own reading is what says when that is.
+                (DockPanel::Stats, DockState::closed()),
                 (DockPanel::AudioMixer, DockState::open()),
                 (DockPanel::Controls, DockState::open()),
             ]),
@@ -160,6 +166,9 @@ impl DockPanel {
             // row is open below them — which for a chroma key is a dropdown,
             // a colour well and two sliders.
             Self::Filters => egui::vec2(200.0, 200.0),
+            // Five columns of numbers want more width than the docks above
+            // it, and few enough rows that height is not the constraint.
+            Self::Stats => egui::vec2(320.0, 180.0),
         }
     }
 }

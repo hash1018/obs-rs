@@ -44,8 +44,8 @@ use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
-use crate::snapshots::{SceneItemSnapshot, SourceStatus, SourcesSnapshot};
-use output::{Broadcast, BroadcastRequest, OutputState, describe, start_recording};
+use crate::snapshots::{Role, SceneItemSnapshot, SourceStatus, SourcesSnapshot};
+use output::{Broadcast, BroadcastRequest, OutputKind, OutputState, describe, start_recording};
 
 use backend::{Backend, BackendError};
 use source::{
@@ -189,6 +189,8 @@ struct Published {
     /// the difference between two readings, and only the loop knows when it
     /// took them.
     output_load: Arc<AtomicU32>,
+    /// What every named part of the graph is doing — see `load::Reading`.
+    stats: Arc<ArcSwapOption<crate::snapshots::StatsSnapshot>>,
     /// Whether a dropped broadcast is being retried.
     ///
     /// A flag beside the clock rather than a third instant: what the status
@@ -293,6 +295,8 @@ pub struct EngineManager {
     streaming_reconnecting: Arc<AtomicBool>,
     /// What the outputs are costing — see `Published::output_load`.
     output_load: Arc<AtomicU32>,
+    /// What every named part of the graph is doing — see `load::Reading`.
+    stats: Arc<ArcSwapOption<crate::snapshots::StatsSnapshot>>,
     /// The SceneItems drawing nothing — see `Published::source_status`.
     source_status: Arc<ArcSwapOption<HashMap<SceneItemId, SourceStatus>>>,
     /// What each playing media file measures — see `Published::media_meters`.
@@ -341,6 +345,7 @@ impl EngineManager {
         let streaming_error = Arc::new(ArcSwapOption::empty());
         let streaming_reconnecting = Arc::new(AtomicBool::new(false));
         let output_load = Arc::new(AtomicU32::new(0));
+        let stats = Arc::new(ArcSwapOption::empty());
         let source_status = Arc::new(ArcSwapOption::empty());
         let media_meters = Arc::new(ArcSwapOption::empty());
         let encoders = Arc::new(ArcSwapOption::empty());
@@ -357,6 +362,7 @@ impl EngineManager {
             let streaming_error = Arc::clone(&streaming_error);
             let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
             let output_load = Arc::clone(&output_load);
+            let stats = Arc::clone(&stats);
             let source_status = Arc::clone(&source_status);
             let media_meters = Arc::clone(&media_meters);
             let encoders = Arc::clone(&encoders);
@@ -376,6 +382,7 @@ impl EngineManager {
                     streaming_error,
                     streaming_reconnecting,
                     output_load,
+                    stats,
                     source_status,
                     media_meters,
                     encoders,
@@ -424,6 +431,7 @@ impl EngineManager {
             streaming_error,
             streaming_reconnecting,
             output_load,
+            stats,
             source_status,
             media_meters,
             encoders,
@@ -605,6 +613,12 @@ impl EngineManager {
     /// compositor and the mixer — see `engine::load`.
     pub fn output_load(&self) -> f32 {
         f32::from_bits(self.output_load.load(Ordering::Acquire))
+    }
+
+    /// What every named part of the graph is doing, or `None` before the
+    /// first reading — see `engine::load::Reading`.
+    pub fn stats(&self) -> Option<Arc<crate::snapshots::StatsSnapshot>> {
+        self.stats.load_full()
     }
 
     /// Whether the running recording is paused.
@@ -809,6 +823,7 @@ fn run(
     let mut looked_for_missing = Instant::now();
     // The reading the next one is measured against — see `engine::load`.
     let mut last_load = (Instant::now(), load::Load::default());
+    let mut reading = load::Reading::new();
     // `recording` is owned by this loop rather than shared: only the commands
     // below reach it, and a settings change arrives on the same channel a
     // start does, so one can never land half-way through a recording being
@@ -858,6 +873,7 @@ fn run(
                 }
                 looked_for_missing = Instant::now();
                 last_load = publish_output_load(&engine, &published, &audio_load, last_load);
+                publish_stats(&engine, &published, &open, &scene, &mut reading);
                 status::notice_closed_windows(&backend, &mut open, &scene);
                 status::notice_ended_media(&backend, &mut open, &scene);
                 status::notice_dropped_streams(&backend, &mut open, &scene);
@@ -1057,6 +1073,101 @@ fn publish_output_load(
         .output_load
         .store(share.to_bits(), Ordering::Release);
     (now, total)
+}
+
+/// Reads every pipeline and publishes what the Stats dock draws.
+///
+/// Every pipeline, because they are not one: the compositor has its own, the
+/// mixer has its own, and each Source has its own again. What ties them
+/// together is the names — which element belongs to which of the few things
+/// a person would act on.
+fn publish_stats(
+    engine: &Engine<'_>,
+    published: &Published,
+    open: &HashMap<SceneItemId, SourceState>,
+    scene: &SourcesSnapshot,
+    reading: &mut load::Reading,
+) {
+    use crate::snapshots::Subject;
+
+    let compositor = engine.backend.preview.stats();
+    // Held for as long as the borrows below, since `take` reads through them.
+    let scene_sources: Vec<_> = scene
+        .items
+        .iter()
+        .filter_map(|item| {
+            let SourceState::Open(open) = open.get(&item.id)? else {
+                return None;
+            };
+            Some((
+                source::input_name(item),
+                item.name.clone(),
+                open.source.stats()?,
+            ))
+        })
+        .collect();
+
+    let sources: HashMap<&str, &str> = scene_sources
+        .iter()
+        .map(|(element, name, _)| (element.as_str(), name.as_str()))
+        .collect();
+
+    let mut pipelines = vec![("preview", load::elements(&compositor))];
+    pipelines.extend(
+        scene_sources
+            .iter()
+            .map(|(element, _, stats)| (element.as_str(), load::elements(stats))),
+    );
+    let snapshot = reading.take(&pipelines, |element| match element.name {
+        // The compositor takes nothing in — it is its pipeline's source, and
+        // what it made is on its output pad. What compositing costs is not
+        // an element's `busy` at all: it happens in the thread that drives
+        // it rather than in a call into it.
+        "preview-compositor" => Some((Subject::Compositor, Role::Throughput)),
+        // Every element of an output's branch, by the names
+        // `OutputKind::prefix` already decides — the same naming `trouble`
+        // and `Load` read. The muxer at the end says how much reached the
+        // file or the wire; the queue at the head says what the encoding
+        // cost and how close it is to blocking.
+        name if is_an_output(name) => {
+            let kind = if name.starts_with(OutputKind::Recording.prefix()) {
+                Subject::Recording
+            } else {
+                Subject::Broadcast
+            };
+            Some((kind, output_role(element)))
+        }
+        // A Source's own name belongs to two of its elements — the head
+        // that produces and the input it feeds the compositor through. The
+        // input is the one worth reporting: its count is frames that
+        // actually reached the Canvas, which is the question a Source
+        // raises. It is the one with nothing downstream of it.
+        name if element.pushed.is_none() => sources
+            .get(name)
+            .map(|name| (Subject::Source((*name).to_owned()), Role::Throughput)),
+        _ => None,
+    });
+    published.stats.store(Some(Arc::new(snapshot)));
+}
+
+/// Whether an element belongs to one of the outputs.
+fn is_an_output(name: &str) -> bool {
+    name.starts_with(OutputKind::Recording.prefix())
+        || name.starts_with(OutputKind::Broadcast.prefix())
+}
+
+/// What part of an output's row one of its elements supplies.
+///
+/// Its queue, where it has one: an output's queues fill and then block
+/// because something below them is behind, and a queue's worker drives
+/// every stage after it, so its time is what the whole branch costs.
+/// Otherwise its count, which at the end of the branch is what was written.
+fn output_role(element: &load::Element<'_>) -> Role {
+    if element.queue.is_some() {
+        Role::Cost
+    } else {
+        Role::Throughput
+    }
 }
 
 /// Redraws every Source that follows the clock rather than an edit.
@@ -2001,6 +2112,7 @@ mod tests {
             streaming_error: Arc::new(ArcSwapOption::empty()),
             streaming_reconnecting: Arc::new(AtomicBool::new(false)),
             output_load: Arc::new(AtomicU32::new(0)),
+            stats: Arc::new(ArcSwapOption::empty()),
         }
     }
 

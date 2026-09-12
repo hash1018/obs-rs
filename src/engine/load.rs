@@ -45,7 +45,9 @@
 
 use std::time::Duration;
 
-use media_pp::stats::PipelineStats;
+use media_pp::stats::{ElementStats, PipelineStats};
+
+use crate::snapshots::Role;
 
 use super::output::OutputKind;
 
@@ -214,5 +216,490 @@ mod tests {
         assert_eq!(over.blocked, Duration::ZERO);
         assert_eq!(over.dropped, 0);
         assert_eq!(over.pressure(), 0.0);
+    }
+}
+
+/// One reading of everything the Stats dock shows.
+///
+/// Built here rather than in the dock because the numbers underneath are
+/// running totals: a rate is the difference between two readings, and only
+/// the loop that took them knows how far apart they were. What the dock
+/// receives is already the answer.
+/// What one reading of one element says, as the fold reads it.
+///
+/// A view of [`ElementStats`] rather than the thing itself: it is the few
+/// fields a row is made of, and unlike `ElementStats` it can be built — by
+/// a caller on another platform's backend, and by a test, which is what
+/// lets the folding below be checked without a running pipeline.
+#[derive(Debug, Clone, Default)]
+pub struct Element<'a> {
+    /// The name its caller gave it.
+    pub name: &'a str,
+    /// Buffers handed to it.
+    pub taken: u64,
+    /// Buffers pushed through its busiest output port — the busiest rather
+    /// than all of them added up, because a `Tee` pushes each buffer once
+    /// per branch and what is wanted is buffers, not pushes.
+    ///
+    /// `None` where it has no output ports at all, which is how the end of
+    /// a branch is known.
+    pub pushed: Option<u64>,
+    /// Time spent inside it, including every stage it feeds on the same
+    /// thread.
+    pub busy: Duration,
+    /// How long since it last handled anything.
+    pub idle_for: Option<Duration>,
+    /// Calls into it that failed.
+    pub errors: u64,
+    /// Its queue, if it is one.
+    pub queue: Option<media_pp::stats::QueueStats>,
+}
+
+impl<'a> From<&'a ElementStats> for Element<'a> {
+    fn from(element: &'a ElementStats) -> Self {
+        Self {
+            name: &element.name,
+            taken: element.buffers_in,
+            pushed: element.pads.iter().map(|pad| pad.buffers).max(),
+            busy: element.busy,
+            idle_for: element.idle_for,
+            errors: element.errors,
+            queue: element.queue,
+        }
+    }
+}
+
+/// Every element of one pipeline, as the fold reads them.
+pub fn elements(stats: &PipelineStats) -> Vec<Element<'_>> {
+    stats.elements.iter().map(Element::from).collect()
+}
+
+pub struct Reading {
+    /// Totals as they last stood, kept to measure the next reading against.
+    previous: std::collections::HashMap<String, Totals>,
+    taken_at: std::time::Instant,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Totals {
+    buffers: u64,
+    busy: Duration,
+}
+
+impl Reading {
+    pub fn new() -> Self {
+        Self {
+            previous: std::collections::HashMap::new(),
+            taken_at: std::time::Instant::now(),
+        }
+    }
+
+    /// Turns what the pipelines say now into rows, against what they said
+    /// last time.
+    ///
+    /// `named` says which of the few things worth reporting an element
+    /// belongs to and what it can say about it, and leaves out everything it
+    /// does not name — most of a graph is plumbing nobody would act on. It
+    /// is given the element's own reading as well as its name, because a
+    /// name does not always tell the elements of one Source apart: a media
+    /// file's demuxer and the input it eventually feeds the compositor
+    /// share one.
+    ///
+    /// # One row from several elements
+    ///
+    /// A subject is rarely one element. A recording is a queue, an encoder
+    /// and a muxer, and each holds a different part of the answer — see
+    /// [`Role`](crate::snapshots::Role). Everything named alike is folded
+    /// into one row, taking from each only what it is asked for.
+    ///
+    /// # Why each pipeline is labelled
+    ///
+    /// Several elements of one Source carry the same name — measured on a
+    /// media file: its demuxer and its compositor input are both
+    /// `scene-item-1`. Keyed by name alone they would overwrite each other
+    /// between readings and be measured against each other's totals, which
+    /// showed up as a 30 fps clip reporting a rate that climbed every
+    /// second. The label keeps each pipeline's names to itself.
+    pub fn take(
+        &mut self,
+        pipelines: &[(&str, Vec<Element<'_>>)],
+        named: impl Fn(&Element<'_>) -> Option<(crate::snapshots::Subject, Role)>,
+    ) -> crate::snapshots::StatsSnapshot {
+        use std::collections::HashMap;
+
+        let now = std::time::Instant::now();
+        let interval = now.duration_since(self.taken_at);
+        let mut current = HashMap::new();
+        let mut folded: HashMap<crate::snapshots::Subject, crate::snapshots::StatsRow> =
+            HashMap::new();
+
+        for (pipeline, stats) in pipelines {
+            for element in stats {
+                let Some((subject, role)) = named(element) else {
+                    continue;
+                };
+                // What it handled: buffers taken, for a stage; buffers
+                // pushed, for a source, which takes none and makes them
+                // instead.
+                let totals = Totals {
+                    buffers: element.taken.max(element.pushed.unwrap_or(0)),
+                    busy: element.busy,
+                };
+                // Without an earlier reading there is no rate to report, so
+                // the pass after something starts shows it idle rather than
+                // as having done all of it at once.
+                let key = format!("{pipeline}/{}", element.name);
+                let over = self.previous.get(&key).copied().unwrap_or(totals);
+                current.insert(key, totals);
+
+                let row =
+                    folded
+                        .entry(subject.clone())
+                        .or_insert_with(|| crate::snapshots::StatsRow {
+                            subject,
+                            buffers: None,
+                            busy: None,
+                            queue: None,
+                            idle_for: None,
+                            errors: 0,
+                        });
+                match role {
+                    Role::Throughput => {
+                        let handled = totals.buffers.saturating_sub(over.buffers);
+                        row.buffers = Some(row.buffers.unwrap_or(0).max(handled));
+                    }
+                    Role::Cost => {
+                        // The largest rather than the sum: a queue's `busy`
+                        // already covers every stage it feeds, so adding
+                        // those in would count the same work twice.
+                        let busy = share(totals.busy.saturating_sub(over.busy), interval);
+                        row.busy = Some(row.busy.unwrap_or(0.0).max(busy));
+                        if let Some(queue) = element.queue {
+                            row.queue = Some(row.queue.unwrap_or(0.0).max(fullness(queue)));
+                        }
+                    }
+                }
+                // The most recent, because a subject has been doing
+                // something as long as any part of it has.
+                row.idle_for = match (row.idle_for, element.idle_for) {
+                    (Some(theirs), Some(mine)) => Some(theirs.min(mine)),
+                    (existing, mine) => existing.or(mine),
+                };
+                row.errors += element.errors;
+            }
+        }
+        self.previous = current;
+        self.taken_at = now;
+        let mut rows: Vec<_> = folded.into_values().collect();
+        rows.sort_by_key(|row| order(&row.subject));
+        crate::snapshots::StatsSnapshot {
+            rows: std::sync::Arc::new(rows),
+            interval,
+        }
+    }
+}
+
+/// The order rows are shown in: what draws, then what it is written to,
+/// then what feeds it. Sources last because there are many and they are the
+/// least often the answer.
+fn order(subject: &crate::snapshots::Subject) -> (u8, String) {
+    use crate::snapshots::Subject;
+    match subject {
+        Subject::Compositor => (0, String::new()),
+        Subject::Recording => (1, String::new()),
+        Subject::Broadcast => (2, String::new()),
+        Subject::Source(name) => (3, name.clone()),
+    }
+}
+
+fn share(busy: Duration, interval: Duration) -> f32 {
+    if interval.is_zero() {
+        return 0.0;
+    }
+    busy.as_secs_f32() / interval.as_secs_f32()
+}
+
+#[cfg(test)]
+mod folding {
+    use super::*;
+    use crate::snapshots::Subject;
+    use media_pp::stats::QueueStats;
+
+    fn queue(len: usize, capacity: usize) -> QueueStats {
+        QueueStats {
+            len,
+            capacity,
+            dropped: 0,
+            blocked: Duration::ZERO,
+        }
+    }
+
+    /// Two readings a second apart, so a rate is per second and arithmetic
+    /// rather than timing decides what the tests below assert.
+    fn twice<'a>(
+        pipelines: impl Fn(u64) -> Vec<(&'a str, Vec<Element<'a>>)>,
+        named: impl Fn(&Element<'_>) -> Option<(Subject, Role)> + Copy,
+    ) -> Vec<crate::snapshots::StatsRow> {
+        let mut reading = Reading::new();
+        reading.take(&pipelines(0), named);
+        reading.taken_at = std::time::Instant::now() - Duration::from_secs(1);
+        let snapshot = reading.take(&pipelines(1), named);
+        snapshot.rows.as_ref().clone()
+    }
+
+    /// A recording is a queue, an encoder and a muxer, and only the muxer
+    /// knows what reached the file while only the queue knows what the
+    /// encoding cost. One row, built from both.
+    #[test]
+    fn an_outputs_elements_fold_into_one_row() {
+        let rows = twice(
+            |second| {
+                vec![(
+                    "preview",
+                    vec![
+                        Element {
+                            name: "record-queue",
+                            taken: 60 * second,
+                            busy: Duration::from_millis(300 * second),
+                            queue: Some(queue(2, 8)),
+                            ..Element::default()
+                        },
+                        Element {
+                            name: "record-video",
+                            taken: 60 * second,
+                            ..Element::default()
+                        },
+                    ],
+                )]
+            },
+            |element| {
+                Some((
+                    Subject::Recording,
+                    if element.queue.is_some() {
+                        Role::Cost
+                    } else {
+                        Role::Throughput
+                    },
+                ))
+            },
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].buffers, Some(60));
+        // Near rather than exact: the interval is a real one, a hair over
+        // the second it was set to.
+        assert!(
+            (rows[0].busy.unwrap() - 0.3).abs() < 0.01,
+            "{:?}",
+            rows[0].busy
+        );
+        assert_eq!(rows[0].queue, Some(0.25));
+    }
+
+    /// The defect this was written against: a media file's demuxer and the
+    /// compositor input it feeds are both named `scene-item-1`, so totals
+    /// kept by name alone overwrote each other between readings and each
+    /// was measured against the other. A 30 fps clip reported a rate that
+    /// climbed every second — 385, then 402, then 418.
+    #[test]
+    fn elements_of_two_pipelines_sharing_a_name_do_not_measure_each_other() {
+        let rows = twice(
+            |second| {
+                vec![
+                    (
+                        "preview",
+                        vec![Element {
+                            name: "shared",
+                            taken: 1_000 * second,
+                            ..Element::default()
+                        }],
+                    ),
+                    (
+                        "scene-item-1",
+                        vec![Element {
+                            name: "shared",
+                            taken: 30 * second,
+                            ..Element::default()
+                        }],
+                    ),
+                ]
+            },
+            |element| Some((Subject::Source(element.name.to_owned()), Role::Throughput)),
+        );
+        // Both pipelines name the same subject, so the row is the busier of
+        // them — and crucially 1000, not 1000 plus the difference between
+        // the two totals.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].buffers, Some(1_000));
+    }
+
+    /// What a Source costs is not reported at all, and the row must leave
+    /// the column empty rather than claim nothing: a pacer's wait is spent
+    /// inside the call, so a healthy 30 fps clip reads as fully busy with a
+    /// queue at capacity. Only what is asked of an element is taken from it.
+    #[test]
+    fn an_element_asked_only_for_throughput_contributes_no_cost() {
+        let rows = twice(
+            |second| {
+                vec![(
+                    "scene-item-1",
+                    vec![Element {
+                        name: "scene-item-1",
+                        taken: 30 * second,
+                        busy: Duration::from_secs(second),
+                        queue: Some(queue(8, 8)),
+                        ..Element::default()
+                    }],
+                )]
+            },
+            |_| Some((Subject::Source("Clip".to_owned()), Role::Throughput)),
+        );
+        assert_eq!(rows[0].buffers, Some(30));
+        assert_eq!(rows[0].busy, None);
+        assert_eq!(rows[0].queue, None);
+    }
+
+    /// A compositor takes nothing in — it is its pipeline's source, and what
+    /// it made is on its output port. Read as buffers taken it was reported
+    /// as doing nothing while drawing sixty frames a second.
+    #[test]
+    fn what_a_source_element_made_counts_as_what_it_handled() {
+        let rows = twice(
+            |second| {
+                vec![(
+                    "preview",
+                    vec![Element {
+                        name: "preview-compositor",
+                        taken: 0,
+                        pushed: Some(60 * second),
+                        ..Element::default()
+                    }],
+                )]
+            },
+            |_| Some((Subject::Compositor, Role::Throughput)),
+        );
+        assert_eq!(rows[0].buffers, Some(60));
+    }
+
+    /// Most of a graph is plumbing, and a row for each would bury the few
+    /// that someone would act on.
+    #[test]
+    fn an_element_nobody_named_is_left_out() {
+        let rows = twice(
+            |_| {
+                vec![(
+                    "preview",
+                    vec![Element {
+                        name: "preview-rate",
+                        ..Element::default()
+                    }],
+                )]
+            },
+            |_| None,
+        );
+        assert!(rows.is_empty());
+    }
+
+    /// The first reading has nothing to measure against, and a total is the
+    /// whole run. Counted from zero it would report an hour of recording as
+    /// having happened in one second.
+    #[test]
+    fn the_first_reading_of_something_shows_no_rate_rather_than_all_of_it() {
+        let mut reading = Reading::new();
+        let pipelines = vec![(
+            "preview",
+            vec![Element {
+                name: "record-video",
+                taken: 100_000,
+                ..Element::default()
+            }],
+        )];
+        let snapshot = reading.take(&pipelines, |_| Some((Subject::Recording, Role::Throughput)));
+        assert_eq!(snapshot.rows[0].buffers, Some(0));
+    }
+
+    /// A subject has been doing something as long as any part of it has, so
+    /// the muxer waiting on a queue does not make the recording look stalled.
+    #[test]
+    fn a_rows_idle_time_is_that_of_its_busiest_part() {
+        let rows = twice(
+            |_| {
+                vec![(
+                    "preview",
+                    vec![
+                        Element {
+                            name: "record-queue",
+                            idle_for: Some(Duration::from_millis(4)),
+                            queue: Some(queue(0, 8)),
+                            ..Element::default()
+                        },
+                        Element {
+                            name: "record-video",
+                            idle_for: Some(Duration::from_secs(9)),
+                            ..Element::default()
+                        },
+                    ],
+                )]
+            },
+            |element| {
+                Some((
+                    Subject::Recording,
+                    if element.queue.is_some() {
+                        Role::Cost
+                    } else {
+                        Role::Throughput
+                    },
+                ))
+            },
+        );
+        assert_eq!(rows[0].idle_for, Some(Duration::from_millis(4)));
+    }
+
+    /// Rows come in the order they are read in, which is the order the
+    /// engine happened to build its pipelines in. What is shown is fixed.
+    #[test]
+    fn rows_are_ordered_by_what_they_are_rather_than_by_when_they_were_read() {
+        let rows = twice(
+            |_| {
+                vec![(
+                    "preview",
+                    vec![
+                        Element {
+                            name: "zebra",
+                            ..Element::default()
+                        },
+                        Element {
+                            name: "stream",
+                            ..Element::default()
+                        },
+                        Element {
+                            name: "apple",
+                            ..Element::default()
+                        },
+                        Element {
+                            name: "compositor",
+                            ..Element::default()
+                        },
+                    ],
+                )]
+            },
+            |element| {
+                let subject = match element.name {
+                    "compositor" => Subject::Compositor,
+                    "stream" => Subject::Broadcast,
+                    name => Subject::Source(name.to_owned()),
+                };
+                Some((subject, Role::Throughput))
+            },
+        );
+        let order: Vec<_> = rows.iter().map(|row| row.subject.clone()).collect();
+        assert_eq!(
+            order,
+            vec![
+                Subject::Compositor,
+                Subject::Broadcast,
+                Subject::Source("apple".to_owned()),
+                Subject::Source("zebra".to_owned()),
+            ]
+        );
     }
 }

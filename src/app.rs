@@ -271,6 +271,9 @@ impl ObsApp {
         self.snapshots.status.streaming_error = engine.streaming_error();
         self.snapshots.status.streaming_reconnecting = engine.streaming_reconnecting();
         self.snapshots.status.output_load = engine.output_load();
+        if let Some(stats) = engine.stats() {
+            self.snapshots.stats = (*stats).clone();
+        }
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
         self.snapshots.status.source_status = engine.source_status();
