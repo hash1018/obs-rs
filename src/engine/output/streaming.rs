@@ -34,7 +34,7 @@ use media_pp::elements::{MixerHandle, RtmpMuxer, TeeHandle};
 use crate::settings::StreamingSettings;
 
 use super::super::backend::{Backend, BackendError};
-use super::{Output, OutputKind, TrackDef};
+use super::{Output, OutputKind, TrackDef, Tracks};
 
 /// One broadcast to open, as it was asked for.
 pub(in crate::engine) struct BroadcastRequest {
@@ -106,12 +106,15 @@ pub(in crate::engine) fn connect(
 /// Connects, declares the tracks, and writes the FLV header.
 ///
 /// `url` carries the stream key and is borrowed for exactly this call.
-fn open_rtmp_muxer(url: &str, tracks: Vec<TrackDef>) -> Result<Vec<Box<dyn Sink>>, BackendError> {
+fn open_rtmp_muxer(
+    url: &str,
+    tracks: Tracks<TrackDef>,
+) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
     let mut muxer = RtmpMuxer::create(url)?;
-    for track in tracks {
-        muxer.add_stream(track.name, track.parameters, track.time_base)?;
-    }
-    Ok(muxer.open()?)
+    let added =
+        tracks.try_map(|track| muxer.add_stream(track.name, track.parameters, track.time_base))?;
+    let mut sinks = muxer.open()?;
+    Ok(added.try_map(|track| sinks.take(track))?)
 }
 
 /// A server address with anything past the application path removed.

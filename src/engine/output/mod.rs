@@ -111,11 +111,6 @@ fn media_codec(codec: RecordingAudioCodec) -> AudioCodec {
     }
 }
 
-/// One track, as every muxer here wants to be told about it.
-///
-/// The three take the same `add_stream(name, parameters, time_base)`, so the
-/// tracks are described once and the choice below is only about which muxer
-/// hears them.
 /// Which of the two outputs a set of elements belongs to.
 ///
 /// It names them, and that is the whole of what it is for: a failure inside
@@ -160,14 +155,47 @@ pub struct OutputEncoding {
 }
 
 /// One track an output will carry, as the muxer has to be told about it.
+///
+/// Every muxer here takes the same `add_stream(name, parameters, time_base)`,
+/// so the tracks are described once and the choice below is only about which
+/// muxer hears them.
 pub(in crate::engine) struct TrackDef {
     pub(in crate::engine) name: String,
     pub(in crate::engine) parameters: ffmpeg::codec::Parameters,
     pub(in crate::engine) time_base: ffmpeg::Rational,
 }
 
-/// Opens whichever muxer the settings ask for, into one [`Sink`] per track in
-/// the order `tracks` gave them.
+/// An output's tracks by what they carry: always a picture, and sound when
+/// the mixer is running — see this module's docs.
+///
+/// The same shape at every step from description to sink — a [`TrackDef`],
+/// the muxer's `MuxerTrack` for it, then the sink that opens from that — so
+/// nothing between the two ends has to remember which position was which.
+pub(in crate::engine) struct Tracks<T> {
+    pub(in crate::engine) video: T,
+    pub(in crate::engine) audio: Option<T>,
+}
+
+impl<T> Tracks<T> {
+    /// Each track through `f`, the picture first: the order a muxer's header
+    /// lists them in.
+    fn map<U>(self, mut f: impl FnMut(T) -> U) -> Tracks<U> {
+        Tracks {
+            video: f(self.video),
+            audio: self.audio.map(f),
+        }
+    }
+
+    /// [`Tracks::map`], stopping at the first track `f` fails on.
+    fn try_map<U, E>(self, mut f: impl FnMut(T) -> Result<U, E>) -> Result<Tracks<U>, E> {
+        Ok(Tracks {
+            video: f(self.video)?,
+            audio: self.audio.map(f).transpose()?,
+        })
+    }
+}
+
+/// Opens whichever muxer the settings ask for, into one [`Sink`] per track.
 ///
 /// Three cases, and the container is only one of them: `.mp4` and `.mkv` are
 /// the same [`FileMuxer`] told a different path — FFmpeg guesses the muxer
@@ -176,8 +204,8 @@ pub(in crate::engine) struct TrackDef {
 fn open_muxer(
     path: &Path,
     settings: &crate::settings::RecordingSettings,
-    tracks: Vec<TrackDef>,
-) -> Result<Vec<Box<dyn Sink>>, BackendError> {
+    tracks: Tracks<TrackDef>,
+) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
     // Nothing else makes it, and no muxer will: the recordings folder before
     // the first recording, a folder chosen in Settings that does not exist
     // yet, and for HLS the recording's own directory, which is new every time.
@@ -197,10 +225,10 @@ fn open_muxer(
     };
     let Some(policy) = policy else {
         let mut muxer = FileMuxer::create(path)?;
-        for track in tracks {
-            muxer.add_stream(track.name, track.parameters, track.time_base)?;
-        }
-        return Ok(muxer.open()?);
+        let added = tracks
+            .try_map(|track| muxer.add_stream(track.name, track.parameters, track.time_base))?;
+        let mut sinks = muxer.open()?;
+        return Ok(added.try_map(|track| sinks.take(track))?);
     };
 
     // `path` named the recording; each segment is that name with its index
@@ -217,10 +245,9 @@ fn open_muxer(
     let mut muxer = SegmentedFileMuxer::create(policy, move |index| {
         directory.join(format!("{stem}_{index:03}.{extension}"))
     });
-    for track in tracks {
-        muxer.add_stream(track.name, track.parameters, track.time_base);
-    }
-    Ok(muxer.open()?)
+    let added = tracks.map(|track| muxer.add_stream(track.name, track.parameters, track.time_base));
+    let mut sinks = muxer.open()?;
+    Ok(added.try_map(|track| sinks.take(track))?)
 }
 
 /// The HLS case: a playlist at `path` and its segments beside it.
@@ -235,7 +262,10 @@ fn open_muxer(
 /// Apple's own guidance asks for, and this is a recording format here rather
 /// than a delivery one — nothing in this application is tuning latency
 /// against segment count.
-fn open_hls_muxer(path: &Path, tracks: Vec<TrackDef>) -> Result<Vec<Box<dyn Sink>>, BackendError> {
+fn open_hls_muxer(
+    path: &Path,
+    tracks: Tracks<TrackDef>,
+) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
     let directory = path.parent().unwrap_or(Path::new("."));
     let mut muxer = HlsMuxer::create(HlsOptions {
         playlist_path: path.to_path_buf(),
@@ -246,10 +276,10 @@ fn open_hls_muxer(path: &Path, tracks: Vec<TrackDef>) -> Result<Vec<Box<dyn Sink
         init_filename: String::from("init.mp4"),
         base_url: None,
     })?;
-    for track in tracks {
-        muxer.add_stream(track.name, track.parameters, track.time_base)?;
-    }
-    Ok(muxer.open()?)
+    let added =
+        tracks.try_map(|track| muxer.add_stream(track.name, track.parameters, track.time_base))?;
+    let mut sinks = muxer.open()?;
+    Ok(added.try_map(|track| sinks.take(track))?)
 }
 
 /// See [`open_hls_muxer`] for why this is a constant.
@@ -299,7 +329,7 @@ impl Output {
         kind: OutputKind,
         fps: u32,
         encoding: &OutputEncoding,
-        open_muxer: impl FnOnce(Vec<TrackDef>) -> Result<Vec<Box<dyn Sink>>, BackendError>,
+        open_muxer: impl FnOnce(Tracks<TrackDef>) -> Result<Tracks<Box<dyn Sink>>, BackendError>,
     ) -> Result<Self, BackendError> {
         // Both encoders open before the file does. An encoder that cannot be
         // opened must not leave a zero-length mp4 behind, and the audio one
@@ -332,34 +362,29 @@ impl Output {
             })
             .transpose()?;
 
-        // The tracks, in the order their sinks come back. Named after the
-        // output like everything else in it: a muxer track is the element a
-        // failure is now reported under — `media-pp` traces an error back to
-        // whatever raised it — and `video` alone would not say which of two
-        // running outputs had stopped.
-        let mut tracks = vec![TrackDef {
-            name: format!("{}-video", kind.prefix()),
-            parameters: video.parameters(),
-            time_base: video.time_base(),
-        }];
-        if let Some((_, encoder)) = &audio {
-            tracks.push(TrackDef {
+        // Named after the output like everything else in it: a muxer track is
+        // the element a failure is now reported under — `media-pp` traces an
+        // error back to whatever raised it — and `video` alone would not say
+        // which of two running outputs had stopped.
+        let tracks = Tracks {
+            video: TrackDef {
+                name: format!("{}-video", kind.prefix()),
+                parameters: video.parameters(),
+                time_base: video.time_base(),
+            },
+            audio: audio.as_ref().map(|(_, encoder)| TrackDef {
                 name: format!("{}-audio", kind.prefix()),
                 parameters: encoder.parameters(),
                 time_base: audio_time_base,
-            });
-        }
-        let mut sinks = open_muxer(tracks)?;
-        // Taken from the front, so each sink is the stream added at that
-        // index — `add_stream` order is what `open` answers in.
-        if sinks.is_empty() {
-            return Err("the muxer produced no track sinks".into());
-        }
-        let video_sink = sinks.remove(0);
+            }),
+        };
+        let Tracks {
+            video: video_sink,
+            audio: audio_sink,
+        } = open_muxer(tracks)?;
 
-        let audio = match audio {
-            Some((tee, encoder)) => {
-                let sink = sinks.remove(0);
+        let audio = match (audio, audio_sink) {
+            (Some((tee, encoder)), Some(sink)) => {
                 let (gate, pause) = PauseGate::for_audio(format!("{}-audio-pause", kind.prefix()));
                 let branch = tee
                     .branch()
@@ -389,7 +414,11 @@ impl Output {
                     pause,
                 })
             }
-            None => None,
+            (None, None) => None,
+            // Every opener above answers through `Tracks::map`, which keeps
+            // whether there is sound; one that did not would leave a track
+            // declared in the header with nothing ever to finish it.
+            _ => return Err("the muxer answered for a different set of tracks".into()),
         };
 
         // Attached last, so a failure above leaves no track running: the
@@ -461,9 +490,9 @@ mod tests {
     use crate::settings::{RecordingFormat, RecordingSettings};
 
     /// One track any of these muxers takes. AAC, because it is built into
-    /// every FFmpeg; a muxer is told a track's parameters and nothing about
-    /// what they are for.
-    fn one_track() -> Vec<TrackDef> {
+    /// every FFmpeg; standing in for the picture is fine, since a muxer is
+    /// told a track's parameters and nothing about what they are for.
+    fn one_track() -> Tracks<TrackDef> {
         let time_base = ffmpeg::Rational::new(1, 48_000);
         let encoder = SwAudioEncoder::new(
             "test-audio-encode",
@@ -476,11 +505,14 @@ mod tests {
             },
         )
         .expect("AAC is built into FFmpeg");
-        vec![TrackDef {
-            name: String::from("test-track"),
-            parameters: encoder.parameters(),
-            time_base,
-        }]
+        Tracks {
+            video: TrackDef {
+                name: String::from("test-track"),
+                parameters: encoder.parameters(),
+                time_base,
+            },
+            audio: None,
+        }
     }
 
     /// A recording goes into a directory nothing may have made yet — for HLS
