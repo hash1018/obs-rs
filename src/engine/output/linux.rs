@@ -8,6 +8,7 @@
 //! encoder and says what stream it needs, and the branch is built once the
 //! sink for it exists.
 
+use media_pp::color::ColorDescription;
 use media_pp::elements::{
     CudaCodec, CudaDownload, CudaEncoder, CudaEncoderOptions, CudaFrameFormat, CudaScaler,
     CudaScalerInterp, PauseGate, SwEncoder, SwEncoderOptions, SwScaler, TimestampOrigin,
@@ -204,8 +205,15 @@ impl Backend {
         let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
         let bit_rate = encoding.bit_rate_bits;
         let gop_size = fps * encoding.keyframe_seconds.max(1);
+        // What the Canvas is — the CUDA compositor converts everything into
+        // BT.709 limited range — told to the encoder so the file says it.
+        // Untagged, a player guesses, and FFmpeg's guess is BT.601 at any
+        // size: a recorded (230, 20, 20) came back as (211, 0, 22). The
+        // software path gets its frames through a scaler that changes only
+        // their layout, so the same is true of what it encodes.
+        let color = ColorDescription::BT709_LIMITED;
         match encoding.encoder {
-            RecordingEncoder::Nvenc => Ok(RecordEncoder::Hardware(CudaEncoder::new(
+            RecordingEncoder::Nvenc => Ok(RecordEncoder::Hardware(CudaEncoder::with_color(
                 format!("{}-encode", kind.prefix()),
                 &self.device,
                 CudaEncoderOptions {
@@ -219,8 +227,9 @@ impl Backend {
                     gop_size,
                     max_b_frames: None,
                 },
+                color,
             )?)),
-            other => Ok(RecordEncoder::Software(SwEncoder::new(
+            other => Ok(RecordEncoder::Software(SwEncoder::with_color(
                 format!("{}-encode", kind.prefix()),
                 SwEncoderOptions {
                     codec: software_codec(other),
@@ -232,6 +241,7 @@ impl Backend {
                     gop_size,
                     max_b_frames: None,
                 },
+                color,
             )?)),
         }
     }
