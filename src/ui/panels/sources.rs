@@ -485,6 +485,26 @@ fn show_source_row(
         response.on_hover_text(kind)
     };
 
+    // What is done to this one Source rather than to the list. The first
+    // thing here to need a right click: everything else a row offers is on
+    // the row, where a picture of one Source has no room and no obvious
+    // place.
+    response.context_menu(|ui| {
+        // Only a Source that is showing has a picture to take. One that
+        // failed says why on its badge, and the menu points there.
+        let showing = status.is_none();
+        let take = ui
+            .add_enabled(
+                showing,
+                egui::Button::new(i18n.text(TextKey::SourceScreenshot)),
+            )
+            .on_disabled_hover_text(i18n.text(TextKey::SourceScreenshotUnavailable));
+        if take.clicked() {
+            actions.push(UiAction::TakeSourceScreenshot(item.id));
+            ui.close();
+        }
+    });
+
     // A Source that failed or went away offers to be opened again; a file
     // that played out did what it was asked and has nothing to recover from.
     if status.is_some_and(|status| *status != SourceStatus::Ended)

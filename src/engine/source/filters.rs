@@ -163,9 +163,26 @@ impl OpenFilter {
 pub(in crate::engine) struct FilterRack {
     handle: RackHandle,
     backend: backend::Backend,
+    /// What reaches the rack — which, with whether it holds anything, is
+    /// what leaves it. See [`FilterRack::output`].
+    incoming: ChainFormat,
 }
 
 impl FilterRack {
+    /// What the rack hands on: what it was handed while it holds nothing,
+    /// and BGRA once it holds anything — every filter works in BGRA, and a
+    /// filled rack bridges an NV12 arrival to it first.
+    ///
+    /// `filled` is the caller's, since the rack does not remember what it
+    /// was last given: whether the Source's running filter list is empty.
+    pub(in crate::engine) fn output(&self, filled: bool) -> ChainFormat {
+        if filled {
+            ChainFormat::Bgra
+        } else {
+            self.incoming
+        }
+    }
+
     /// Builds the elements for `filters` and swaps them in, answering the
     /// handles that reach the ones now running.
     ///
@@ -286,7 +303,14 @@ mod windows {
             width,
             height,
         };
-        (rack, FilterRack { handle, backend })
+        (
+            rack,
+            FilterRack {
+                handle,
+                backend,
+                incoming,
+            },
+        )
     }
 
     pub(super) fn build(backend: &Backend, filters: &[Filter]) -> super::Built {
@@ -398,7 +422,14 @@ mod linux {
             width,
             height,
         };
-        (rack, FilterRack { handle, backend })
+        (
+            rack,
+            FilterRack {
+                handle,
+                backend,
+                incoming,
+            },
+        )
     }
 
     pub(super) fn build(backend: &Backend, filters: &[Filter]) -> super::Built {

@@ -120,6 +120,9 @@ pub enum UiAction {
     /// Save what is being composited as a picture, beside the recordings.
     /// Carries no path, for the reason `StartRecording` does not.
     TakeScreenshot,
+    /// Save one Source's own picture — filters and all, without the item's
+    /// crop or placement — beside the recordings.
+    TakeSourceScreenshot(SceneItemId),
     /// Commit the dialog's draft: persist it, and hand the engine the part it
     /// needs. Boxed because it is much the largest variant here and every
     /// other one would otherwise be padded to its size.

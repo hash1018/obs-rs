@@ -46,7 +46,7 @@ mod session;
 mod streaming;
 
 pub(in crate::engine) use session::Broadcast;
-pub(in crate::engine) use session::{OutputState, describe, start_recording};
+pub(in crate::engine) use session::{OutputState, PendingScreenshot, describe, start_recording};
 pub(in crate::engine) use streaming::{BroadcastRequest, connect};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]

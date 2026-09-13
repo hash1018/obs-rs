@@ -31,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 
 use eframe::egui::{self, Key, Modifiers};
 
-use crate::domain::AudioSourceId;
+use crate::domain::{AudioSourceId, SceneItemId};
 use crate::hotkey::tracker::{Edge, Keyboard, Tracker};
 use crate::hotkey::{Chord, Hotkey, HotkeyAction, HotkeySettings};
 use crate::project::{AudioCommand, ProjectCommand, SceneCommand};
@@ -88,6 +88,7 @@ pub fn act(
     edges: &[Edge],
     actions: &mut Vec<UiAction>,
 ) {
+    let selected = state.editor.selected_item_id();
     let hotkeys = &mut state.hotkeys;
     for edge in edges {
         if edge.hotkey.is_held() {
@@ -101,14 +102,20 @@ pub fn act(
         if !edge.pressed {
             continue;
         }
-        pressed_action(edge.hotkey, snapshots, actions);
+        pressed_action(edge.hotkey, snapshots, selected, actions);
     }
     silence(hotkeys, bindings, actions);
 }
 
 /// What one hotkey going down does, decided by what is running — the same
-/// way the button it stands for decides.
-fn pressed_action(hotkey: Hotkey, snapshots: &Snapshots, actions: &mut Vec<UiAction>) {
+/// way the button it stands for decides — and, for the one about a Source,
+/// by which one is selected.
+fn pressed_action(
+    hotkey: Hotkey,
+    snapshots: &Snapshots,
+    selected: Option<SceneItemId>,
+    actions: &mut Vec<UiAction>,
+) {
     let status = &snapshots.status;
     match hotkey {
         Hotkey::Action(HotkeyAction::ToggleRecording) => {
@@ -135,6 +142,13 @@ fn pressed_action(hotkey: Hotkey, snapshots: &Snapshots, actions: &mut Vec<UiAct
             });
         }
         Hotkey::Action(HotkeyAction::Screenshot) => actions.push(UiAction::TakeScreenshot),
+        // Nothing with nothing selected, as the menu item it stands for is
+        // greyed out then.
+        Hotkey::Action(HotkeyAction::ScreenshotSource) => {
+            if let Some(item) = selected {
+                actions.push(UiAction::TakeSourceScreenshot(item));
+            }
+        }
         // The window's own, which never come through here — see `dispatch`.
         Hotkey::Action(HotkeyAction::Fullscreen | HotkeyAction::OpenSettings) => {}
         Hotkey::ToggleMute(id) => {

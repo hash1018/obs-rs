@@ -217,17 +217,20 @@ pub enum HotkeyAction {
     ToggleStreaming,
     /// Save what is being composited as a picture.
     Screenshot,
+    /// Save the selected Source's own picture.
+    ScreenshotSource,
     Fullscreen,
     OpenSettings,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ToggleRecording,
         Self::TogglePause,
         Self::ToggleStreaming,
         Self::Screenshot,
+        Self::ScreenshotSource,
         Self::Fullscreen,
         Self::OpenSettings,
     ];
@@ -311,6 +314,7 @@ pub struct HotkeySettings {
     pub toggle_pause: Binding,
     pub toggle_streaming: Binding,
     pub screenshot: Binding,
+    pub screenshot_source: Binding,
     pub fullscreen: Binding,
     pub open_settings: Binding,
     /// Only the channels and Scenes that have a key, so a file that binds
@@ -334,6 +338,7 @@ impl Default for HotkeySettings {
             // taking a picture each time it was pressed for its own sake
             // somewhere else — a Save As, a browser's own shortcut.
             screenshot: Binding(None),
+            screenshot_source: Binding(None),
             fullscreen: Chord::plain(Key::F11).into(),
             open_settings: Chord::ctrl(Key::Comma).into(),
             channels: Vec::new(),
@@ -350,6 +355,7 @@ impl HotkeySettings {
                 HotkeyAction::TogglePause => self.toggle_pause.0,
                 HotkeyAction::ToggleStreaming => self.toggle_streaming.0,
                 HotkeyAction::Screenshot => self.screenshot.0,
+                HotkeyAction::ScreenshotSource => self.screenshot_source.0,
                 HotkeyAction::Fullscreen => self.fullscreen.0,
                 HotkeyAction::OpenSettings => self.open_settings.0,
             },
@@ -372,6 +378,7 @@ impl HotkeySettings {
                 HotkeyAction::TogglePause => self.toggle_pause = binding,
                 HotkeyAction::ToggleStreaming => self.toggle_streaming = binding,
                 HotkeyAction::Screenshot => self.screenshot = binding,
+                HotkeyAction::ScreenshotSource => self.screenshot_source = binding,
                 HotkeyAction::Fullscreen => self.fullscreen = binding,
                 HotkeyAction::OpenSettings => self.open_settings = binding,
             },

@@ -862,6 +862,11 @@ impl ObsApp {
                     engine.take_screenshot();
                 }
             }
+            UiAction::TakeSourceScreenshot(item) => {
+                if let Some(engine) = &self.engine {
+                    engine.take_source_screenshot(item);
+                }
+            }
             UiAction::OpenSettings => {
                 // Seeded here rather than in the dialog: this is what holds
                 // the live settings, and a draft taken from anywhere else

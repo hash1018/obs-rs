@@ -20,6 +20,23 @@
 //! that is late costs nothing, and one that made the compositor wait while a
 //! PNG was compressed would be a stutter in the recording beside it.
 //!
+//! # One Source's picture
+//!
+//! Taken from the compositor too, but from the frame it holds for that
+//! Source's layer — what the layer draws from, filters and all, before the
+//! item's crop, placement and opacity, none of which are the Source's. That
+//! frame is there however long ago it arrived, so a still picture pushed
+//! once or a paused clip is taken at once, where a branch on the Source's
+//! own pipeline would wait for a frame that may not come. It goes through a
+//! pipeline of its own, built for that one frame:
+//!
+//! ```text
+//! AppSource ─ [NV12 → BGRA] ─ download ─ RGBA ─ this sink
+//! ```
+//!
+//! RGBA rather than the Canvas's RGB, because a keyed Source's transparency
+//! is what someone taking a picture of it alone is after.
+//!
 //! # Named for when it was taken
 //!
 //! Beside the recordings, under their prefix — see
@@ -41,8 +58,8 @@ pub(in crate::engine) type Taken = Result<PathBuf, String>;
 /// screenshots than one second holds.
 const MAX_SUFFIX: u32 = 1_000;
 
-/// The end of a screenshot's branch: writes the first RGB24 frame it is
-/// handed to a file beside `path`, and says how that went through `done`.
+/// The end of a screenshot's branch: writes the first RGB24 or RGBA frame it
+/// is handed to a file beside `path`, and says how that went through `done`.
 ///
 /// Every frame after the first is taken and dropped, for the moment between
 /// this answering and the engine detaching it.
@@ -62,39 +79,45 @@ pub(in crate::engine) fn sink(
     }))
 }
 
-/// Writes an RGB24 frame as a PNG, under `path` or the first free name
-/// beside it, and answers where it went.
+/// Writes an RGB24 or RGBA frame as a PNG, under `path` or the first free
+/// name beside it, and answers where it went.
+///
+/// RGBA for one Source's picture, whose alpha is the point when it has been
+/// keyed; RGB24 for the Canvas, which is opaque by construction.
 ///
 /// A file that could not be finished is removed rather than left half
 /// written: a PNG that stops partway opens as a broken image, which is worse
 /// than no file beside the message saying why.
 fn write_png(path: &Path, frame: &ffmpeg::frame::Video) -> io::Result<PathBuf> {
-    if frame.format() != ffmpeg::format::Pixel::RGB24 {
-        return Err(io::Error::other(format!(
-            "expected an RGB24 frame, got {:?}",
-            frame.format()
-        )));
-    }
+    let colour = match frame.format() {
+        ffmpeg::format::Pixel::RGB24 => png::ColorType::Rgb,
+        ffmpeg::format::Pixel::RGBA => png::ColorType::Rgba,
+        other => {
+            return Err(io::Error::other(format!(
+                "expected an RGB24 or RGBA frame, got {other:?}"
+            )));
+        }
+    };
     if let Some(directory) = path.parent() {
         std::fs::create_dir_all(directory)?;
     }
     let (file, written) = create_unique(path)?;
-    if let Err(error) = encode(file, frame) {
+    if let Err(error) = encode(file, frame, colour) {
         let _ = std::fs::remove_file(&written);
         return Err(error);
     }
     Ok(written)
 }
 
-fn encode(file: File, frame: &ffmpeg::frame::Video) -> io::Result<()> {
+fn encode(file: File, frame: &ffmpeg::frame::Video, colour: png::ColorType) -> io::Result<()> {
     let (width, height) = (frame.width(), frame.height());
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_color(colour);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(io::Error::other)?;
 
     // The frame's rows are padded out to its stride, and a PNG's are not.
-    let row = width as usize * 3;
+    let row = width as usize * colour.samples();
     let stride = frame.stride(0);
     let data = frame.data(0);
     let mut pixels = Vec::with_capacity(row * height as usize);
@@ -194,6 +217,22 @@ mod tests {
                 0, 90, 7, 40, 90, 7, 80, 90, 7,
             ]
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A Source's picture keeps its alpha: that is what a keyed one is for.
+    #[test]
+    fn an_rgba_frame_keeps_its_alpha() {
+        let directory = scratch("alpha");
+        media_pp::init().expect("ffmpeg initializes");
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 2, 1);
+        frame.data_mut(0)[..8].copy_from_slice(&[10, 20, 30, 0, 40, 50, 60, 255]);
+
+        let written = write_png(&directory.join("keyed.png"), &frame).expect("written");
+
+        let (width, height, pixels) = decode(&written);
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(pixels, [10, 20, 30, 0, 40, 50, 60, 255]);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

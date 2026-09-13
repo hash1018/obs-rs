@@ -200,6 +200,7 @@ text_keys! {
     HotkeyOpenSettings            => "hotkey-open-settings";
     HotkeyToggleStreaming         => "hotkey-toggle-streaming";
     HotkeyScreenshot              => "hotkey-screenshot";
+    HotkeyScreenshotSource        => "hotkey-screenshot-source";
     HotkeyPushToTalk              => "hotkey-push-to-talk";
     HotkeyPushToMute              => "hotkey-push-to-mute";
     HotkeyToggleMute              => "hotkey-toggle-mute";
@@ -287,6 +288,9 @@ text_keys! {
     MenuSettings                  => "menu-settings";
     MenuShowRecordings            => "menu-show-recordings";
     MenuScreenshot                => "menu-screenshot";
+    MenuScreenshotSource          => "menu-screenshot-source";
+    SourceScreenshot              => "source-screenshot";
+    SourceScreenshotUnavailable   => "source-screenshot-unavailable";
     StatusScreenshotSaved         => "status-screenshot-saved";
     StatusScreenshotFailed        => "status-screenshot-failed";
     StatusMemory                  => "status-memory";

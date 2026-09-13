@@ -326,6 +326,69 @@ impl Backend {
         Ok(self.tee.attach(branch)?)
     }
 
+    /// Writes one Source's picture through `sink` as RGBA, on a pipeline of
+    /// its own that ends once the frame is through — see
+    /// `output::screenshot`.
+    ///
+    /// `format` is what the texture holds — see
+    /// `OpenSource::picture_format` — since the download reads BGRA only
+    /// and an NV12 picture has to be converted on the GPU first.
+    pub(in crate::engine) fn screenshot_picture(
+        &self,
+        frame: Arc<media_pp::pool::UnboundObjectPoolRef<ffmpeg::frame::Video>>,
+        format: crate::engine::source::filters::ChainFormat,
+        sink: Box<dyn media_pp::element::Sink>,
+    ) -> Result<Arc<media_pp::pipeline::Pipeline>, BackendError> {
+        use media_pp::elements::AppSource;
+
+        let (width, height) = (frame.width(), frame.height());
+        let bridge = match format {
+            crate::engine::source::filters::ChainFormat::Bgra => None,
+            crate::engine::source::filters::ChainFormat::Nv12 => Some(D3d11Scaler::new(
+                "source-screenshot-to-bgra",
+                &self.device,
+                Arc::clone(&self.context),
+                D3d11ScalerFormat::Bgra,
+                width,
+                height,
+            )?),
+        };
+        let download = D3d11Download::new(
+            "source-screenshot-download",
+            &self.device,
+            Arc::clone(&self.context),
+            width,
+            height,
+        )?;
+        let convert = SwScaler::new(
+            "source-screenshot-convert",
+            ffmpeg::format::Pixel::RGBA,
+            width,
+            height,
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        );
+        let (source, pusher) = AppSource::new("source-screenshot", 1);
+        let pipeline = media_pp::pipeline::Pipeline::new(
+            "source-screenshot",
+            source,
+            move |source, context| {
+                let mut chain = context.branch();
+                if let Some(bridge) = bridge {
+                    chain = chain.pipe(bridge);
+                }
+                let branch = chain.pipe(download).pipe(convert).to(sink)?;
+                context.attach(source, 0, branch)?;
+                Ok(())
+            },
+        )?;
+        pipeline.run()?;
+        // Dropped as soon as the one frame is in: an `AppSource` whose last
+        // handle goes sends `Eos` after what it was given, which is what ends
+        // this pipeline once the picture is through.
+        pusher.push(media_pp::buffer::MediaBuffer::Video(frame))?;
+        Ok(pipeline)
+    }
+
     /// Takes a screenshot's branch off again. `detach` rather than
     /// `finish_branch`: there is no file waiting for an `Eos`, only a sink
     /// that has already written what it came for.

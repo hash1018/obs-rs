@@ -107,6 +107,30 @@ pub fn screenshot_file_in(directory: &Path, prefix: &str, taken: OffsetDateTime)
     directory.join(format!("{prefix}-{stamp}.png"))
 }
 
+/// Something a user named, made fit to stand in a file name on every
+/// filesystem this runs on: what Windows refuses is replaced with `_`, and
+/// what it quietly strips from the end — dots and spaces — is taken off.
+///
+/// For a Source's name in the name of its screenshot. The name is kept as
+/// close to what the user typed as the platform allows, since it is how the
+/// file is recognised afterwards.
+pub fn file_name_part(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|character| match character {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            character if character.is_control() => '_',
+            character => character,
+        })
+        .collect();
+    let trimmed = cleaned.trim_end_matches(['.', ' ']).trim_start();
+    if trimmed.is_empty() {
+        String::from("source")
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 /// Sortable, and legal on every filesystem this runs on — which rules out
 /// the colons of an ISO time.
 const STAMP: &[time::format_description::FormatItem<'static>] =
@@ -268,6 +292,21 @@ mod tests {
         assert_eq!(
             screenshot_file_in(Path::new("/tmp/clips"), "demo", taken),
             Path::new("/tmp/clips/demo-2026-09-13-143005.png")
+        );
+    }
+
+    /// A Source's name goes into a file name as typed, except for what a
+    /// filesystem would refuse or silently change.
+    #[test]
+    fn a_name_is_made_fit_for_a_file_name() {
+        assert_eq!(file_name_part("HCAM01L"), "HCAM01L");
+        assert_eq!(file_name_part("웹캠 1"), "웹캠 1");
+        assert_eq!(file_name_part("a/b:c*d?"), "a_b_c_d_");
+        assert_eq!(file_name_part("trailing. . "), "trailing");
+        assert_eq!(
+            file_name_part(" ..."),
+            "source",
+            "nothing left to name it by"
         );
     }
 

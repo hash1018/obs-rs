@@ -45,7 +45,10 @@ use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
 use crate::snapshots::{Role, SceneItemSnapshot, SourceStatus, SourcesSnapshot};
-use output::{Broadcast, BroadcastRequest, OutputKind, OutputState, describe, start_recording};
+use output::{
+    Broadcast, BroadcastRequest, OutputKind, OutputState, PendingScreenshot, describe,
+    start_recording,
+};
 
 use backend::{Backend, BackendError};
 use source::{
@@ -155,6 +158,8 @@ enum EngineCommand {
     /// Save the next composited frame as a picture. Carries no path, for the
     /// reason `StartRecording` does not.
     Screenshot,
+    /// Save one Source's own picture — what its layer holds, filters and all.
+    ScreenshotSource(SceneItemId),
     /// What the screenshot's branch wrote, from the branch's own thread —
     /// the engine's cue to take the branch off again.
     ScreenshotTaken(output::screenshot::Taken),
@@ -677,6 +682,13 @@ impl EngineManager {
     /// what says where it went or why it did not.
     pub fn take_screenshot(&self) {
         let _ = self.commands.send(EngineCommand::Screenshot);
+    }
+
+    /// Saves one Source's own picture — what its layer draws from, filters
+    /// and all, without the item's crop or placement — beside the
+    /// recordings, as [`EngineManager::take_screenshot`] saves the Canvas.
+    pub fn take_source_screenshot(&self, item: SceneItemId) {
+        let _ = self.commands.send(EngineCommand::ScreenshotSource(item));
     }
 
     /// The last screenshot and what came of it, once one has been taken.
@@ -1432,6 +1444,18 @@ struct Engine<'a> {
     replies: mpsc::Sender<EngineCommand>,
 }
 
+/// The end a screenshot is written through, which tells the loop when it has
+/// been — see `EngineCommand::ScreenshotTaken`.
+fn screenshot_sink(
+    engine: &Engine<'_>,
+    path: std::path::PathBuf,
+) -> Box<dyn media_pp::element::Sink> {
+    let replies = engine.replies.clone();
+    output::screenshot::sink(path, move |taken| {
+        let _ = replies.send(EngineCommand::ScreenshotTaken(taken));
+    })
+}
+
 /// Publishes what the last screenshot came to, and says so where a console
 /// is being read.
 fn report_screenshot(published: &Published, outcome: output::screenshot::Taken) {
@@ -1631,21 +1655,65 @@ fn apply_command(
                 recording.settings.prefix_or_default(),
                 crate::clock::now_local(),
             );
-            let replies = engine.replies.clone();
-            let sink = output::screenshot::sink(path, move |taken| {
-                let _ = replies.send(EngineCommand::ScreenshotTaken(taken));
-            });
+            let sink = screenshot_sink(engine, path);
             match engine.backend.attach_screenshot(sink) {
-                Ok(branch) => recording.screenshot = Some(branch),
+                Ok(branch) => recording.screenshot = Some(PendingScreenshot::Canvas(branch)),
+                Err(error) => report_screenshot(published, Err(error.to_string())),
+            }
+            false
+        }
+        EngineCommand::ScreenshotSource(item_id) => {
+            if recording.screenshot.is_some() {
+                return false;
+            }
+            let name = scene
+                .items
+                .iter()
+                .find(|item| item.id == item_id)
+                .map_or_else(|| String::from("source"), |item| item.name.clone());
+            // What the layer holds, which is there however long ago it came:
+            // a still picture pushed once, a paused clip.
+            let picture = match open.get(&item_id) {
+                Some(SourceState::Open(source)) => source
+                    .layer
+                    .latest_frame()
+                    .map(|frame| (frame, source.picture_format())),
+                _ => None,
+            };
+            let Some((frame, format)) = picture else {
+                report_screenshot(
+                    published,
+                    Err(format!("\"{name}\" is not showing a picture")),
+                );
+                return false;
+            };
+            let path = crate::paths::screenshot_file_in(
+                &recording.settings.directory_or_default(),
+                &format!(
+                    "{}-{}",
+                    recording.settings.prefix_or_default(),
+                    crate::paths::file_name_part(&name)
+                ),
+                crate::clock::now_local(),
+            );
+            let sink = screenshot_sink(engine, path);
+            match engine.backend.screenshot_picture(frame, format, sink) {
+                Ok(pipeline) => recording.screenshot = Some(PendingScreenshot::Source(pipeline)),
                 Err(error) => report_screenshot(published, Err(error.to_string())),
             }
             false
         }
         EngineCommand::ScreenshotTaken(taken) => {
-            if let Some(branch) = recording.screenshot.take()
-                && let Err(error) = engine.backend.detach_screenshot(branch)
-            {
-                eprintln!("could not take the screenshot's branch off: {error}");
+            match recording.screenshot.take() {
+                Some(PendingScreenshot::Canvas(branch)) => {
+                    if let Err(error) = engine.backend.detach_screenshot(branch) {
+                        eprintln!("could not take the screenshot's branch off: {error}");
+                    }
+                }
+                // Finished by itself already, its one frame through; this is
+                // what joins its thread rather than leaving it to a drop.
+                Some(PendingScreenshot::Source(pipeline)) => pipeline.stop(),
+                None => {}
             }
             report_screenshot(published, taken);
             false

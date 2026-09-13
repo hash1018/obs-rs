@@ -470,6 +470,21 @@ pub(in crate::engine) fn refresh_pushed(source: &mut OpenSource, item: &SceneIte
     push_content(source, wanted);
 }
 
+impl OpenSource {
+    /// What this Source's compositor layer holds: BGRA or NV12, as the last
+    /// element before it hands it over — which is its rack.
+    ///
+    /// What a screenshot of the Source has to download from. Worked out
+    /// rather than read off the frame, because neither backend's frames say:
+    /// a D3D11 frame is a texture pointer, and a CUDA one says only through
+    /// its frames context. For the frame of a refill that has not reached
+    /// the layer yet this is a frame early, and the download that follows
+    /// refuses the texture rather than misreading it.
+    pub(in crate::engine) fn picture_format(&self) -> filters::ChainFormat {
+        self.filter_rack.output(!self.filters.is_empty())
+    }
+}
+
 /// The push itself, which the mid-gesture drawing path needs on its own: it
 /// has the strokes in hand and no snapshot to read them back out of, because
 /// the project has not been told about them yet.

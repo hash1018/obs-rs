@@ -37,6 +37,21 @@ pub fn show(
                         actions.push(UiAction::TakeScreenshot);
                         ui.close();
                     }
+                    // The Sources dock's right click does the same for any
+                    // row; this is where it can be found without knowing
+                    // that, and it acts on what is selected.
+                    let selected = state.editor.selected_item_id();
+                    if ui
+                        .add_enabled(
+                            selected.is_some(),
+                            egui::Button::new(i18n.text(TextKey::MenuScreenshotSource)),
+                        )
+                        .clicked()
+                        && let Some(item) = selected
+                    {
+                        actions.push(UiAction::TakeSourceScreenshot(item));
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button(i18n.text(TextKey::MenuExit)).clicked() {
                         actions.push(UiAction::Exit);

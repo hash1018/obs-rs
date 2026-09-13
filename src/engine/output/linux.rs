@@ -320,6 +320,53 @@ impl Backend {
         Ok(self.tee.attach(branch)?)
     }
 
+    /// Writes one Source's picture through `sink` as RGBA — see the D3D11
+    /// twin. The download is told which layout the surface is in, since it
+    /// reads one and refuses the other.
+    pub(in crate::engine) fn screenshot_picture(
+        &self,
+        frame: std::sync::Arc<media_pp::pool::UnboundObjectPoolRef<ffmpeg::frame::Video>>,
+        format: crate::engine::source::filters::ChainFormat,
+        sink: Box<dyn media_pp::element::Sink>,
+    ) -> Result<std::sync::Arc<media_pp::pipeline::Pipeline>, BackendError> {
+        use media_pp::elements::AppSource;
+
+        let (width, height) = (frame.width(), frame.height());
+        let layout = match format {
+            crate::engine::source::filters::ChainFormat::Bgra => CudaFrameFormat::Bgra,
+            crate::engine::source::filters::ChainFormat::Nv12 => CudaFrameFormat::Nv12,
+        };
+        let download = CudaDownload::new(
+            "source-screenshot-download",
+            &self.device,
+            layout,
+            width,
+            height,
+        );
+        let convert = SwScaler::new(
+            "source-screenshot-convert",
+            ffmpeg::format::Pixel::RGBA,
+            width,
+            height,
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        );
+        let (source, pusher) = AppSource::new("source-screenshot", 1);
+        let pipeline = media_pp::pipeline::Pipeline::new(
+            "source-screenshot",
+            source,
+            move |source, context| {
+                let branch = context.branch().pipe(download).pipe(convert).to(sink)?;
+                context.attach(source, 0, branch)?;
+                Ok(())
+            },
+        )?;
+        pipeline.run()?;
+        // Dropped once the frame is in, which is what ends the pipeline —
+        // see the D3D11 twin.
+        pusher.push(media_pp::buffer::MediaBuffer::Video(frame))?;
+        Ok(pipeline)
+    }
+
     /// Takes a screenshot's branch off again — see the D3D11 twin.
     pub(in crate::engine) fn detach_screenshot(
         &self,
