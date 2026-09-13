@@ -1109,8 +1109,10 @@ mod tests {
             ],
             ..SourcesSnapshot::default()
         };
-        let dropped =
-            std::collections::HashMap::from([(SceneItemId(4), SourceStatus::Disconnected)]);
+        let dropped = std::collections::HashMap::from([(
+            SceneItemId(4),
+            SourceStatus::Disconnected(Some("the stream stopped arriving".into())),
+        )]);
         let audio = AudioSnapshot { items: Vec::new() };
         let columns = channels(&audio, &sources, Some(&dropped));
 

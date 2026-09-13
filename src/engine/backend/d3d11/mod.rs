@@ -32,7 +32,7 @@ use crate::domain::SourceKind;
 use crate::engine::audio::MeterWake;
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::{self, OpenSource};
+use crate::engine::source::{self, OpenOutcome};
 
 use super::{BACKGROUND, BackendError};
 
@@ -255,7 +255,7 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
-    ) -> Result<Option<OpenSource>, BackendError> {
+    ) -> Result<OpenOutcome, BackendError> {
         let opened = self.open_kind(item, layer, fps, mixer);
         if opened.is_err() {
             self.remove_source(&crate::engine::source::input_name(item));
@@ -269,7 +269,7 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
-    ) -> Result<Option<OpenSource>, BackendError> {
+    ) -> Result<OpenOutcome, BackendError> {
         // Every kind takes the context as well as the device: each one's
         // filters are built on it, whatever the kind does without them.
         let context = self.context.clone();
@@ -283,7 +283,7 @@ impl Backend {
                 layer,
                 fps,
             )
-            .map(Some),
+            .map(OpenOutcome::Open),
             SourceKind::WindowCapture => source::window_capture::open(
                 &self.device,
                 context,
@@ -317,14 +317,16 @@ impl Backend {
                 source::image::open(&self.device, context, &self.compositor, item, layer)
             }
             SourceKind::Color => {
-                source::color::open(&self.device, context, &self.compositor, item, layer).map(Some)
+                source::color::open(&self.device, context, &self.compositor, item, layer)
+                    .map(OpenOutcome::Open)
             }
             SourceKind::Drawing => {
                 source::drawing::open(&self.device, context, &self.compositor, item, layer)
-                    .map(Some)
+                    .map(OpenOutcome::Open)
             }
             SourceKind::Text => {
-                source::text::open(&self.device, context, &self.compositor, item, layer).map(Some)
+                source::text::open(&self.device, context, &self.compositor, item, layer)
+                    .map(OpenOutcome::Open)
             }
         }
     }

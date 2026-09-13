@@ -27,7 +27,7 @@ use crate::engine::audio::MeterWake;
 use crate::settings::RecordingEncoder;
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::{self, OpenSource};
+use crate::engine::source::{self, OpenOutcome};
 
 use super::{BACKGROUND, BackendError};
 
@@ -269,7 +269,7 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
-    ) -> Result<Option<OpenSource>, BackendError> {
+    ) -> Result<OpenOutcome, BackendError> {
         let opened = self.open_kind(item, layer, fps, mixer);
         if opened.is_err() {
             self.remove_source(&crate::engine::source::input_name(item));
@@ -283,7 +283,7 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
-    ) -> Result<Option<OpenSource>, BackendError> {
+    ) -> Result<OpenOutcome, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => {
                 let (source, frame_rate) = source::display_capture::open(
@@ -299,19 +299,16 @@ impl Backend {
                     .lock()
                     .expect("capture rates poisoned")
                     .insert(source.name.clone(), frame_rate);
-                Ok(Some(source))
+                Ok(OpenOutcome::Open(source))
             }
             SourceKind::WindowCapture => {
-                let Some((source, frame_rate)) =
-                    source::window_capture::open(&self.device, &self.compositor, item, layer, fps)?
-                else {
-                    return Ok(None);
-                };
+                let (source, frame_rate) =
+                    source::window_capture::open(&self.device, &self.compositor, item, layer, fps)?;
                 self.capture_rates
                     .lock()
                     .expect("capture rates poisoned")
                     .insert(source.name.clone(), frame_rate);
-                Ok(Some(source))
+                Ok(OpenOutcome::Open(source))
             }
             SourceKind::MediaFile => source::media_file::open(
                 &self.device,
@@ -333,15 +330,14 @@ impl Backend {
                 source::video_capture::open(&self.device, &self.compositor, item, layer)
             }
             SourceKind::Image => source::image::open(&self.device, &self.compositor, item, layer),
-            SourceKind::Color => {
-                source::color::open(&self.device, &self.compositor, item, layer).map(Some)
-            }
+            SourceKind::Color => source::color::open(&self.device, &self.compositor, item, layer)
+                .map(OpenOutcome::Open),
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, &self.compositor, item, layer).map(Some)
+                source::drawing::open(&self.device, &self.compositor, item, layer)
+                    .map(OpenOutcome::Open)
             }
-            SourceKind::Text => {
-                source::text::open(&self.device, &self.compositor, item, layer).map(Some)
-            }
+            SourceKind::Text => source::text::open(&self.device, &self.compositor, item, layer)
+                .map(OpenOutcome::Open),
         }
     }
 }

@@ -60,11 +60,13 @@ pub(in crate::ui) fn show(
                     i18n.text(TextKey::PropertiesKind).as_ref(),
                     i18n.text(kind_key(item.kind)).as_ref(),
                 );
+                let status = status.and_then(|status| status.get(&item.id));
+                if let Some(trouble) = status.and_then(|status| trouble(status, i18n)) {
+                    row(ui, i18n.text(TextKey::PropertiesStatus).as_ref(), &trouble);
+                }
                 show_placement(ui, item, editor, i18n);
                 show_crop(ui, item, editor, i18n, actions);
-                let ended = status
-                    .and_then(|status| status.get(&item.id))
-                    .is_some_and(|status| *status == SourceStatus::Ended);
+                let ended = status.is_some_and(|status| *status == SourceStatus::Ended);
                 show_settings(ui, item, ended, i18n, actions);
             });
     });
@@ -1146,6 +1148,25 @@ fn row(ui: &mut egui::Ui, label: &str, value: &str) {
         field.on_hover_text(value);
     }
     ui.end_row();
+}
+
+/// What is wrong with a Source that is not showing, as one line: the word
+/// the Sources list puts beside it, and the engine's reason after it.
+///
+/// Here as well as on the badge's hover because a hover is easy to miss and
+/// cannot be copied, and a reason — an FFmpeg error, a server's refusal — is
+/// exactly what someone asking for help needs to paste. `None` for a file
+/// that played out, which is not trouble and has its own place in this dock.
+fn trouble(status: &SourceStatus, i18n: &LocalizationManager) -> Option<String> {
+    let word = i18n.text(match status {
+        SourceStatus::Failed(_) => TextKey::SourceFailed,
+        SourceStatus::Disconnected(_) => TextKey::SourceDisconnected,
+        SourceStatus::Ended => return None,
+    });
+    Some(match status.reason() {
+        Some(reason) => format!("{word} — {reason}"),
+        None => word.to_string(),
+    })
 }
 
 /// What a `TextEdit` keeps for itself either side of its text.

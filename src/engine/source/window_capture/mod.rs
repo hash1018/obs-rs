@@ -4,9 +4,9 @@
 //!
 //! A window is closed and reopened as a matter of course — that is what
 //! windows are for — so a target that is not on screen right now is an
-//! ordinary state rather than an error. Opening one answers `Ok(None)` for
-//! it, and the engine keeps the Source as [`SourceState::Missing`] and looks
-//! again. A real failure — a handle that will not open, a device that will
+//! ordinary state rather than an error. Opening one answers
+//! [`OpenOutcome::Absent`](super::OpenOutcome::Absent) for it, and the engine
+//! keeps the Source as [`SourceState::Missing`] and looks again. A real failure — a handle that will not open, a device that will
 //! not do BGRA — is still `Err`, and still terminal.
 //!
 //! [`SourceState::Missing`]: crate::engine::SourceState

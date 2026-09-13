@@ -150,6 +150,19 @@ pub(in crate::engine) struct SourceFilters {
     pub(in crate::engine) open: Vec<filters::OpenFilter>,
 }
 
+/// Whether the file a Source was pointed at is there to be read, and if not,
+/// the sentence the Sources list says instead.
+///
+/// `is_file` rather than `exists`: a directory picked through some other
+/// route is not something to hand a demuxer, and it will not become one.
+pub(in crate::engine) fn present_file(path: &std::path::Path) -> Result<(), String> {
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(format!("{} is not there", path.display()))
+    }
+}
+
 /// A stored size hint as whole, even pixels — what a Source whose size is not
 /// known until it runs builds its rack for.
 pub(in crate::engine) fn hinted_size(item: &SceneItemSnapshot) -> [u32; 2] {
@@ -180,6 +193,25 @@ pub(in crate::engine) enum PushedContent {
     /// pixels exactly as the words do, and each has to be noticed the same
     /// way — see [`push_content`].
     Text(crate::domain::TextSourceSettings),
+}
+
+/// What opening a Source came to, when nothing went wrong.
+///
+/// Not an `Option`, which is what it used to be: "not there" has as many
+/// causes as a failure has — a file on a drive that is not mounted, a window
+/// that is closed, a camera another program holds, a stream that does not
+/// answer or will not let this in — and the Sources list is the only place a
+/// user can learn which, since a shipped build has no console to read.
+///
+/// Not boxed, for the reason `SourceState` is not: it is moved once per
+/// open, as the `Option` it replaced was, and that was the same size.
+#[allow(clippy::large_enum_variant)]
+pub(in crate::engine) enum OpenOutcome {
+    Open(OpenSource),
+    /// What this Source shows is not there right now, and why. A state
+    /// rather than a failure: the engine looks again — see
+    /// `SourceState::Missing`.
+    Absent(String),
 }
 
 /// A Source that is running, and the controls for its layer.

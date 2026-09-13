@@ -17,11 +17,11 @@ use crate::capture::WindowTarget;
 use crate::domain::{SourceSettings, WindowCaptureTarget};
 use crate::engine::backend::{BackendError, RunningSource};
 use crate::engine::source::{
-    FilledRack, OpenSource, filled_rack, filters, hinted_size, input_name,
+    FilledRack, OpenOutcome, OpenSource, filled_rack, filters, hinted_size, input_name,
 };
 use crate::snapshots::SceneItemSnapshot;
 
-/// `Ok(None)` when the window is not on screen — see this module's parent.
+/// `Absent` when the window is not on screen — see this module's parent.
 pub(in crate::engine) fn open(
     device: &ID3D11Device,
     context: Arc<Mutex<ID3D11DeviceContext>>,
@@ -29,7 +29,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
-) -> Result<Option<OpenSource>, BackendError> {
+) -> Result<OpenOutcome, BackendError> {
     let SourceSettings::WindowCapture(settings) = &item.settings else {
         return Err("scene item is not a window capture".into());
     };
@@ -37,7 +37,9 @@ pub(in crate::engine) fn open(
         return Err("a portal target cannot be resolved on Windows".into());
     };
     let Some(target) = resolve(process, title) else {
-        return Ok(None);
+        return Ok(OpenOutcome::Absent(format!(
+            "no window of {process} is open"
+        )));
     };
 
     let name = input_name(item);
@@ -78,7 +80,7 @@ pub(in crate::engine) fn open(
     })?;
     pipeline.run()?;
 
-    Ok(Some(OpenSource {
+    Ok(OpenOutcome::Open(OpenSource {
         media_file: None,
         source: RunningSource::Owned(pipeline),
         layer,

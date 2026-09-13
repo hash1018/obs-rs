@@ -4,9 +4,10 @@
 //!
 //! A camera is unplugged, switched off, or picked up by a video call as a
 //! matter of course, so a device that will not open right now is an ordinary
-//! state rather than an error. Opening one answers `Ok(None)` for it, the
-//! engine holds the Source [`SourceState::Missing`], and `retry_missing`
-//! looks again — the same standing a closed window has.
+//! state rather than an error. Opening one answers
+//! [`OpenOutcome::Absent`](super::OpenOutcome::Absent) for it, with what the
+//! device said, the engine holds the Source [`SourceState::Missing`], and
+//! `retry_missing` looks again — the same standing a closed window has.
 //!
 //! One that goes away *while* it is running ends its pipeline, which
 //! `notice_dropped_streams` turns back into `Missing` for the same reason it

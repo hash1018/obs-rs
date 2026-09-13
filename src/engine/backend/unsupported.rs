@@ -11,7 +11,7 @@ use media_pp::elements::VideoLayer;
 
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::{OpenSource, unsupported_kind};
+use crate::engine::source::{OpenOutcome, unsupported_kind};
 
 use super::BackendError;
 
@@ -63,7 +63,7 @@ impl Backend {
         _layer: VideoLayer,
         _fps: u32,
         _mixer: Option<&media_pp::elements::MixerHandle>,
-    ) -> Result<Option<OpenSource>, BackendError> {
+    ) -> Result<OpenOutcome, BackendError> {
         Err(unsupported_kind(item))
     }
 

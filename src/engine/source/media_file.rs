@@ -6,7 +6,7 @@
 //! A path is stored as it was picked and never resolved to anything else, so
 //! a file on a drive that is not mounted, or one that has been moved, is an
 //! ordinary state rather than an error — the same standing a closed window
-//! has. Opening one answers `Ok(None)` for it and the engine keeps the Source
+//! has. Opening one answers `OpenOutcome::Absent` for it and the engine keeps the Source
 //! [`SourceState::Missing`] and looks again. A file that is *there* and will
 //! not demux is a real failure and still `Err`.
 //!
@@ -118,15 +118,13 @@ struct Chosen {
     audio: Option<Track>,
 }
 
-/// The settings this item is, and the file it names — or `None` where the
-/// file is not there right now.
-fn settings(item: &SceneItemSnapshot) -> Result<Option<&MediaFileSettings>, BackendError> {
+/// The settings this item is — or why the file it names cannot be read right
+/// now.
+fn settings(item: &SceneItemSnapshot) -> Result<Result<&MediaFileSettings, String>, BackendError> {
     let crate::domain::SourceSettings::MediaFile(settings) = &item.settings else {
         return Err("scene item is not a media file".into());
     };
-    // `is_file` rather than `exists`: a directory picked through some other
-    // route is not something to hand a demuxer, and it will not become one.
-    Ok(settings.path.is_file().then_some(settings))
+    Ok(super::present_file(&settings.path).map(|()| settings))
 }
 
 /// Picks the streams to play and reads what each branch is built from.
@@ -321,14 +319,15 @@ pub(in crate::engine) fn open(
     meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
-) -> Result<Option<super::OpenSource>, BackendError> {
+) -> Result<super::OpenOutcome, BackendError> {
     use media_pp::elements::{D3d11Decoder, D3d11VideoCompositorInput};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
 
-    let Some(settings) = settings(item)? else {
-        return Ok(None);
+    let settings = match settings(item)? {
+        Ok(settings) => settings,
+        Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
     let name = input_name(item);
     let (demuxer, streams) = FileDemuxer::open(name.clone(), &settings.path)?;
@@ -411,7 +410,7 @@ pub(in crate::engine) fn open(
     })?;
     start(&pipeline, settings.paused)?;
 
-    Ok(Some(OpenSource {
+    Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource::Owned(Arc::clone(&pipeline)),
         layer,
         name,
@@ -440,14 +439,15 @@ pub(in crate::engine) fn open(
     meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
-) -> Result<Option<super::OpenSource>, BackendError> {
+) -> Result<super::OpenOutcome, BackendError> {
     use media_pp::elements::{CudaDecoder, CudaVideoCompositorInput};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
 
-    let Some(settings) = settings(item)? else {
-        return Ok(None);
+    let settings = match settings(item)? {
+        Ok(settings) => settings,
+        Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
     let name = input_name(item);
     let (demuxer, streams) = FileDemuxer::open(name.clone(), &settings.path)?;
@@ -523,7 +523,7 @@ pub(in crate::engine) fn open(
     })?;
     start(&pipeline, settings.paused)?;
 
-    Ok(Some(OpenSource {
+    Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource(Arc::clone(&pipeline)),
         layer,
         name,

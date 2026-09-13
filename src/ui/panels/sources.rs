@@ -216,7 +216,7 @@ pub(in crate::ui) fn show(
                     show_rename_editor(ui, state, snapshot, item, i18n, actions);
                     continue;
                 }
-                let status = status.and_then(|items| items.get(&item.id)).copied();
+                let status = status.and_then(|items| items.get(&item.id));
                 show_source_row(ui, state, editor, item, status, i18n, actions);
             }
         });
@@ -424,7 +424,7 @@ fn show_source_row(
     state: &mut SourcesPanelState,
     editor: &mut SceneEditorState,
     item: &SceneItemSnapshot,
-    status: Option<SourceStatus>,
+    status: Option<&SourceStatus>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -485,9 +485,11 @@ fn show_source_row(
         response.on_hover_text(kind)
     };
 
-    // Only a disconnected Source offers to be opened again; a file that
-    // played out did what it was asked and has nothing to recover from.
-    if status == Some(SourceStatus::Disconnected) && badge.is_some_and(|badge| badge.clicked()) {
+    // A Source that failed or went away offers to be opened again; a file
+    // that played out did what it was asked and has nothing to recover from.
+    if status.is_some_and(|status| *status != SourceStatus::Ended)
+        && badge.is_some_and(|badge| badge.clicked())
+    {
         actions.push(UiAction::ReopenSource(item.id));
     } else if eye.clicked() {
         actions.push(source_action(SourceCommand::SetVisible(
@@ -615,14 +617,19 @@ fn judge_rename(typed: &str, current: &str, names: &HashSet<String>) -> RenameOu
 /// and the row has the width for it once the name gives way. Clickable
 /// because on Linux reopening is the user's to ask for — the portal picker is
 /// a dialog, so nothing may raise it on its own.
+///
+/// Why is on hover, above the offer to reopen: the word says which kind of
+/// trouble this is, and the reason — a missing file, a refused password —
+/// is what decides whether reopening is worth a click.
 fn show_status_badge(
     ui: &egui::Ui,
     row: egui::Rect,
-    status: SourceStatus,
+    status: &SourceStatus,
     i18n: &LocalizationManager,
 ) -> egui::Response {
     let text = i18n.text(match status {
-        SourceStatus::Disconnected => TextKey::SourceDisconnected,
+        SourceStatus::Failed(_) => TextKey::SourceFailed,
+        SourceStatus::Disconnected(_) => TextKey::SourceDisconnected,
         SourceStatus::Ended => TextKey::SourceEnded,
     });
     let galley = elide::one_row(ui, &text, row.width(), &egui::TextStyle::Small);
@@ -636,7 +643,7 @@ fn show_status_badge(
     );
     // A finished file is news, not a warning: nothing went wrong and there is
     // nothing to click, so it neither senses clicks nor offers to reopen.
-    let ended = status == SourceStatus::Ended;
+    let ended = *status == SourceStatus::Ended;
     let sense = if ended {
         egui::Sense::hover()
     } else {
@@ -650,7 +657,7 @@ fn show_status_badge(
     let response = if ended {
         response
     } else {
-        response.on_hover_text(i18n.text(TextKey::SourceReopen))
+        response.on_hover_text(badge_hint(status, &i18n.text(TextKey::SourceReopen)))
     };
     let base = if ended {
         ui.visuals().weak_text_color()
@@ -664,6 +671,15 @@ fn show_status_badge(
     };
     ui.painter().galley(rect.min, galley, color);
     response
+}
+
+/// What hovering a badge says: why, where the engine said, and then what a
+/// click does.
+fn badge_hint(status: &SourceStatus, reopen: &str) -> String {
+    match status.reason() {
+        Some(reason) => format!("{reason}\n{reopen}"),
+        None => reopen.to_owned(),
+    }
 }
 
 /// The clickable area of one row icon, in the slot at `column`.
@@ -1480,6 +1496,24 @@ mod tests {
     use crate::capture::MonitorRect;
     use crate::domain::{Crop, SourceSettings, Transform};
     use crate::i18n::Locale;
+
+    /// Hovering a dark Source says why before it says what a click does —
+    /// the reason is what decides whether the click is worth making — and
+    /// one with no reason says only what a click does.
+    #[test]
+    fn a_badge_says_why_before_offering_to_try_again() {
+        assert_eq!(
+            badge_hint(
+                &SourceStatus::Failed("the file has no video stream".into()),
+                "Click to try again"
+            ),
+            "the file has no video stream\nClick to try again"
+        );
+        assert_eq!(
+            badge_hint(&SourceStatus::Disconnected(None), "Click to try again"),
+            "Click to try again"
+        );
+    }
 
     fn item(id: i64, name: &str) -> SceneItemSnapshot {
         SceneItemSnapshot {

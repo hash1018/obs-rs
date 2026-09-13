@@ -1,19 +1,39 @@
 use std::collections::HashMap;
 
+use std::sync::Arc;
+
 /// Why a Source that is in the Scene is drawing nothing.
 ///
-/// Two states rather than one flag, because they are not the same news and
-/// do not offer the same thing to do about them. A disconnected Source is
-/// something that went wrong or went away and can be asked for again; a
-/// finished file did exactly what it was told to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Not one flag, because these are not the same news and do not offer the
+/// same thing to do about them. A Source that could not be opened, or went
+/// away, can be asked for again; a finished file did exactly what it was
+/// told to.
+///
+/// The reasons are the engine's own sentences, in English — what a device,
+/// a server or FFmpeg said. They are shown as they are, beside a translated
+/// word that says which of these it is; translating every error a codec can
+/// raise is not a thing this could keep up with.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceStatus {
-    /// Not running, and nothing will open it again without being asked.
-    Disconnected,
+    /// Opening it failed, and it has not been opened since.
+    Failed(Arc<str>),
+    /// Not running: gone, not there yet, or waiting to be asked for — and
+    /// why, where that is known.
+    Disconnected(Option<Arc<str>>),
     /// A media file that reached the end and was not looping.
     Ended,
 }
-use std::sync::Arc;
+
+impl SourceStatus {
+    /// Why, in the engine's words, where it said.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Failed(reason) => Some(reason),
+            Self::Disconnected(reason) => reason.as_deref(),
+            Self::Ended => None,
+        }
+    }
+}
 use std::time::Duration;
 
 use crate::resources::GpuUsage;

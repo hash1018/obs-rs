@@ -33,15 +33,16 @@ use crate::snapshots::SceneItemSnapshot;
 
 use super::super::backend::{BackendError, Layer, RunningSource};
 use super::{
-    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filters, input_name,
+    FilledRack, OpenOutcome, OpenSource, PushedContent, PushedSurface, SourceFilters, filters,
+    input_name,
 };
 
-/// The file this item names, or `None` where it is not there right now.
-fn settings(item: &SceneItemSnapshot) -> Result<Option<&Path>, BackendError> {
+/// The file this item names, or why it cannot be read right now.
+fn settings(item: &SceneItemSnapshot) -> Result<Result<&Path, String>, BackendError> {
     let SourceSettings::Image(settings) = &item.settings else {
         return Err("scene item is not an image source".into());
     };
-    Ok(settings.path.is_file().then_some(settings.path.as_path()))
+    Ok(super::present_file(&settings.path).map(|()| settings.path.as_path()))
 }
 
 /// The picture as one BGRA frame, and the size it was made at.
@@ -160,11 +161,12 @@ pub(in crate::engine) fn open(
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
-) -> Result<Option<OpenSource>, BackendError> {
+) -> Result<OpenOutcome, BackendError> {
     use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
 
-    let Some(path) = settings(item)? else {
-        return Ok(None);
+    let path = match settings(item)? {
+        Ok(path) => path,
+        Err(absent) => return Ok(OpenOutcome::Absent(absent)),
     };
     let (frame, size) = decode(path)?;
     let name = input_name(item);
@@ -199,7 +201,7 @@ pub(in crate::engine) fn open(
         filters,
         Decoded { frame, size, path },
     )
-    .map(Some)
+    .map(OpenOutcome::Open)
 }
 
 #[cfg(target_os = "linux")]
@@ -208,11 +210,12 @@ pub(in crate::engine) fn open(
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
-) -> Result<Option<OpenSource>, BackendError> {
+) -> Result<OpenOutcome, BackendError> {
     use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
 
-    let Some(path) = settings(item)? else {
-        return Ok(None);
+    let path = match settings(item)? {
+        Ok(path) => path,
+        Err(absent) => return Ok(OpenOutcome::Absent(absent)),
     };
     let (frame, size) = decode(path)?;
     let name = input_name(item);
@@ -246,5 +249,5 @@ pub(in crate::engine) fn open(
         filters,
         Decoded { frame, size, path },
     )
-    .map(Some)
+    .map(OpenOutcome::Open)
 }

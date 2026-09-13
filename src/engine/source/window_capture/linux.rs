@@ -2,7 +2,7 @@
 //!
 //! The same element a Display Capture uses, told to list windows rather than
 //! monitors. Nothing is resolved here — the portal names no window, so there
-//! is no "not found" state and this never answers `Ok(None)`.
+//! is no "not found" state: this opens what the portal hands over, or fails.
 
 use media_pp::elements::{
     CaptureSourceKind, CudaConverter, CudaDevice, CudaFrameFormat, CudaVideoCompositorHandle,
@@ -24,7 +24,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
-) -> Result<Option<(OpenSource, FrameRateHandle)>, BackendError> {
+) -> Result<(OpenSource, FrameRateHandle), BackendError> {
     let SourceSettings::WindowCapture(settings) = &item.settings else {
         return Err("scene item is not a window capture".into());
     };
@@ -100,7 +100,7 @@ pub(in crate::engine) fn open(
     })?;
     pipeline.run()?;
 
-    Ok(Some((
+    Ok((
         OpenSource {
             media_file: None,
             negotiated_size: Some([format.width, format.height]),
@@ -115,5 +115,5 @@ pub(in crate::engine) fn open(
             pushed: None,
         },
         frame_rate,
-    )))
+    ))
 }

@@ -44,11 +44,15 @@ pub(super) fn publish_source_status(
                 // start, which on most of them is one frame.
                 SourceState::Opening => return None,
                 SourceState::Ended => SourceStatus::Ended,
-                // Failed, Missing and Disconnected are one thing to a reader:
-                // it is not showing, and the engine is not going to fix it by
-                // itself. Which of the three it is decides what this side
-                // does next, not what the list says.
-                _ => SourceStatus::Disconnected,
+                // Never opened, which "disconnected" would not be true of.
+                SourceState::Failed(reason) => SourceStatus::Failed(Arc::clone(reason)),
+                // Missing and Disconnected are one thing to a reader: it was
+                // there, or will be, and is not showing now. Which of the two
+                // it is decides what this side does next — look again, or
+                // wait to be asked — not what the list says.
+                SourceState::Missing { reason, .. } | SourceState::Disconnected(reason) => {
+                    SourceStatus::Disconnected(reason.clone())
+                }
             };
             Some((*id, status))
         })
@@ -135,12 +139,27 @@ pub(super) fn notice_dropped_streams(
         eprintln!("\"{}\": the stream stopped arriving", item.name);
         source.source.stop();
         backend.remove_source(&source.name);
-        let state = if needs_asking(item) {
-            SourceState::Disconnected
-        } else {
-            SourceState::Missing(Instant::now())
+        // What ended it is in media-pp's log by now; what this can say is
+        // which way it ended.
+        let reason = match item.kind {
+            SourceKind::VideoCapture => "the camera stopped sending pictures",
+            _ => "the stream stopped arriving",
         };
-        open.insert(item.id, state);
+        open.insert(item.id, gone(item, reason));
+    }
+}
+
+/// Where a Source that stopped by itself goes: back to be looked for, or to
+/// wait to be asked — see `needs_asking` — with why it stopped.
+fn gone(item: &crate::snapshots::SceneItemSnapshot, reason: &str) -> SourceState {
+    let reason = Some(Arc::from(reason));
+    if needs_asking(item) {
+        SourceState::Disconnected(reason)
+    } else {
+        SourceState::Missing {
+            since: Instant::now(),
+            reason,
+        }
     }
 }
 
@@ -169,14 +188,7 @@ pub(super) fn notice_closed_windows(
         }
         source.source.stop();
         backend.remove_source(&source.name);
-        // Whether the engine may go looking by itself, or has to wait to be
-        // asked.
-        let state = if needs_asking(item) {
-            SourceState::Disconnected
-        } else {
-            SourceState::Missing(Instant::now())
-        };
-        open.insert(item.id, state);
+        open.insert(item.id, gone(item, "the window was closed"));
     }
 }
 

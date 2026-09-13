@@ -11,7 +11,7 @@ use media_pp::pipeline::Pipeline;
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenSource, filters, input_name};
+use crate::engine::source::{OpenOutcome, OpenSource, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Frames held between the camera and the upload — see the Windows half,
@@ -20,21 +20,22 @@ use crate::snapshots::SceneItemSnapshot;
 /// timeline to replay.
 const QUEUE_DEPTH: usize = 2;
 
-/// `Ok(None)` when the camera is not there to open — see this module's
+/// `Absent` when the camera is not there to open — see this module's
 /// parent.
 pub(in crate::engine) fn open(
     device: &Arc<CudaDevice>,
     handle: &CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
-) -> Result<Option<OpenSource>, BackendError> {
+) -> Result<OpenOutcome, BackendError> {
     let SourceSettings::VideoCapture(settings) = &item.settings else {
         return Err("scene item is not a video capture".into());
     };
 
     let name = input_name(item);
-    let Some((source, format)) = start(&name, settings, &item.name) else {
-        return Ok(None);
+    let (source, format) = match start(&name, settings, &item.name) {
+        Ok(opened) => opened,
+        Err(absent) => return Ok(OpenOutcome::Absent(absent)),
     };
 
     // NV12 in system memory from the camera, straight into a CUDA surface —
@@ -75,7 +76,7 @@ pub(in crate::engine) fn open(
     })?;
     pipeline.run()?;
 
-    Ok(Some(OpenSource {
+    Ok(OpenOutcome::Open(OpenSource {
         media_file: None,
         negotiated_size: Some([format.width, format.height]),
         source: RunningSource(pipeline),
@@ -90,14 +91,14 @@ pub(in crate::engine) fn open(
     }))
 }
 
-/// Opens the camera, or answers `None` for one that is not available.
+/// Opens the camera, or answers why it is not available.
 ///
 /// Every failure to open is read as "not there", which is what makes an
 /// unplugged camera a state rather than an error: a device that was removed,
 /// one a video call is already holding, and a stored node that no longer
 /// names anything are indistinguishable from here, and treating any of them
 /// as fatal would leave a Source that never comes back on its own. What the
-/// log says is the difference.
+/// device said is the difference, and it is what the Sources list shows.
 ///
 /// A mode the camera no longer offers is the one case worth a second try —
 /// see the Windows half, which makes the same allowance for the same reason:
@@ -108,7 +109,7 @@ fn start(
     name: &str,
     settings: &VideoCaptureSettings,
     item_name: &str,
-) -> Option<(V4l2CaptureSource, media_pp::elements::VideoFormat)> {
+) -> Result<(V4l2CaptureSource, media_pp::elements::VideoFormat), String> {
     let device = V4l2Device {
         id: settings.device.clone(),
         name: settings.device_name.clone(),
@@ -130,28 +131,26 @@ fn start(
         },
     );
     let error = match first {
-        Ok(opened) => return Some(opened),
+        Ok(opened) => return Ok(opened),
         Err(error) => error,
     };
     if requested.is_none() {
         eprintln!("\"{item_name}\": the camera is not available: {error}");
-        return None;
+        return Err(format!("the camera is not available: {error}"));
     }
 
     eprintln!(
         "\"{item_name}\": the stored mode is not on offer ({error}); taking the camera's own"
     );
-    match V4l2CaptureSource::open(
+    V4l2CaptureSource::open(
         name,
         V4l2CaptureOptions {
             device,
             format: None,
         },
-    ) {
-        Ok(opened) => Some(opened),
-        Err(error) => {
-            eprintln!("\"{item_name}\": the camera is not available: {error}");
-            None
-        }
-    }
+    )
+    .map_err(|error| {
+        eprintln!("\"{item_name}\": the camera is not available: {error}");
+        format!("the camera is not available: {error}")
+    })
 }

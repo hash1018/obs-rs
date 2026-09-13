@@ -115,6 +115,7 @@ text_keys! {
     PropertiesNoSelection         => "properties-no-selection";
     PropertiesName                => "properties-name";
     PropertiesKind                => "properties-kind";
+    PropertiesStatus              => "properties-status";
     PropertiesPosition            => "properties-position";
     PropertiesSize                => "properties-size";
     PropertiesRotation            => "properties-rotation";
@@ -312,6 +313,7 @@ text_keys! {
     DrawingUndo                   => "drawing-undo";
     DrawingClear                  => "drawing-clear";
     SourceDisconnected            => "source-disconnected";
+    SourceFailed                  => "source-failed";
     SourceReopen                  => "source-reopen";
     SourceKindDisplayCapture      => "source-kind-display-capture";
     SourceKindWindowCapture       => "source-kind-window-capture";

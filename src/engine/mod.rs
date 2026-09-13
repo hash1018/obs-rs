@@ -49,7 +49,8 @@ use output::{Broadcast, BroadcastRequest, OutputKind, OutputState, describe, sta
 
 use backend::{Backend, BackendError};
 use source::{
-    OpenSource, PushedContent, filters, push_content, refresh_media_file, refresh_pushed,
+    OpenOutcome, OpenSource, PushedContent, filters, push_content, refresh_media_file,
+    refresh_pushed,
 };
 
 /// The rate to assume when the compositor cannot be asked — it is gone, or
@@ -1264,7 +1265,7 @@ struct OpenRequest {
 /// decide whether a refusal is a state or a failure.
 pub(crate) struct Opened {
     item: Box<SceneItemSnapshot>,
-    result: Result<Option<OpenSource>, BackendError>,
+    result: Result<OpenOutcome, BackendError>,
 }
 
 impl SourceOpener {
@@ -1292,7 +1293,7 @@ impl SourceOpener {
                     // back is running and nothing else holds it, so it is
                     // stopped here rather than dropped on the floor.
                     if let EngineCommand::Opened(opened) = undelivered.0
-                        && let Ok(Some(source)) = opened.result
+                        && let Ok(OpenOutcome::Open(source)) = opened.result
                     {
                         source.source.stop();
                         backend.remove_source(&source.name);
@@ -1447,7 +1448,13 @@ fn apply_command(
             let due = Instant::now()
                 .checked_sub(retry_after(item))
                 .unwrap_or_else(Instant::now);
-            open.insert(item_id, SourceState::Missing(due));
+            open.insert(
+                item_id,
+                SourceState::Missing {
+                    since: due,
+                    reason: None,
+                },
+            );
             true
         }
         EngineCommand::Drawing(item_id, strokes) => {
@@ -1662,11 +1669,15 @@ enum SourceState {
     /// while the first attempt is still going, and so what comes back has
     /// somewhere to land.
     Opening,
-    /// Opening failed once and will not be retried.
+    /// Opening failed once and will not be retried, and why.
     ///
     /// A retry loop here would reopen the portal dialog on every snapshot,
     /// which is a stream of modal windows rather than an error message.
-    Failed,
+    ///
+    /// The reason is kept for the Sources list. It used to go to stderr
+    /// alone, which a shipped Windows build does not have: the list said the
+    /// Source was not showing and nothing anywhere said why.
+    Failed(Arc<str>),
     /// Opened cleanly, and the thing it captures is not here right now.
     ///
     /// The instant is when it started waiting, because how long to wait is
@@ -1679,7 +1690,15 @@ enum SourceState {
     /// failure. Unlike `Failed` it is looked at again — see `retry_missing`
     /// — and nothing was opened, so there is nothing holding a dialog or a
     /// device while it waits.
-    Missing(Instant),
+    ///
+    /// `reason` is what the last look found, where there was one: the file
+    /// that is not there, what the camera or the server said. `None` for a
+    /// Source that is only waiting to be opened again — one asked to reopen,
+    /// or one whose filters could not be rebuilt in place.
+    Missing {
+        since: Instant,
+        reason: Option<Arc<str>>,
+    },
     /// Not running, and nothing here may open it again.
     ///
     /// The window a Window Capture was showing has closed, or opening it did
@@ -1692,7 +1711,10 @@ enum SourceState {
     /// The distinction from `Missing` is who pays for the look:
     /// `WindowCaptureTarget::can_be_reopened_silently` is what decides which
     /// of the two a closed window lands in.
-    Disconnected,
+    ///
+    /// Why, where that is known — a window that closed, a stream that stopped,
+    /// a picker that was cancelled.
+    Disconnected(Option<Arc<str>>),
     /// A media file that played to its end without looping.
     ///
     /// Not a failure and not `Disconnected`: the Source did what it was told
@@ -1747,7 +1769,10 @@ fn request_open(
         }
         Err(error) => {
             eprintln!("could not ask for \"{}\" to be opened: {error}", item.name);
-            open.insert(item.id, SourceState::Failed);
+            open.insert(
+                item.id,
+                SourceState::Failed(format!("could not ask for it to be opened: {error}").into()),
+            );
         }
     }
 }
@@ -1768,7 +1793,7 @@ fn finish_open(
 ) {
     let id = opened.item.id;
     if !matches!(open.get(&id), Some(SourceState::Opening)) {
-        if let Ok(Some(source)) = opened.result {
+        if let Ok(OpenOutcome::Open(source)) = opened.result {
             source.source.stop();
             engine.backend.remove_source(&source.name);
         }
@@ -1803,13 +1828,16 @@ fn finish_open(
 fn state_of(
     project: Option<&ProjectDispatcher>,
     item: &SceneItemSnapshot,
-    result: Result<Option<OpenSource>, BackendError>,
+    result: Result<OpenOutcome, BackendError>,
 ) -> SourceState {
     match result {
         // Nothing to open yet, and nothing wrong. Looked at again on the next
-        // pass rather than reported.
-        Ok(None) => SourceState::Missing(Instant::now()),
-        Ok(Some(source)) => {
+        // pass, and the reason kept for the Sources list meanwhile.
+        Ok(OpenOutcome::Absent(reason)) => SourceState::Missing {
+            since: Instant::now(),
+            reason: Some(reason.into()),
+        },
+        Ok(OpenOutcome::Open(source)) => {
             // What the Source turned out to be, where that is not what the
             // item was told when it was added. The editor clamps a crop
             // against this, so a stale size is not cosmetic: a crop past the
@@ -1838,15 +1866,16 @@ fn state_of(
         }
         Err(error) => {
             eprintln!("could not open \"{}\": {error}", item.name);
+            let reason: Arc<str> = error.to_string().into();
             // A cancelled picker arrives here as an error, and it is an answer
             // rather than a fault: the user was asked and said not now. So a
             // Source that has to be asked for is left disconnected — offered
             // again by the Sources list — instead of failed, which nothing
             // ever reopens.
             if needs_asking(item) {
-                SourceState::Disconnected
+                SourceState::Disconnected(Some(reason))
             } else {
-                SourceState::Failed
+                SourceState::Failed(reason)
             }
         }
     }
@@ -1883,13 +1912,13 @@ fn retry_missing(
 ) {
     if !open
         .values()
-        .any(|state| matches!(state, SourceState::Missing(_)))
+        .any(|state| matches!(state, SourceState::Missing { .. }))
     {
         return;
     }
     let count = snapshot.items.len();
     for (index, item) in snapshot.items.iter().enumerate() {
-        let Some(SourceState::Missing(since)) = open.get(&item.id) else {
+        let Some(SourceState::Missing { since, .. }) = open.get(&item.id) else {
             continue;
         };
         // Each on its own clock: a stream that asked to be left for a minute
@@ -1973,11 +2002,11 @@ fn reconcile(
                     rebuild.push(item.id);
                 }
             }
-            Some(SourceState::Failed | SourceState::Disconnected | SourceState::Ended) => {}
+            Some(SourceState::Failed(_) | SourceState::Disconnected(_) | SourceState::Ended) => {}
             // Already on its way, and asking again would only open a second
             // one of whatever this is.
             Some(SourceState::Opening) => {}
-            Some(SourceState::Missing(_)) | None => {
+            Some(SourceState::Missing { .. }) | None => {
                 request_open(engine, mixer, open, item, layer);
             }
         }
@@ -1987,7 +2016,13 @@ fn reconcile(
         // Dropping the old one is what `insert` does here, and `Missing` in
         // the past is what makes the next pass open the new chain — the same
         // two steps `EngineCommand::ReopenSource` takes.
-        open.insert(item_id, SourceState::Missing(Instant::now()));
+        open.insert(
+            item_id,
+            SourceState::Missing {
+                since: Instant::now(),
+                reason: None,
+            },
+        );
     }
 
     // A Source whose item merely left the Scene is kept, stopped: coming back
@@ -2320,14 +2355,28 @@ mod tests {
             "nothing has gone wrong yet, so there is nothing to say"
         );
 
-        open.insert(SceneItemId(1), SourceState::Disconnected);
-        open.insert(SceneItemId(2), SourceState::Missing(Instant::now()));
+        let closed: Arc<str> = Arc::from("the window was closed");
+        let absent: Arc<str> = Arc::from("D:/clips/gone.mp4 is not there");
+        let refused: Arc<str> = Arc::from("the file has no video stream");
+        open.insert(
+            SceneItemId(1),
+            SourceState::Disconnected(Some(closed.clone())),
+        );
+        open.insert(
+            SceneItemId(2),
+            SourceState::Missing {
+                since: Instant::now(),
+                reason: Some(absent.clone()),
+            },
+        );
         // A file that played out is dark for a different reason, and says so.
         open.insert(SceneItemId(3), SourceState::Ended);
         // Still being opened, which is not a state to report: a badge beside
         // every item for as long as its capture takes to start would say
         // something is wrong on the way to everything working.
         open.insert(SceneItemId(4), SourceState::Opening);
+        // Never opened at all, which is told apart from one that went away.
+        open.insert(SceneItemId(5), SourceState::Failed(refused.clone()));
         status::publish_source_status(&published, &open);
         let first = published
             .source_status
@@ -2336,11 +2385,12 @@ mod tests {
         assert_eq!(
             *first,
             HashMap::from([
-                (SceneItemId(1), SourceStatus::Disconnected),
-                (SceneItemId(2), SourceStatus::Disconnected),
+                (SceneItemId(1), SourceStatus::Disconnected(Some(closed))),
+                (SceneItemId(2), SourceStatus::Disconnected(Some(absent))),
                 (SceneItemId(3), SourceStatus::Ended),
+                (SceneItemId(5), SourceStatus::Failed(refused)),
             ]),
-            "an opening Source must not be listed among the dark ones"
+            "each dark Source is listed with why, and an opening one is not listed"
         );
 
         status::publish_source_status(&published, &open);
@@ -2356,6 +2406,7 @@ mod tests {
         open.remove(&SceneItemId(1));
         open.remove(&SceneItemId(2));
         open.remove(&SceneItemId(3));
+        open.remove(&SceneItemId(5));
         status::publish_source_status(&published, &open);
         assert_eq!(
             *published

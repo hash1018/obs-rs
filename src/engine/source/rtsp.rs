@@ -6,7 +6,7 @@
 //! A URL is stored as it was typed and never resolved to anything else, so a
 //! camera that is switched off, rebooting, or behind a network that is down is
 //! an ordinary state rather than an error — the same standing a closed window
-//! has. Opening one answers `Ok(None)` for it and the engine holds the Source
+//! has. Opening one answers `OpenOutcome::Absent` for it and the engine holds the Source
 //! [`SourceState::Missing`], which is what its own reconnect interval is then
 //! measured from. A server that answers and then will not demux is a real
 //! failure and still `Err`.
@@ -137,25 +137,24 @@ fn options(settings: &RtspSourceSettings) -> RtspOptions {
     }
 }
 
-/// Connects, or answers `None` for a server that is not there.
+/// Connects, or answers why the server is not there.
 ///
 /// Every failure to connect is read as "not there", which is what makes an
 /// unreachable camera a state rather than an error: a wrong address, a
 /// refused connection and a switched-off camera are indistinguishable from
 /// here, and treating any of them as fatal would leave a Source that never
-/// comes back on its own. What the log says is the difference.
+/// comes back on its own. What the server said is the difference — a refused
+/// password reads very differently from a camera that is off — and it is what
+/// the Sources list shows.
 fn connect(
     name: &str,
     settings: &RtspSourceSettings,
     item_name: &str,
-) -> Option<(RtspSource, Vec<StreamInfo>)> {
-    match RtspSource::open(name.to_owned(), &settings.url, options(settings)) {
-        Ok(opened) => Some(opened),
-        Err(error) => {
-            eprintln!("\"{item_name}\" is not answering: {error}");
-            None
-        }
-    }
+) -> Result<(RtspSource, Vec<StreamInfo>), String> {
+    RtspSource::open(name.to_owned(), &settings.url, options(settings)).map_err(|error| {
+        eprintln!("\"{item_name}\" is not answering: {error}");
+        format!("not answering: {error}")
+    })
 }
 
 /// Picks the streams to play and reads what each branch is built from.
@@ -254,7 +253,7 @@ pub(in crate::engine) fn open(
     meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
-) -> Result<Option<super::OpenSource>, BackendError> {
+) -> Result<super::OpenOutcome, BackendError> {
     use media_pp::elements::{D3d11Decoder, D3d11VideoCompositorInput};
 
     use crate::engine::backend::RunningSource;
@@ -262,8 +261,9 @@ pub(in crate::engine) fn open(
 
     let settings = settings(item)?;
     let name = input_name(item);
-    let Some((source, streams)) = connect(&name, settings, &item.name) else {
-        return Ok(None);
+    let (source, streams) = match connect(&name, settings, &item.name) {
+        Ok(connected) => connected,
+        Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
     let chosen = choose(&source, &streams, mixer)?;
 
@@ -316,7 +316,7 @@ pub(in crate::engine) fn open(
         PictureEnd { rack, sink },
         audio,
     )?;
-    Ok(Some(OpenSource {
+    Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource::Owned(Arc::clone(&pipeline)),
         layer,
         name,
@@ -345,7 +345,7 @@ pub(in crate::engine) fn open(
     meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
-) -> Result<Option<super::OpenSource>, BackendError> {
+) -> Result<super::OpenOutcome, BackendError> {
     use media_pp::elements::{CudaDecoder, CudaVideoCompositorInput};
 
     use crate::engine::backend::RunningSource;
@@ -353,8 +353,9 @@ pub(in crate::engine) fn open(
 
     let settings = settings(item)?;
     let name = input_name(item);
-    let Some((source, streams)) = connect(&name, settings, &item.name) else {
-        return Ok(None);
+    let (source, streams) = match connect(&name, settings, &item.name) {
+        Ok(connected) => connected,
+        Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
     let chosen = choose(&source, &streams, mixer)?;
 
@@ -406,7 +407,7 @@ pub(in crate::engine) fn open(
         PictureEnd { rack, sink },
         audio,
     )?;
-    Ok(Some(OpenSource {
+    Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource(Arc::clone(&pipeline)),
         layer,
         name,
