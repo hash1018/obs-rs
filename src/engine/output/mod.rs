@@ -178,6 +178,12 @@ fn open_muxer(
     settings: &crate::settings::RecordingSettings,
     tracks: Vec<TrackDef>,
 ) -> Result<Vec<Box<dyn Sink>>, BackendError> {
+    // Nothing else makes it, and no muxer will: the recordings folder before
+    // the first recording, a folder chosen in Settings that does not exist
+    // yet, and for HLS the recording's own directory, which is new every time.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let split = settings.effective_split();
     if settings.format.segments_itself() {
         return open_hls_muxer(path, tracks);
@@ -445,6 +451,65 @@ impl Output {
         match failure {
             Some(error) => Err(error),
             None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{RecordingFormat, RecordingSettings};
+
+    /// One track any of these muxers takes. AAC, because it is built into
+    /// every FFmpeg; a muxer is told a track's parameters and nothing about
+    /// what they are for.
+    fn one_track() -> Vec<TrackDef> {
+        let time_base = ffmpeg::Rational::new(1, 48_000);
+        let encoder = SwAudioEncoder::new(
+            "test-audio-encode",
+            SwAudioEncoderOptions {
+                codec: AudioCodec::Aac,
+                sample_rate: 48_000,
+                channels: 2,
+                time_base,
+                bit_rate: 128_000,
+            },
+        )
+        .expect("AAC is built into FFmpeg");
+        vec![TrackDef {
+            name: String::from("test-track"),
+            parameters: encoder.parameters(),
+            time_base,
+        }]
+    }
+
+    /// A recording goes into a directory nothing may have made yet — for HLS
+    /// always, since each recording is a directory of its own. When this was
+    /// left to nobody, every HLS recording failed to start, on `init.mp4`.
+    #[test]
+    fn a_recording_makes_the_directory_it_is_written_into() {
+        for format in [RecordingFormat::Mp4, RecordingFormat::Hls] {
+            let root = std::env::temp_dir().join(format!(
+                "obs-rs-output-dir-{}-{format:?}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let settings = RecordingSettings {
+                format,
+                ..RecordingSettings::default()
+            };
+            let path = crate::paths::recording_file_in(
+                &root,
+                "test",
+                time::OffsetDateTime::UNIX_EPOCH,
+                format,
+            );
+
+            let sinks = open_muxer(&path, &settings, one_track());
+            assert!(sinks.is_ok(), "{format:?}: {:?}", sinks.err());
+            assert!(path.parent().is_some_and(Path::is_dir), "{format:?}");
+            drop(sinks);
+            let _ = std::fs::remove_dir_all(&root);
         }
     }
 }
