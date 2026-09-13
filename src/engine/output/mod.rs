@@ -41,6 +41,7 @@
 //! per recording, from what is actually running.
 
 pub(in crate::engine) mod disk;
+pub(in crate::engine) mod screenshot;
 mod session;
 mod streaming;
 

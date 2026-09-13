@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::resources::{GpuScope, GpuUsage, MemoryUsage};
-use crate::snapshots::StatusSnapshot;
+use crate::snapshots::{ScreenshotReport, StatusSnapshot};
 
 pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
     egui::Panel::bottom("status_bar")
@@ -183,13 +184,42 @@ const SEGMENT_GAP: f32 = 3.0;
 /// readings on the right are what this bar exists for, and a long message
 /// from a driver must not push them off the end.
 fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
-    let Some(error) = &status.recording_error else {
-        ui.label(i18n.text(TextKey::StatusReady));
-        return;
-    };
+    // A screenshot first while it is news: it is the one thing here someone
+    // has just asked for and is waiting to hear about.
+    let line = status
+        .screenshot
+        .as_deref()
+        .and_then(|report| screenshot_line(report, Instant::now()));
+    match line {
+        Some(ScreenshotLine::Saved { path, left }) => {
+            let file = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let mut args = fluent_bundle::FluentArgs::new();
+            args.set("file", file);
+            ui.label(i18n.text_with(TextKey::StatusScreenshotSaved, &args))
+                .on_hover_text(path.display().to_string());
+            // Nothing else may repaint the bar when the time is up.
+            ui.ctx().request_repaint_after(left);
+        }
+        Some(ScreenshotLine::Failed(reason)) => {
+            show_error(ui, TextKey::StatusScreenshotFailed, reason, i18n);
+        }
+        None => match &status.recording_error {
+            Some(error) => show_error(ui, TextKey::StatusRecordingFailed, error, i18n),
+            None => {
+                ui.label(i18n.text(TextKey::StatusReady));
+            }
+        },
+    }
+}
+
+/// One failure, in the error colour and elided to its share of the bar.
+fn show_error(ui: &mut egui::Ui, key: TextKey, reason: &str, i18n: &LocalizationManager) {
     let mut args = fluent_bundle::FluentArgs::new();
-    args.set("reason", error.as_str());
-    let message = i18n.text_with(TextKey::StatusRecordingFailed, &args);
+    args.set("reason", reason);
+    let message = i18n.text_with(key, &args);
     ui.scope(|ui| {
         ui.set_max_width(ui.available_width() * ERROR_WIDTH_SHARE);
         ui.label(
@@ -199,6 +229,31 @@ fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationMan
         )
         .on_hover_text(message.as_ref());
     });
+}
+
+/// What the bar says about the last screenshot, if anything.
+#[derive(Debug, PartialEq)]
+enum ScreenshotLine<'a> {
+    /// Written, and still recent enough to mention — with how much longer.
+    Saved { path: &'a Path, left: Duration },
+    /// Not written. Kept until the next one, as a failed recording is: a
+    /// message that clears itself is one somebody looking away never sees.
+    Failed(&'a str),
+}
+
+/// How long "saved" stays in the bar. A file that was written needs no more
+/// than a glance, and the bar has other things to say.
+const SCREENSHOT_SAVED_SHOWN: Duration = Duration::from_secs(5);
+
+fn screenshot_line(report: &ScreenshotReport, now: Instant) -> Option<ScreenshotLine<'_>> {
+    match &report.outcome {
+        Ok(path) => {
+            let left =
+                SCREENSHOT_SAVED_SHOWN.checked_sub(now.saturating_duration_since(report.at))?;
+            (!left.is_zero()).then_some(ScreenshotLine::Saved { path, left })
+        }
+        Err(reason) => Some(ScreenshotLine::Failed(reason)),
+    }
 }
 
 /// How much of the bar an error message may take before it is elided. The
@@ -355,6 +410,40 @@ mod tests {
             recording_mark(&visuals, &status(None, false)),
             None,
             "an idle bar shows a placeholder, which is not a state to colour"
+        );
+    }
+
+    /// A saved screenshot is mentioned for a few seconds and then let go; one
+    /// that failed stays, since the reason is what the user has to act on.
+    #[test]
+    fn a_saved_screenshot_is_mentioned_briefly_and_a_failed_one_is_kept() {
+        let at = Instant::now();
+        let saved = ScreenshotReport {
+            at,
+            outcome: Ok(std::path::PathBuf::from(
+                "/videos/obs-rs-2026-09-13-143005.png",
+            )),
+        };
+        assert_eq!(
+            screenshot_line(&saved, at + Duration::from_secs(2)),
+            Some(ScreenshotLine::Saved {
+                path: Path::new("/videos/obs-rs-2026-09-13-143005.png"),
+                left: Duration::from_secs(3),
+            })
+        );
+        assert_eq!(
+            screenshot_line(&saved, at + SCREENSHOT_SAVED_SHOWN),
+            None,
+            "and then the bar goes back to what it was saying"
+        );
+
+        let failed = ScreenshotReport {
+            at,
+            outcome: Err("access denied".to_owned()),
+        };
+        assert_eq!(
+            screenshot_line(&failed, at + Duration::from_secs(3600)),
+            Some(ScreenshotLine::Failed("access denied"))
         );
     }
 

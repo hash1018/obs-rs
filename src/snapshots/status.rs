@@ -24,6 +24,17 @@ pub enum SourceStatus {
     Ended,
 }
 
+/// The last screenshot: when it was asked for and what came of it.
+///
+/// The instant is what lets the status bar say "saved" for a few seconds and
+/// then let it go — a file that was written needs no more than a glance — while
+/// a failure is kept in view until the next attempt, as a recording's is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenshotReport {
+    pub at: std::time::Instant,
+    pub outcome: Result<std::path::PathBuf, String>,
+}
+
 impl SourceStatus {
     /// Why, in the engine's words, where it said.
     pub fn reason(&self) -> Option<&str> {
@@ -59,6 +70,8 @@ pub struct StatusSnapshot {
     /// Why the last attempt to start a broadcast failed, if it did — kept
     /// for the reason `recording_error` is.
     pub streaming_error: Option<Arc<String>>,
+    /// The last screenshot, once one has been taken.
+    pub screenshot: Option<Arc<ScreenshotReport>>,
     /// Whether a dropped broadcast is waiting to be tried again.
     ///
     /// Beside the clock rather than in it: what the bar has to say is that

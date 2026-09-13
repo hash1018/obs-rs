@@ -93,6 +93,20 @@ pub fn recording_file_in(
     }
 }
 
+/// One screenshot's path, named for the moment it was taken.
+///
+/// Beside the recordings and under the same prefix, because both are the
+/// user's own pictures of what was composited and are looked for together.
+/// The same stamp, so a listing interleaves them in the order they were
+/// made — which is one second fine, and two screenshots inside one second
+/// are told apart by whoever writes the file; see `engine::output::screenshot`.
+pub fn screenshot_file_in(directory: &Path, prefix: &str, taken: OffsetDateTime) -> PathBuf {
+    let stamp = taken
+        .format(STAMP)
+        .unwrap_or_else(|_| String::from("unknown"));
+    directory.join(format!("{prefix}-{stamp}.png"))
+}
+
 /// Sortable, and legal on every filesystem this runs on — which rules out
 /// the colons of an ISO time.
 const STAMP: &[time::format_description::FormatItem<'static>] =
@@ -244,6 +258,17 @@ mod tests {
         );
 
         assert_eq!(file, Path::new("/tmp/clips/demo-2026-08-29-143005.mkv"));
+    }
+
+    /// A screenshot sits beside the recordings, named the way they are.
+    #[test]
+    fn a_screenshot_is_named_like_a_recording() {
+        let taken = time::macros::datetime!(2026-09-13 14:30:05 +09:00);
+
+        assert_eq!(
+            screenshot_file_in(Path::new("/tmp/clips"), "demo", taken),
+            Path::new("/tmp/clips/demo-2026-09-13-143005.png")
+        );
     }
 
     /// HLS gets a directory of its own, because it writes a playlist and

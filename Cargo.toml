@@ -14,6 +14,10 @@ repository = "https://github.com/hash1018/obs-rs"
 # own glyph atlas: this draws into frames the compositor takes, not into the
 # interface, so the dependency is real and is its own.
 ab_glyph = "0.2"
+# Writes a screenshot of the Canvas. Already in the tree through eframe's
+# `image`, at this version; named here because a screenshot is this
+# application's own file, not something the interface draws.
+png = "0.18"
 
 # `wgpu` rather than the default `glow` backend: the preview will eventually
 # receive frames as GPU textures imported from `media-pp`'s own device

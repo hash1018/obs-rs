@@ -31,6 +31,12 @@ pub fn show(
                         actions.push(UiAction::ShowRecordings);
                         ui.close();
                     }
+                    // Beside the folder it saves into. A hotkey does the same
+                    // from inside a game; this is where it can be found.
+                    if ui.button(i18n.text(TextKey::MenuScreenshot)).clicked() {
+                        actions.push(UiAction::TakeScreenshot);
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button(i18n.text(TextKey::MenuExit)).clicked() {
                         actions.push(UiAction::Exit);

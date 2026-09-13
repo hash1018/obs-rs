@@ -2509,6 +2509,7 @@ dependencies = [
  "libc",
  "libloading",
  "media-pp",
+ "png",
  "pollster 1.0.1",
  "raw-window-handle",
  "rfd",

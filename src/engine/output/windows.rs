@@ -291,4 +291,49 @@ impl Backend {
         self.tee.finish_branch(track.branch)?;
         Ok(())
     }
+
+    /// Hangs a screenshot's branch off the compositor's `Tee`, ending at
+    /// `sink` with the Canvas as RGB24 in system memory — see
+    /// `output::screenshot` for why this and not the Preview.
+    ///
+    /// Downloaded at the Canvas's own size, whatever a recording is scaled
+    /// to: a screenshot is of what is composited, not of what a file keeps.
+    pub(in crate::engine) fn attach_screenshot(
+        &self,
+        sink: Box<dyn media_pp::element::Sink>,
+    ) -> Result<media_pp::graph::BranchId, BackendError> {
+        let [width, height] = self.size;
+        let branch = self
+            .tee
+            .branch()
+            .ok_or("the compositor's Tee is gone")?
+            .queue_with_policy("screenshot-queue", 1, OverflowPolicy::DropNewest)
+            .pipe(D3d11Download::new(
+                "screenshot-download",
+                &self.device,
+                Arc::clone(&self.context),
+                width,
+                height,
+            )?)
+            .pipe(SwScaler::new(
+                "screenshot-convert",
+                ffmpeg::format::Pixel::RGB24,
+                width,
+                height,
+                ffmpeg::software::scaling::Flags::BILINEAR,
+            ))
+            .to(sink)?;
+        Ok(self.tee.attach(branch)?)
+    }
+
+    /// Takes a screenshot's branch off again. `detach` rather than
+    /// `finish_branch`: there is no file waiting for an `Eos`, only a sink
+    /// that has already written what it came for.
+    pub(in crate::engine) fn detach_screenshot(
+        &self,
+        branch: media_pp::graph::BranchId,
+    ) -> Result<(), BackendError> {
+        self.tee.detach(branch)?;
+        Ok(())
+    }
 }

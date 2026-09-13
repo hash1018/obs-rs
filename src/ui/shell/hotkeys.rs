@@ -134,6 +134,7 @@ fn pressed_action(hotkey: Hotkey, snapshots: &Snapshots, actions: &mut Vec<UiAct
                 UiAction::StartStreaming
             });
         }
+        Hotkey::Action(HotkeyAction::Screenshot) => actions.push(UiAction::TakeScreenshot),
         // The window's own, which never come through here — see `dispatch`.
         Hotkey::Action(HotkeyAction::Fullscreen | HotkeyAction::OpenSettings) => {}
         Hotkey::ToggleMute(id) => {

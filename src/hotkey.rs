@@ -215,16 +215,19 @@ pub enum HotkeyAction {
     ToggleRecording,
     TogglePause,
     ToggleStreaming,
+    /// Save what is being composited as a picture.
+    Screenshot,
     Fullscreen,
     OpenSettings,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ToggleRecording,
         Self::TogglePause,
         Self::ToggleStreaming,
+        Self::Screenshot,
         Self::Fullscreen,
         Self::OpenSettings,
     ];
@@ -307,6 +310,7 @@ pub struct HotkeySettings {
     pub toggle_recording: Binding,
     pub toggle_pause: Binding,
     pub toggle_streaming: Binding,
+    pub screenshot: Binding,
     pub fullscreen: Binding,
     pub open_settings: Binding,
     /// Only the channels and Scenes that have a key, so a file that binds
@@ -325,6 +329,11 @@ impl Default for HotkeySettings {
             // Nothing: a broadcast going out by accident is the one mistake
             // a default key must not make possible.
             toggle_streaming: Binding(None),
+            // Nothing either. Every key here is heard while another
+            // application has focus, so whatever this took would also be
+            // taking a picture each time it was pressed for its own sake
+            // somewhere else — a Save As, a browser's own shortcut.
+            screenshot: Binding(None),
             fullscreen: Chord::plain(Key::F11).into(),
             open_settings: Chord::ctrl(Key::Comma).into(),
             channels: Vec::new(),
@@ -340,6 +349,7 @@ impl HotkeySettings {
                 HotkeyAction::ToggleRecording => self.toggle_recording.0,
                 HotkeyAction::TogglePause => self.toggle_pause.0,
                 HotkeyAction::ToggleStreaming => self.toggle_streaming.0,
+                HotkeyAction::Screenshot => self.screenshot.0,
                 HotkeyAction::Fullscreen => self.fullscreen.0,
                 HotkeyAction::OpenSettings => self.open_settings.0,
             },
@@ -361,6 +371,7 @@ impl HotkeySettings {
                 HotkeyAction::ToggleRecording => self.toggle_recording = binding,
                 HotkeyAction::TogglePause => self.toggle_pause = binding,
                 HotkeyAction::ToggleStreaming => self.toggle_streaming = binding,
+                HotkeyAction::Screenshot => self.screenshot = binding,
                 HotkeyAction::Fullscreen => self.fullscreen = binding,
                 HotkeyAction::OpenSettings => self.open_settings = binding,
             },

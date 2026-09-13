@@ -288,4 +288,44 @@ impl Backend {
         self.tee.finish_branch(track.branch)?;
         Ok(())
     }
+
+    /// Hangs a screenshot's branch off the compositor's `Tee` — see the
+    /// D3D11 backend's twin. The Canvas here is NV12, so what comes back is
+    /// converted to RGB24 on the CPU, as a software recording's is to YUV.
+    pub(in crate::engine) fn attach_screenshot(
+        &self,
+        sink: Box<dyn media_pp::element::Sink>,
+    ) -> Result<media_pp::graph::BranchId, BackendError> {
+        let [width, height] = self.size;
+        let branch = self
+            .tee
+            .branch()
+            .ok_or("the compositor's Tee is gone")?
+            .queue_with_policy("screenshot-queue", 1, OverflowPolicy::DropNewest)
+            .pipe(CudaDownload::new(
+                "screenshot-download",
+                &self.device,
+                CudaFrameFormat::Nv12,
+                width,
+                height,
+            ))
+            .pipe(SwScaler::new(
+                "screenshot-convert",
+                ffmpeg::format::Pixel::RGB24,
+                width,
+                height,
+                ffmpeg::software::scaling::Flags::BILINEAR,
+            ))
+            .to(sink)?;
+        Ok(self.tee.attach(branch)?)
+    }
+
+    /// Takes a screenshot's branch off again — see the D3D11 twin.
+    pub(in crate::engine) fn detach_screenshot(
+        &self,
+        branch: media_pp::graph::BranchId,
+    ) -> Result<(), BackendError> {
+        self.tee.detach(branch)?;
+        Ok(())
+    }
 }

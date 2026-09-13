@@ -152,6 +152,12 @@ enum EngineCommand {
     /// `Opened`, which is boxed for the same reason.
     BroadcastOpened(Box<Result<output::Output, BackendError>>),
     StreamingSettings(Box<crate::settings::StreamingSettings>),
+    /// Save the next composited frame as a picture. Carries no path, for the
+    /// reason `StartRecording` does not.
+    Screenshot,
+    /// What the screenshot's branch wrote, from the branch's own thread —
+    /// the engine's cue to take the branch off again.
+    ScreenshotTaken(output::screenshot::Taken),
 }
 
 /// What the engine is started with, as opposed to what it is told afterwards
@@ -243,6 +249,9 @@ struct Published {
     /// and the button goes back to what it said. Somewhere has to keep the
     /// reason, and it is the engine that has it.
     recording_error: Arc<ArcSwapOption<String>>,
+    /// The last screenshot and what came of it — the one thing that says one
+    /// was taken, since nothing on screen changes when it is.
+    screenshot: Arc<ArcSwapOption<crate::snapshots::ScreenshotReport>>,
 }
 
 /// What the engine is handed at construction about where output goes.
@@ -295,6 +304,8 @@ pub struct EngineManager {
     /// figure stops moving without the UI being told again on every pass.
     recording_paused_at: Arc<ArcSwapOption<Instant>>,
     recording_error: Arc<ArcSwapOption<String>>,
+    /// The last screenshot — see `Published::screenshot`.
+    screenshot: Arc<ArcSwapOption<crate::snapshots::ScreenshotReport>>,
     /// When the running broadcast started — see `Published::streaming_since`.
     streaming_since: Arc<ArcSwapOption<Instant>>,
     streaming_error: Arc<ArcSwapOption<String>>,
@@ -349,6 +360,7 @@ impl EngineManager {
         let recording_paused_at = Arc::new(ArcSwapOption::empty());
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
+        let screenshot = Arc::new(ArcSwapOption::empty());
         let streaming_since = Arc::new(ArcSwapOption::empty());
         let streaming_error = Arc::new(ArcSwapOption::empty());
         let streaming_reconnecting = Arc::new(AtomicBool::new(false));
@@ -366,6 +378,7 @@ impl EngineManager {
             let recording_since = Arc::clone(&recording_since);
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
+            let screenshot = Arc::clone(&screenshot);
             let streaming_since = Arc::clone(&streaming_since);
             let streaming_error = Arc::clone(&streaming_error);
             let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
@@ -386,6 +399,7 @@ impl EngineManager {
                     recording_since,
                     recording_paused_at,
                     recording_error,
+                    screenshot,
                     streaming_since,
                     streaming_error,
                     streaming_reconnecting,
@@ -411,6 +425,7 @@ impl EngineManager {
                         audio_codecs: Vec::new(),
                         running: None,
                         broadcast: Broadcast::Off,
+                        screenshot: None,
                     },
                 };
                 if let Err(error) = run(
@@ -435,6 +450,7 @@ impl EngineManager {
             recording_since,
             recording_paused_at,
             recording_error,
+            screenshot,
             streaming_since,
             streaming_error,
             streaming_reconnecting,
@@ -654,6 +670,20 @@ impl EngineManager {
         self.recording_error.load_full()
     }
 
+    /// Saves the next composited frame as a picture, beside the recordings.
+    ///
+    /// Asks rather than tells, as a recording does: the file is written on
+    /// a thread of the compositor's, and [`EngineManager::screenshot`] is
+    /// what says where it went or why it did not.
+    pub fn take_screenshot(&self) {
+        let _ = self.commands.send(EngineCommand::Screenshot);
+    }
+
+    /// The last screenshot and what came of it, once one has been taken.
+    pub fn screenshot(&self) -> Option<Arc<crate::snapshots::ScreenshotReport>> {
+        self.screenshot.load_full()
+    }
+
     /// The SceneItems that are not producing a picture right now.
     pub fn source_status(&self) -> Option<Arc<HashMap<SceneItemId, SourceStatus>>> {
         self.source_status.load_full()
@@ -831,12 +861,13 @@ fn run(
     // Replies come back through the loop's own channel, so the opener needs a
     // way in — see [`SourceOpener`].
     let opener = SourceOpener::spawn(Arc::clone(&backend), replies.clone())?;
-    let broadcasts = BroadcastOpener::spawn(Arc::clone(&backend), replies)?;
+    let broadcasts = BroadcastOpener::spawn(Arc::clone(&backend), replies.clone())?;
     let engine = Engine {
         backend: &backend,
         project: project.as_ref(),
         opener: &opener,
         broadcasts: &broadcasts,
+        replies,
     };
 
     let mut open = HashMap::new();
@@ -1396,6 +1427,24 @@ struct Engine<'a> {
     project: Option<&'a ProjectDispatcher>,
     opener: &'a SourceOpener,
     broadcasts: &'a BroadcastOpener,
+    /// The loop's own way back into its queue, for what answers from another
+    /// thread without an opener of its own — a screenshot's branch.
+    replies: mpsc::Sender<EngineCommand>,
+}
+
+/// Publishes what the last screenshot came to, and says so where a console
+/// is being read.
+fn report_screenshot(published: &Published, outcome: output::screenshot::Taken) {
+    match &outcome {
+        Ok(path) => println!("screenshot saved to {}", path.display()),
+        Err(reason) => eprintln!("could not save a screenshot: {reason}"),
+    }
+    published
+        .screenshot
+        .store(Some(Arc::new(crate::snapshots::ScreenshotReport {
+            at: Instant::now(),
+            outcome,
+        })));
 }
 
 /// Applies one change, reporting whether the running Sources may have moved
@@ -1570,6 +1619,35 @@ fn apply_command(
                     published.recording_error.store(Some(Arc::new(reason)));
                 }
             }
+            false
+        }
+        EngineCommand::Screenshot => {
+            if recording.screenshot.is_some() {
+                // The one already on its way is of the same frame.
+                return false;
+            }
+            let path = crate::paths::screenshot_file_in(
+                &recording.settings.directory_or_default(),
+                recording.settings.prefix_or_default(),
+                crate::clock::now_local(),
+            );
+            let replies = engine.replies.clone();
+            let sink = output::screenshot::sink(path, move |taken| {
+                let _ = replies.send(EngineCommand::ScreenshotTaken(taken));
+            });
+            match engine.backend.attach_screenshot(sink) {
+                Ok(branch) => recording.screenshot = Some(branch),
+                Err(error) => report_screenshot(published, Err(error.to_string())),
+            }
+            false
+        }
+        EngineCommand::ScreenshotTaken(taken) => {
+            if let Some(branch) = recording.screenshot.take()
+                && let Err(error) = engine.backend.detach_screenshot(branch)
+            {
+                eprintln!("could not take the screenshot's branch off: {error}");
+            }
+            report_screenshot(published, taken);
             false
         }
         EngineCommand::PauseRecording(paused) => {
@@ -2190,6 +2268,7 @@ mod tests {
             encoders: Arc::new(ArcSwapOption::empty()),
             audio_codecs: Arc::new(ArcSwapOption::empty()),
             recording_error: Arc::new(ArcSwapOption::empty()),
+            screenshot: Arc::new(ArcSwapOption::empty()),
             streaming_since: Arc::new(ArcSwapOption::empty()),
             streaming_error: Arc::new(ArcSwapOption::empty()),
             streaming_reconnecting: Arc::new(AtomicBool::new(false)),

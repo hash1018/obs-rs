@@ -70,6 +70,11 @@ pub(in crate::engine) struct OutputState {
     /// recording while streaming is not a mode — it is simply both being
     /// under way, each with its own encoder at its own bit rate.
     pub(in crate::engine) broadcast: Broadcast,
+    /// The branch a screenshot is being taken through, until it answers.
+    ///
+    /// One at a time: a second asked for while the first is still on its
+    /// way would be the same frame, and is not worth a second branch.
+    pub(in crate::engine) screenshot: Option<media_pp::graph::BranchId>,
 }
 
 impl OutputState {

@@ -291,6 +291,7 @@ impl ObsApp {
         }
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
+        self.snapshots.status.screenshot = engine.screenshot();
         self.snapshots.status.source_status = engine.source_status();
         if self.snapshots.status.encoders.is_empty()
             && let Some(encoders) = engine.encoders()
@@ -854,6 +855,11 @@ impl ObsApp {
                 let directory = self.settings.recording.directory_or_default();
                 if let Err(error) = crate::paths::show_in_file_manager(&directory) {
                     eprintln!("could not show {}: {error}", directory.display());
+                }
+            }
+            UiAction::TakeScreenshot => {
+                if let Some(engine) = &self.engine {
+                    engine.take_screenshot();
                 }
             }
             UiAction::OpenSettings => {

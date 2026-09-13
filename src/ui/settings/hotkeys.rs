@@ -237,6 +237,7 @@ pub(crate) fn label(
                 HotkeyAction::ToggleRecording => TextKey::HotkeyToggleRecording,
                 HotkeyAction::TogglePause => TextKey::HotkeyTogglePause,
                 HotkeyAction::ToggleStreaming => TextKey::HotkeyToggleStreaming,
+                HotkeyAction::Screenshot => TextKey::HotkeyScreenshot,
                 HotkeyAction::Fullscreen => TextKey::HotkeyFullscreen,
                 HotkeyAction::OpenSettings => TextKey::HotkeyOpenSettings,
             })

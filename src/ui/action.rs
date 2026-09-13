@@ -117,6 +117,9 @@ pub enum UiAction {
     /// Shows the folder recordings are written to in the system's own file
     /// manager, creating it first if nothing has recorded yet.
     ShowRecordings,
+    /// Save what is being composited as a picture, beside the recordings.
+    /// Carries no path, for the reason `StartRecording` does not.
+    TakeScreenshot,
     /// Commit the dialog's draft: persist it, and hand the engine the part it
     /// needs. Boxed because it is much the largest variant here and every
     /// other one would otherwise be padded to its size.
