@@ -52,7 +52,6 @@
 use std::sync::Arc;
 
 use media_pp::element::Context;
-use media_pp::element::Sink;
 use media_pp::elements::{MixerHandle, Pacer, RtspOptions, RtspSource, RtspTransport, StreamInfo};
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
@@ -61,7 +60,7 @@ use crate::domain::RtspSourceSettings;
 use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
 use crate::engine::source::sound::{self, Sound, Track};
-use crate::engine::source::{MediaMeters, input_name};
+use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Decoded frames held between the decoder and the `Pacer`.
@@ -204,7 +203,7 @@ fn track(source: &RtspSource, index: usize) -> Option<Track> {
     })
 }
 
-/// Attaches the video pad: decoded on the GPU, paced, and drawn.
+/// Attaches the video pad: decoded on the GPU, paced, filtered and drawn.
 ///
 /// No `Tee` here, unlike a media file's: there is no position to record for a
 /// stream that has no end to measure against.
@@ -214,7 +213,7 @@ fn attach_video(
     index: usize,
     time_base: ffmpeg::Rational,
     decoder: impl media_pp::element::Filter + 'static,
-    sink: Box<dyn Sink>,
+    picture: PictureEnd,
 ) -> media_pp::error::Result<()> {
     let paced = context
         .branch()
@@ -226,7 +225,8 @@ fn attach_video(
             time_base,
             TIMELINE_JUMP,
         )?)
-        .to(sink)?;
+        .pipe(picture.rack)
+        .to(picture.sink)?;
     context.attach(source, index, paced)?;
     Ok(())
 }
@@ -248,6 +248,7 @@ fn decoded_size(params: &ffmpeg::codec::Parameters) -> Option<[u32; 2]> {
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
@@ -274,6 +275,15 @@ pub(in crate::engine) fn open(
         chosen.video_params,
         device,
         HW_FRAME_BUDGET,
+    )?;
+    // Bridged to BGRA only while there are filters, as a media file's is.
+    let FilledRack { rack, filters } = super::filled_rack(
+        &name,
+        device,
+        context,
+        filters::ChainFormat::Nv12,
+        super::rack_size(size, item),
+        item,
     )?;
     let meters = Arc::new(MediaMeters::default());
     let audio = sound::build(
@@ -303,7 +313,7 @@ pub(in crate::engine) fn open(
         chosen.video,
         chosen.video_time_base,
         video_decoder,
-        sink,
+        PictureEnd { rack, sink },
         audio,
     )?;
     Ok(Some(OpenSource {
@@ -311,8 +321,8 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         showing: true,
         running: true,
         pushed: None,
@@ -329,7 +339,7 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &media_pp::elements::CudaDevice,
+    device: &Arc<media_pp::elements::CudaDevice>,
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
@@ -360,6 +370,13 @@ pub(in crate::engine) fn open(
         device,
         HW_FRAME_BUDGET,
     )?;
+    let FilledRack { rack, filters } = super::filled_rack(
+        &name,
+        device,
+        filters::ChainFormat::Nv12,
+        super::rack_size(size, item),
+        item,
+    )?;
     let meters = Arc::new(MediaMeters::default());
     let audio = sound::build(
         &name,
@@ -386,7 +403,7 @@ pub(in crate::engine) fn open(
         chosen.video,
         chosen.video_time_base,
         video_decoder,
-        sink,
+        PictureEnd { rack, sink },
         audio,
     )?;
     Ok(Some(OpenSource {
@@ -394,8 +411,8 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         showing: true,
         running: true,
         pushed: None,
@@ -417,7 +434,7 @@ fn build(
     video_index: usize,
     video_time_base: ffmpeg::Rational,
     decoder: impl media_pp::element::Filter + 'static,
-    sink: Box<dyn Sink>,
+    picture: PictureEnd,
     audio: Option<Sound>,
 ) -> Result<(Arc<Pipeline>, Option<sound::SoundRouting>), BackendError> {
     let sound_name = name.clone();
@@ -427,7 +444,14 @@ fn build(
     // that decides which mixes this stream is in.
     let routing_out = &mut routing;
     let pipeline = Pipeline::new(name, source, move |source, context| {
-        attach_video(context, source, video_index, video_time_base, decoder, sink)?;
+        attach_video(
+            context,
+            source,
+            video_index,
+            video_time_base,
+            decoder,
+            picture,
+        )?;
         if let Some(audio) = audio {
             *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
         }

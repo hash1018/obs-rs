@@ -86,7 +86,7 @@ pub(in crate::engine) fn open(
         name,
         refreshed_token: None,
         filters,
-        filter_rack: Some(filter_rack),
+        filter_rack,
         // What the camera negotiated, which is not always the mode that was
         // asked for — see `start`, where a stored mode the device no longer
         // offers falls back to its own.

@@ -1,9 +1,9 @@
 //! A Drawing: a Source that carries marks instead of a capture.
 //!
-//! The one Source that carries transparency. It reaches the compositor as
-//! BGRA rather than through a converter, so what was never drawn on lets the
-//! scene beneath it through — which is also why the two backends differ less
-//! here than for a Color Source: neither converts.
+//! A Source that carries transparency. It reaches the compositor as BGRA
+//! rather than through a converter, so what was never drawn on lets the scene
+//! beneath it through — which is also why the two backends differ only in
+//! which element uploads it: neither converts.
 
 use std::sync::Arc;
 
@@ -13,7 +13,9 @@ use crate::domain::{SourceSettings, Stroke};
 use crate::snapshots::SceneItemSnapshot;
 
 use super::super::backend::{BackendError, Layer, RunningSource};
-use super::{OpenSource, PushedContent, PushedSurface, input_name};
+use super::{
+    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filters, input_name,
+};
 
 /// Draws a Drawing's strokes into a BGRA frame the compositor can take.
 ///
@@ -181,10 +183,13 @@ fn opened(
     source: RunningSource,
     layer: Layer,
     pusher: media_pp::elements::AppSourceHandle,
+    filters: SourceFilters,
     size: [u32; 2],
     strokes: Vec<Stroke>,
-) -> OpenSource {
-    OpenSource {
+) -> Result<OpenSource, BackendError> {
+    let frame = drawing_bgra(size[0], size[1], &strokes);
+    pusher.push(frame.clone())?;
+    Ok(OpenSource {
         media_file: None,
         // Its size is its own rather than something a device answered
         // with, so there is nothing to correct.
@@ -193,97 +198,109 @@ fn opened(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         showing: true,
         running: true,
         pushed: Some(PushedSurface {
             pusher,
             size,
             content: PushedContent::Drawing(strokes),
+            frame,
         }),
-    }
+    })
 }
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
 
-    let ([width, height], strokes) = surface(item)?;
+    let (size, strokes) = surface(item)?;
     let name = input_name(item);
     // One frame of capacity: a drawing gesture produces one per UI frame and
     // only the newest matters, so a deeper queue would only add latency
     // between the pointer and the picture.
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = D3d11Upload::new(format!("{name}-upload"), device, width, height);
+    let upload = D3d11Upload::new(format!("{name}-upload"), device, size[0], size[1]);
+    let FilledRack { rack, filters } = super::filled_rack(
+        &name,
+        device,
+        context,
+        filters::ChainFormat::Bgra,
+        size,
+        item,
+    )?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).to(sink)?;
+        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
     pipeline.run()?;
-    pusher.push(drawing_bgra(width, height, &strokes))?;
 
-    Ok(opened(
+    opened(
         name,
         RunningSource::Owned(pipeline),
         layer,
         pusher,
-        [width, height],
+        filters,
+        size,
         strokes,
-    ))
+    )
 }
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &media_pp::elements::CudaDevice,
+    device: &Arc<media_pp::elements::CudaDevice>,
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
 
-    let ([width, height], strokes) = surface(item)?;
+    let (size, strokes) = surface(item)?;
     let name = input_name(item);
     let (source, pusher) = AppSource::new(name.clone(), 1);
     let upload = CudaUpload::new(
         format!("{name}-upload"),
         device,
         CudaFrameFormat::Bgra,
-        width,
-        height,
+        size[0],
+        size[1],
     )?;
+    let FilledRack { rack, filters } =
+        super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
 
-    // No converter, unlike a Color Source here. A Drawing is an overlay: its
-    // alpha is the marks themselves, and NV12 has nowhere to keep one, so
-    // converting first would put opaque black over everything nobody drew on.
-    // The compositor takes BGRA for exactly this and blends per pixel.
+    // No converter. A Drawing is an overlay: its alpha is the marks
+    // themselves, and NV12 has nowhere to keep one, so converting would put
+    // opaque black over everything nobody drew on. The compositor takes BGRA
+    // for exactly this and blends per pixel.
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).to(sink)?;
+        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
     pipeline.run()?;
-    pusher.push(drawing_bgra(width, height, &strokes))?;
 
-    Ok(opened(
+    opened(
         name,
         RunningSource(pipeline),
         layer,
         pusher,
-        [width, height],
+        filters,
+        size,
         strokes,
-    ))
+    )
 }
 #[cfg(test)]
 mod tests {

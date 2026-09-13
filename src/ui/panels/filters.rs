@@ -25,15 +25,16 @@
 //! # And a Source's own sound
 //!
 //! A media file or a stream with a sound track has audio filters of its
-//! own, and is reached both ways: selected in the Preview, where it has no
-//! picture filters to show instead, and from its column in the Audio Mixer.
+//! own, and is reached both ways: selected in the Preview, where two tabs
+//! choose between its picture's filters and its sound's, and from its column
+//! in the Audio Mixer, which goes straight to the sound.
 
 use eframe::egui;
 
 use crate::domain::{
     AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, ChromaKeyMethod,
     ChromaKeySettings, ColorCorrectionSettings, CompressorSettings, Filter, FilterId, FilterKind,
-    FilterSettings, LimiterSettings, LumaKeySettings, NoiseGateSettings, SceneItemId, SourceKind,
+    FilterSettings, LimiterSettings, LumaKeySettings, NoiseGateSettings, SceneItemId,
     SourceSettings,
 };
 use crate::i18n::{LocalizationManager, TextKey};
@@ -42,15 +43,6 @@ use crate::snapshots::{AudioSnapshot, SceneItemSnapshot, SourcesSnapshot};
 
 use super::super::editor::SceneEditorState;
 use super::super::{AudioFilterHost, UiAction};
-
-/// Which Source kinds the engine actually runs filters for.
-///
-/// One, for now. Offering an Add on a kind whose chain ignores what it adds
-/// would be a control that does nothing, which is worse than a sentence
-/// saying so — see this panel's own `show`.
-fn accepts_filters(kind: SourceKind) -> bool {
-    matches!(kind, SourceKind::VideoCapture)
-}
 
 pub(in crate::ui) fn show(
     ui: &mut egui::Ui,
@@ -82,17 +74,25 @@ pub(in crate::ui) fn show(
         return;
     };
 
-    // A Source with sound of its own shows that sound's filters. No kind
-    // that has one takes picture filters yet, so there is nothing for the
-    // two to share the dock over.
+    // A Source with sound of its own has two chains, and the dock shows one
+    // at a time: the picture's first, since that is what every Source has.
     if let Some(sound) = item_sound(item) {
-        show_sound(ui, sound, state, i18n, actions);
-        return;
-    }
-
-    if !accepts_filters(item.kind) {
-        ui.weak(i18n.text(TextKey::FiltersUnsupportedKind));
-        return;
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut state.sound_tab,
+                false,
+                i18n.text(TextKey::FiltersPictureTab),
+            );
+            ui.selectable_value(
+                &mut state.sound_tab,
+                true,
+                i18n.text(TextKey::FiltersSoundTab),
+            );
+        });
+        if state.sound_tab {
+            show_sound(ui, sound, state, i18n, actions);
+            return;
+        }
     }
 
     // Which Source these belong to, said where the two docks can be told
@@ -146,6 +146,10 @@ pub(in crate::ui) struct FiltersPanelState {
     /// The Preview's selection as last seen, so a new one is noticed and
     /// takes the dock back from a channel.
     seen_item: Option<SceneItemId>,
+    /// Whether a selected Source with sound of its own is showing its
+    /// sound's filters rather than its picture's. Kept across selections, so
+    /// going through several clips to tune each one's sound stays on sound.
+    sound_tab: bool,
 }
 
 impl FiltersPanelState {

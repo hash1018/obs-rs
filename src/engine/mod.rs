@@ -1491,6 +1491,7 @@ fn apply_command(
                 && let Some(filter) = source.filters.iter().find(|open| open.id == filter_id)
             {
                 filter.retune(&settings);
+                source::repush(source);
             }
             false
         }
@@ -1913,30 +1914,31 @@ fn retry_missing(
 /// a refill of the Source's rack, which the frames flow through the whole
 /// time.
 ///
-/// The answer is therefore `true` in two cases only: a Source whose kind has
-/// no rack, and one whose refill failed. Building a filter fails on a lost or
-/// exhausted device, which is what reopening the Source is the recovery for —
-/// so the old path is what a failure falls back to rather than something that
-/// no longer exists.
+/// The answer is therefore `true` in one case only: a refill that failed.
+/// Building a filter fails on a lost or exhausted device, which is what
+/// reopening the Source is the recovery for.
+///
+/// A Source that pushes one picture and then waits is pushed again after
+/// either path, or it would go on showing what its old filters made — see
+/// [`source::repush`]. Only one with filters, or one that has just lost its
+/// last: with none on either side there is nothing that could have changed.
 fn refresh_filters(source: &mut OpenSource, item: &SceneItemSnapshot) -> bool {
     if filters::running_shape(&source.filters) == filters::shape(&item.filters) {
         for (open, stored) in source.filters.iter().zip(&item.filters) {
             open.apply(stored);
         }
+        if !item.filters.is_empty() {
+            source::repush(source);
+        }
         return false;
     }
 
-    // Answered before the match so the borrow of the rack ends with it, and
-    // the new handles can be written back into the same Source.
-    let refilled = match &source.filter_rack {
-        Some(rack) => rack.refill(&item.filters),
-        None => return true,
-    };
-    match refilled {
+    match source.filter_rack.refill(&item.filters) {
         Ok(filters) => {
             // Built from the stored settings, with the stored enable flag
             // already set, so there is nothing left to apply to them.
             source.filters = filters;
+            source::repush(source);
             false
         }
         Err(error) => {

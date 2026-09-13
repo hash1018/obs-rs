@@ -270,9 +270,13 @@ impl Backend {
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
     ) -> Result<Option<OpenSource>, BackendError> {
+        // Every kind takes the context as well as the device: each one's
+        // filters are built on it, whatever the kind does without them.
+        let context = self.context.clone();
         match item.kind {
             SourceKind::DisplayCapture => display_capture::open(
                 &self.device,
+                context,
                 &self.compositor,
                 &self.captures,
                 item,
@@ -280,11 +284,17 @@ impl Backend {
                 fps,
             )
             .map(Some),
-            SourceKind::WindowCapture => {
-                source::window_capture::open(&self.device, &self.compositor, item, layer, fps)
-            }
+            SourceKind::WindowCapture => source::window_capture::open(
+                &self.device,
+                context,
+                &self.compositor,
+                item,
+                layer,
+                fps,
+            ),
             SourceKind::MediaFile => source::media_file::open(
                 &self.device,
+                context,
                 &self.compositor,
                 mixer,
                 &self.meter_wake,
@@ -293,28 +303,28 @@ impl Backend {
             ),
             SourceKind::Rtsp => source::rtsp::open(
                 &self.device,
+                context,
                 &self.compositor,
                 mixer,
                 &self.meter_wake,
                 item,
                 layer,
             ),
-            SourceKind::VideoCapture => source::video_capture::open(
-                &self.device,
-                self.context.clone(),
-                &self.compositor,
-                item,
-                layer,
-            ),
-            SourceKind::Image => source::image::open(&self.device, &self.compositor, item, layer),
+            SourceKind::VideoCapture => {
+                source::video_capture::open(&self.device, context, &self.compositor, item, layer)
+            }
+            SourceKind::Image => {
+                source::image::open(&self.device, context, &self.compositor, item, layer)
+            }
             SourceKind::Color => {
-                source::color::open(&self.device, &self.compositor, item, layer).map(Some)
+                source::color::open(&self.device, context, &self.compositor, item, layer).map(Some)
             }
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, &self.compositor, item, layer).map(Some)
+                source::drawing::open(&self.device, context, &self.compositor, item, layer)
+                    .map(Some)
             }
             SourceKind::Text => {
-                source::text::open(&self.device, &self.compositor, item, layer).map(Some)
+                source::text::open(&self.device, context, &self.compositor, item, layer).map(Some)
             }
         }
     }

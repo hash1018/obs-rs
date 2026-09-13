@@ -83,7 +83,7 @@ pub(in crate::engine) fn open(
         name,
         refreshed_token: None,
         filters,
-        filter_rack: Some(filter_rack),
+        filter_rack,
         showing: true,
         running: true,
         pushed: None,

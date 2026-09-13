@@ -1,10 +1,24 @@
 //! Turning a Source's stored filter list into elements in its chain.
 //!
-//! Each Source kind that runs filters puts a [`Rack`] in its branch, just
-//! before it terminates at the compositor, and hands the [`FilterRack`] back
-//! for [`OpenSource`](super::OpenSource) to keep. A Source with no filters
-//! gets an empty rack, which is a wire: the buffer that arrives is the buffer
-//! that leaves, not a copy of it.
+//! Every Source kind puts a [`Rack`] in its branch, just before it terminates
+//! at the compositor, and hands the [`FilterRack`] back for
+//! [`OpenSource`](super::OpenSource) to keep. A Source with no filters gets
+//! an empty rack, which is a wire: the buffer that arrives is the buffer that
+//! leaves, not a copy of it.
+//!
+//! # A still picture has to be shown again
+//!
+//! A rack's new contents, and a retuned filter's new settings, take effect on
+//! the next frame. A camera or a capture brings one along a moment later; a
+//! Color, an Image, a Drawing and a Text push one frame and then nothing
+//! until they are edited, so a filter added to one would change nothing on
+//! screen. Those are pushed again after every change here — see
+//! [`super::repush`] — and what that costs when nothing changed is nothing:
+//! every element on the way recognises a repeat and answers it with what it
+//! already made.
+//!
+//! A paused media file is the same shape and has no frame to push: it shows
+//! its filters' new settings when it plays again.
 //!
 //! # Why a rack and not a chain
 //!
@@ -31,9 +45,17 @@
 //! An emptied rack drops the conversion with everything else, and the layer
 //! is NV12 again on the next frame.
 //!
-//! Nothing converts back. On Linux that makes a filtered Color Source
-//! *cheaper* than an unfiltered one, which converts to NV12 today for no
-//! reason this still holds — see `color::open`.
+//! Nothing converts back. A Source that already produces BGRA — a capture on
+//! Windows, anything this application draws itself — says so, and gets no
+//! bridge at all.
+//!
+//! On Linux a capture is converted to NV12 before the compositor, and its
+//! rack goes *after* that conversion, as a camera's does after its upload:
+//! bridged back to BGRA when it has filters, and an unfiltered capture costs
+//! exactly what it did. Before the conversion would be cheaper for a filtered
+//! one, but a key's alpha cannot survive NV12, so the conversion would have
+//! to come out of the branch — and what that does to an unfiltered capture's
+//! share of the compositor has not been measured.
 
 use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
 use media_pp::element::Filter as PpFilter;
@@ -49,19 +71,14 @@ use super::super::backend::BackendError;
 /// element before it produces, and that differs per Source kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine) enum ChainFormat {
-    /// What every filter here wants, so no bridge is inserted.
+    /// What every filter here wants, so no bridge is inserted: a capture on
+    /// Windows, and every Source this application draws itself.
     ///
-    /// Only the camera is wired to this module so far and a camera is NV12,
-    /// so nothing names this yet. The Sources that will are the ones already
-    /// producing BGRA — a capture, a Color, an Image — and each needs one
-    /// thing more than a name: on the CUDA backend they convert to NV12 on
-    /// the way to the compositor today, and a keyed frame cannot make that
-    /// trip. NV12 has no alpha, so converting one throws away exactly what
-    /// the key just wrote.
-    #[allow(dead_code)]
+    /// Nothing after the rack may convert to NV12. NV12 has no alpha, so
+    /// converting a keyed frame throws away exactly what the key just wrote.
     Bgra,
-    /// A camera, or anything decoded. Bridged to BGRA when the rack has
-    /// filters to run, and left alone when it does not.
+    /// A camera, anything decoded, and a capture on Linux. Bridged to BGRA
+    /// when the rack has filters to run, and left alone when it does not.
     Nv12,
 }
 
@@ -249,7 +266,9 @@ mod windows {
     ///
     /// `width`/`height` are the picture the filters will see, which is the
     /// Source's own — every filter here is a per-pixel transform and none of
-    /// them resizes.
+    /// them resizes. Only the bridge reads them: a D3D11 filter takes each
+    /// frame at whatever size it arrives, so a BGRA Source whose size is not
+    /// known until it runs — a window — can pass its stored hint.
     pub(in crate::engine) fn rack(
         name: &str,
         device: &ID3D11Device,

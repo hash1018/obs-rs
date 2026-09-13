@@ -28,8 +28,10 @@
 //! Neither branch decodes the same way. Video is decoded on the GPU straight
 //! into the surfaces the compositor draws from, so its frames never reach
 //! system memory; both compositors take NV12 device frames directly, so there
-//! is nothing to convert between the decoder and the layer. Audio has no such
-//! path and no reason to want one.
+//! is nothing to convert between the decoder and the layer — until the file
+//! has filters, whose rack sits just before the compositor input and bridges
+//! to BGRA for as long as it holds any. Audio has no such path and no reason
+//! to want one.
 //!
 //! The `Queue` in each branch is where decode runs ahead: a `Pacer` sleeps
 //! until a frame is due, and without a queue in front of it that sleep would
@@ -68,7 +70,7 @@ use crate::domain::MediaFileSettings;
 use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
 use crate::engine::source::sound::{self, Sound, Track};
-use crate::engine::source::{MediaMeters, input_name};
+use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// How much either branch may hold while the other is being read.
@@ -267,16 +269,19 @@ fn audio(
 /// demuxer's.
 /// Attaches the video pad: decoded on the GPU, paced, then split between what
 /// draws it and what records where it has reached.
+///
+/// The filters are on the drawing side of the split, so what records the
+/// position sees every frame whatever a filter does with it.
 fn attach_video(
     context: &Arc<Context>,
     source: &mut FileDemuxer,
     index: usize,
     time_base: ffmpeg::Rational,
     decoder: impl media_pp::element::Filter + 'static,
-    sink: Box<dyn Sink>,
+    picture: PictureEnd,
     position: Box<dyn Sink>,
 ) -> media_pp::error::Result<()> {
-    let draw = context.branch().to(sink)?;
+    let draw = picture.branch(context)?;
     let record = context.branch().to(position)?;
     let tee = TeeBuilder::new("video-tee", context.clone())
         .branch(draw)
@@ -310,6 +315,7 @@ fn decoded_size(params: &ffmpeg::codec::Parameters) -> Option<[u32; 2]> {
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
@@ -345,6 +351,17 @@ pub(in crate::engine) fn open(
         chosen.video_params,
         device,
         HW_FRAME_BUDGET,
+    )?;
+    // NV12 from the decoder, bridged to BGRA only while there are filters —
+    // the camera's arrangement, and the reason an unfiltered file still goes
+    // to the compositor without a conversion.
+    let FilledRack { rack, filters } = super::filled_rack(
+        &name,
+        device,
+        context,
+        filters::ChainFormat::Nv12,
+        super::rack_size(size, item),
+        item,
     )?;
     let meters = Arc::new(MediaMeters::default());
     let audio = audio(
@@ -383,7 +400,7 @@ pub(in crate::engine) fn open(
             video_index,
             video_time_base,
             video_decoder,
-            sink,
+            PictureEnd { rack, sink },
             position,
         )?;
 
@@ -399,8 +416,8 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         showing: true,
         running: !settings.paused,
         pushed: None,
@@ -417,7 +434,7 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &media_pp::elements::CudaDevice,
+    device: &Arc<media_pp::elements::CudaDevice>,
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
@@ -450,6 +467,13 @@ pub(in crate::engine) fn open(
         chosen.video_params,
         device,
         HW_FRAME_BUDGET,
+    )?;
+    let FilledRack { rack, filters } = super::filled_rack(
+        &name,
+        device,
+        filters::ChainFormat::Nv12,
+        super::rack_size(size, item),
+        item,
     )?;
     let meters = Arc::new(MediaMeters::default());
     let audio = audio(
@@ -488,7 +512,7 @@ pub(in crate::engine) fn open(
             video_index,
             video_time_base,
             video_decoder,
-            sink,
+            PictureEnd { rack, sink },
             position,
         )?;
 
@@ -504,8 +528,8 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         showing: true,
         running: !settings.paused,
         pushed: None,

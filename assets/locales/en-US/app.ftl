@@ -247,7 +247,8 @@ drawing-clear = Erase everything
 
 dock-filters = Filters
 filters-no-selection = No source selected
-filters-unsupported-kind = Filters are available on Video Capture sources.
+filters-picture-tab = Picture
+filters-sound-tab = Sound
 filters-on-the-source = on the source, in every scene
 filters-empty = No filters yet.
 filters-add = Add a filter

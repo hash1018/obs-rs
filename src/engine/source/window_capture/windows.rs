@@ -9,18 +9,22 @@ use media_pp::elements::{
     WgcCaptureSource,
 };
 use media_pp::pipeline::Pipeline;
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::capture::WindowTarget;
 use crate::domain::{SourceSettings, WindowCaptureTarget};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenSource, input_name};
+use crate::engine::source::{
+    FilledRack, OpenSource, filled_rack, filters, hinted_size, input_name,
+};
 use crate::snapshots::SceneItemSnapshot;
 
 /// `Ok(None)` when the window is not on screen — see this module's parent.
 pub(in crate::engine) fn open(
     device: &ID3D11Device,
+    context: Arc<Mutex<ID3D11DeviceContext>>,
     handle: &D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
@@ -50,11 +54,25 @@ pub(in crate::engine) fn open(
         device,
     )?;
 
+    // BGRA already, so nothing is bridged and the size is never read: a
+    // window is whatever size it is from one frame to the next, and a D3D11
+    // filter takes each at the size it arrives. The stored hint is what the
+    // rack is told, for want of anything better and with nothing relying on
+    // it.
+    let FilledRack { rack, filters } = filled_rack(
+        &name,
+        device,
+        context,
+        filters::ChainFormat::Bgra,
+        hinted_size(item),
+        item,
+    )?;
+
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().to(sink)?;
+        let branch = context.branch().pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -66,8 +84,8 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         // `None` rather than a guess: Windows Graphics Capture settles the
         // frame size once the capture is running and `WgcCaptureSource`
         // reports none, so there is nothing here to correct the stored hint

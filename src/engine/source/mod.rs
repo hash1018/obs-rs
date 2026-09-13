@@ -48,6 +48,122 @@ pub(in crate::engine) struct PushedSurface {
     /// rename, anything else in the Scene at all — must not cost a redraw and
     /// a re-upload.
     pub(in crate::engine) content: PushedContent,
+    /// The frame that was, for pushing again once its filters change — see
+    /// [`repush`]. The same buffer rather than a redraw of it, which is what
+    /// lets everything on the way recognise it as the picture it already
+    /// handled.
+    pub(in crate::engine) frame: media_pp::buffer::MediaBuffer,
+}
+
+impl PushedSurface {
+    /// Pushes `frame` and remembers it as this surface's picture.
+    pub(in crate::engine) fn push(
+        &mut self,
+        frame: media_pp::buffer::MediaBuffer,
+    ) -> media_pp::error::Result<()> {
+        self.pusher.push(frame.clone())?;
+        self.frame = frame;
+        Ok(())
+    }
+}
+
+/// Puts a pushed Source's picture through its filters again.
+///
+/// What a filter change needs on a Source that sends nothing until it is
+/// edited — see the `filters` module. A no-op for every other kind, whose
+/// next frame is already on its way.
+pub(in crate::engine) fn repush(source: &OpenSource) {
+    if let Some(surface) = &source.pushed
+        && let Err(error) = surface.pusher.push(surface.frame.clone())
+    {
+        eprintln!("could not refilter \"{}\": {error}", source.name);
+    }
+}
+
+/// Opens a rack for a Source and fills it from the item's filters, so the
+/// first frame is already filtered: a rack picks its contents up on the next
+/// buffer, and there is not one yet.
+#[cfg(target_os = "windows")]
+pub(in crate::engine) fn filled_rack(
+    name: &str,
+    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    incoming: filters::ChainFormat,
+    [width, height]: [u32; 2],
+    item: &SceneItemSnapshot,
+) -> Result<FilledRack, BackendError> {
+    let (rack, filter_rack) = filters::rack(name, device, context, incoming, width, height);
+    let open = filter_rack.refill(&item.filters)?;
+    Ok(FilledRack {
+        rack,
+        filters: SourceFilters { filter_rack, open },
+    })
+}
+
+/// The same, on the CUDA backend.
+#[cfg(target_os = "linux")]
+pub(in crate::engine) fn filled_rack(
+    name: &str,
+    device: &Arc<media_pp::elements::CudaDevice>,
+    incoming: filters::ChainFormat,
+    [width, height]: [u32; 2],
+    item: &SceneItemSnapshot,
+) -> Result<FilledRack, BackendError> {
+    let (rack, filter_rack) = filters::rack(name, device, incoming, width, height);
+    let open = filter_rack.refill(&item.filters)?;
+    Ok(FilledRack {
+        rack,
+        filters: SourceFilters { filter_rack, open },
+    })
+}
+
+/// Where a decoded picture ends up: through the Source's filters, then into
+/// its compositor input. What a media file and a stream both build their
+/// video branch toward.
+pub(in crate::engine) struct PictureEnd {
+    pub(in crate::engine) rack: media_pp::elements::Rack,
+    pub(in crate::engine) sink: Box<dyn media_pp::element::Sink>,
+}
+
+impl PictureEnd {
+    /// The branch these two are, ready to attach.
+    pub(in crate::engine) fn branch(
+        self,
+        context: &Arc<media_pp::element::Context>,
+    ) -> media_pp::error::Result<media_pp::pipeline::DetachedBranch> {
+        context.branch().pipe(self.rack).to(self.sink)
+    }
+}
+
+/// What [`filled_rack`] answers: the element for the branch, and what the
+/// [`OpenSource`] keeps to reach it.
+pub(in crate::engine) struct FilledRack {
+    pub(in crate::engine) rack: media_pp::elements::Rack,
+    pub(in crate::engine) filters: SourceFilters,
+}
+
+/// A running Source's way back to its rack, and the filters in it — the two
+/// fields of [`OpenSource`] that [`OpenSource::filters`] and
+/// [`OpenSource::filter_rack`] are, carried together until one is built.
+pub(in crate::engine) struct SourceFilters {
+    pub(in crate::engine) filter_rack: filters::FilterRack,
+    pub(in crate::engine) open: Vec<filters::OpenFilter>,
+}
+
+/// A stored size hint as whole, even pixels — what a Source whose size is not
+/// known until it runs builds its rack for.
+pub(in crate::engine) fn hinted_size(item: &SceneItemSnapshot) -> [u32; 2] {
+    item.source_size
+        .map(|side| (side.round().max(2.0) as u32) & !1)
+}
+
+/// What a decoded picture's rack is built for: the size the decoder was, or
+/// the stored hint where the stream's parameters did not say.
+pub(in crate::engine) fn rack_size(
+    decoded: Option<[u32; 2]>,
+    item: &SceneItemSnapshot,
+) -> [u32; 2] {
+    decoded.unwrap_or_else(|| hinted_size(item))
 }
 
 /// What a [`PushedSurface`] last put on the compositor.
@@ -107,13 +223,12 @@ pub(in crate::engine) struct OpenSource {
     /// removing and reordering go through [`filter_rack`](Self::filter_rack)
     /// instead, and this is replaced with what that answers.
     pub(in crate::engine) filters: Vec<filters::OpenFilter>,
-    /// The rack those filters sit in, for the Source kinds that have one.
+    /// The rack those filters sit in.
     ///
-    /// `None` for a kind not wired to `filters` yet, which is every kind but
-    /// the camera today. A Source with one can have its whole filter list
-    /// exchanged without being reopened — which is the point, since
-    /// reopening a camera is a visible stall and on Wayland a portal dialog.
-    pub(in crate::engine) filter_rack: Option<filters::FilterRack>,
+    /// Every kind has one, so its whole filter list can be exchanged without
+    /// the Source being reopened — which is the point, since reopening a
+    /// camera is a visible stall and on Wayland a portal dialog.
+    pub(in crate::engine) filter_rack: filters::FilterRack,
 }
 
 /// The part of a media file Source that can be changed while it plays.
@@ -350,13 +465,61 @@ pub(in crate::engine) fn push_content(source: &mut OpenSource, wanted: PushedCon
         },
         // Nothing asks for this. An Image Source is opened with one file and
         // keeps it, so `refresh_pushed` never names one here — the arm exists
-        // because the content is compared like every other kind's, not
-        // because a picture is ever pushed twice.
+        // because the content is compared like every other kind's. What does
+        // push a picture twice is its filters, and [`repush`] sends the frame
+        // it kept rather than drawing one.
         PushedContent::Image(_) => return,
     };
-    if let Err(error) = surface.pusher.push(frame) {
+    if let Err(error) = surface.push(frame) {
         eprintln!("could not update \"{}\": {error}", source.name);
         return;
     }
     surface.content = wanted;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hinted_size, rack_size};
+    use crate::domain::{
+        ColorSourceSettings, Crop, SceneItemId, SourceKind, SourceSettings, Transform,
+    };
+    use crate::snapshots::SceneItemSnapshot;
+
+    fn item(source_size: [f32; 2]) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            filters: Vec::new(),
+            audio_filters: Vec::new(),
+            id: SceneItemId(1),
+            name: "Window".to_owned(),
+            kind: SourceKind::Color,
+            settings: SourceSettings::Color(ColorSourceSettings {
+                size: source_size,
+                rgba: [0, 0, 0, 255],
+            }),
+            source_size,
+            visible: true,
+            locked: false,
+            transform: Transform::default(),
+            crop: Crop::default(),
+            peak_db: None,
+            position: None,
+        }
+    }
+
+    /// A hint is whatever the picker reported, and a rack's bridge on the
+    /// CUDA backend converts to NV12 sizes: whole, even, and never zero.
+    #[test]
+    fn a_hinted_size_is_whole_even_pixels_and_never_empty() {
+        assert_eq!(hinted_size(&item([1279.6, 721.0])), [1280, 720]);
+        assert_eq!(hinted_size(&item([0.0, 1.0])), [2, 2]);
+    }
+
+    /// What the decoder said wins; the hint is only for when it said
+    /// nothing.
+    #[test]
+    fn a_decoded_size_is_preferred_to_the_hint() {
+        let item = item([640.0, 480.0]);
+        assert_eq!(rack_size(Some([1920, 1080]), &item), [1920, 1080]);
+        assert_eq!(rack_size(None, &item), [640, 480]);
+    }
 }

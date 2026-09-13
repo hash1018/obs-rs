@@ -11,14 +11,15 @@ use media_pp::elements::{
 };
 use media_pp::pipeline::Pipeline;
 use media_pp::rate::FrameRateHandle;
+use std::sync::Arc;
 
 use crate::domain::{SourceSettings, WindowCaptureTarget};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenSource, input_name};
+use crate::engine::source::{FilledRack, OpenSource, filled_rack, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 pub(in crate::engine) fn open(
-    device: &CudaDevice,
+    device: &Arc<CudaDevice>,
     handle: &CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
@@ -81,9 +82,19 @@ pub(in crate::engine) fn open(
         format.height,
     )?;
 
+    // After the converter, as a camera's rack is after its upload — see the
+    // `filters` module for why a capture is not filtered before it.
+    let FilledRack { rack, filters } = filled_rack(
+        &name,
+        device,
+        filters::ChainFormat::Nv12,
+        [format.width, format.height],
+        item,
+    )?;
+
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(converter).to(sink)?;
+        let branch = context.branch().pipe(converter).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -97,8 +108,8 @@ pub(in crate::engine) fn open(
             layer,
             name,
             refreshed_token,
-            filters: Vec::new(),
-            filter_rack: None,
+            filters: filters.open,
+            filter_rack: filters.filter_rack,
             showing: true,
             running: true,
             pushed: None,

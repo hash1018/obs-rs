@@ -247,7 +247,8 @@ drawing-clear = 전체 지우기
 
 dock-filters = 필터
 filters-no-selection = 선택된 소스가 없습니다
-filters-unsupported-kind = 필터는 비디오 캡처 소스에서 사용할 수 있습니다.
+filters-picture-tab = 화면
+filters-sound-tab = 소리
 filters-on-the-source = 소스에 적용, 모든 장면에서
 filters-empty = 아직 필터가 없습니다.
 filters-add = 필터 추가

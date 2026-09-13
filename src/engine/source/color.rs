@@ -5,9 +5,10 @@
 //! Position, size and opacity are the layer's, so nothing here is redrawn
 //! when the item moves.
 //!
-//! The two backends differ only in what carries the frame to the GPU: D3D11
-//! uploads BGRA into a BGRA compositor and is done, while CUDA has to convert
-//! into the NV12 its canvas is in.
+//! The two backends differ only in which element carries the frame to the
+//! GPU. Both hand the compositor BGRA, filtered or not: the CUDA one used to
+//! convert to NV12 on the way, which a key's alpha could not have survived,
+//! and which a flat colour pushed once never needed.
 
 use std::sync::Arc;
 
@@ -17,7 +18,9 @@ use crate::domain::SourceSettings;
 use crate::snapshots::SceneItemSnapshot;
 
 use super::super::backend::{BackendError, Layer, RunningSource};
-use super::{OpenSource, PushedContent, PushedSurface, input_name};
+use super::{
+    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filters, input_name,
+};
 
 /// One BGRA frame filled with a single colour, ready for a backend's upload
 /// element. Backend-independent: both compositors take their Color Source
@@ -71,10 +74,13 @@ fn opened(
     source: RunningSource,
     layer: Layer,
     pusher: media_pp::elements::AppSourceHandle,
+    filters: SourceFilters,
     size: [u32; 2],
     rgba: [u8; 4],
-) -> OpenSource {
-    OpenSource {
+) -> Result<OpenSource, BackendError> {
+    let frame = flat_bgra(size[0], size[1], rgba);
+    pusher.push(frame.clone())?;
+    Ok(OpenSource {
         media_file: None,
         // Its size is its own rather than something a device answered
         // with, so there is nothing to correct.
@@ -83,8 +89,8 @@ fn opened(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         showing: true,
         running: true,
         // Held, not dropped here: an `AppSource` runs only while a handle to
@@ -94,93 +100,97 @@ fn opened(
             pusher,
             size,
             content: PushedContent::Color(rgba),
+            frame,
         }),
-    }
+    })
 }
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
 
-    let ([width, height], rgba) = size(item)?;
+    let (size, rgba) = size(item)?;
     let name = input_name(item);
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA in, BGRA composited: unlike the CUDA side there is no colour-space
-    // conversion between the upload and the compositor at all.
-    let upload = D3d11Upload::new(format!("{name}-upload"), device, width, height);
+    // BGRA in, BGRA composited: there is no colour-space conversion between
+    // the upload and the compositor at all.
+    let upload = D3d11Upload::new(format!("{name}-upload"), device, size[0], size[1]);
+    let FilledRack { rack, filters } = super::filled_rack(
+        &name,
+        device,
+        context,
+        filters::ChainFormat::Bgra,
+        size,
+        item,
+    )?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).to(sink)?;
+        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
     pipeline.run()?;
-    pusher.push(flat_bgra(width, height, rgba))?;
 
-    Ok(opened(
+    opened(
         name,
         RunningSource::Owned(pipeline),
         layer,
         pusher,
-        [width, height],
+        filters,
+        size,
         rgba,
-    ))
+    )
 }
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &media_pp::elements::CudaDevice,
+    device: &Arc<media_pp::elements::CudaDevice>,
     handle: &media_pp::elements::CudaVideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{
-        AppSource, CudaConverter, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput,
-    };
+    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
 
-    let ([width, height], rgba) = size(item)?;
+    let (size, rgba) = size(item)?;
     let name = input_name(item);
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA in, so `CudaConverter` performs the RGB-to-BT.709 conversion the
-    // compositor expects instead of this having its own copy of that matrix.
+    // BGRA all the way, as a Drawing's is: the compositor takes a BGRA layer
+    // and blends it itself, and a converter to NV12 here would have been
+    // where a key's alpha was lost.
     let upload = CudaUpload::new(
         format!("{name}-upload"),
         device,
         CudaFrameFormat::Bgra,
-        width,
-        height,
+        size[0],
+        size[1],
     )?;
-    let converter = CudaConverter::new(
-        format!("{name}-convert"),
-        device,
-        CudaFrameFormat::Nv12,
-        width,
-        height,
-    )?;
+    let FilledRack { rack, filters } =
+        super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(converter).to(sink)?;
+        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
     pipeline.run()?;
-    pusher.push(flat_bgra(width, height, rgba))?;
 
-    Ok(opened(
+    opened(
         name,
         RunningSource(pipeline),
         layer,
         pusher,
-        [width, height],
+        filters,
+        size,
         rgba,
-    ))
+    )
 }

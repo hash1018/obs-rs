@@ -69,7 +69,8 @@ text_keys! {
     ProjectUnavailableBody        => "project-unavailable-body";
     ProjectUnavailableDismiss     => "project-unavailable-dismiss";
     FiltersNoSelection            => "filters-no-selection";
-    FiltersUnsupportedKind        => "filters-unsupported-kind";
+    FiltersPictureTab             => "filters-picture-tab";
+    FiltersSoundTab               => "filters-sound-tab";
     FiltersOnTheSource            => "filters-on-the-source";
     FiltersEmpty                  => "filters-empty";
     FiltersAdd                    => "filters-add";

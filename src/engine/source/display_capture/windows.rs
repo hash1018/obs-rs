@@ -15,23 +15,22 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use media_pp::{
-    element::Sink,
     elements::{
         CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder, TeeHandle,
     },
     ffmpeg,
     graph::BranchId,
-    pipeline::Pipeline,
+    pipeline::{ChainBuilder, DetachedBranch, Pipeline},
     rate::FrameRateHandle,
 };
-use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 
 use media_pp::elements::{D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer};
 
 use crate::domain::{DisplayCaptureTarget, SourceSettings};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenSource, input_name};
+use crate::engine::source::{FilledRack, OpenSource, filled_rack, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// One display's capture, and what is currently drawing from it.
@@ -97,6 +96,11 @@ impl CaptureRegistry {
     /// Points one more compositor input at `monitor`, opening its capture if
     /// this is the first item to ask.
     ///
+    /// `finish` ends this item's branch, and is handed the capture's size:
+    /// what it puts between the capture and the compositor — a rack of
+    /// filters — is built for the picture that will arrive, which is known
+    /// only once the capture is open.
+    ///
     /// The returned id names this item's branch and nothing else, so removing
     /// it later cannot disturb another item sharing the same capture.
     pub(in crate::engine) fn attach(
@@ -104,7 +108,7 @@ impl CaptureRegistry {
         monitor: &str,
         device: &ID3D11Device,
         fps: u32,
-        sink: Box<dyn Sink>,
+        finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
     ) -> Result<(BranchId, [u32; 2]), BackendError> {
         let mut open = self.lock();
         if !open.contains_key(monitor) {
@@ -118,11 +122,11 @@ impl CaptureRegistry {
         // Every branch is attached at runtime, the first one included: a
         // branch handed to `TeeBuilder` is fixed and has no id, and this one
         // has to be removable when its item goes away.
-        let branch = capture
+        let builder = capture
             .tee
             .branch()
-            .ok_or("the capture for this display has stopped")?
-            .to(sink)?;
+            .ok_or("the capture for this display has stopped")?;
+        let branch = finish(builder, capture.size)?;
         let id = capture.tee.attach(branch)?;
         // A new item is added to the Scene being shown, but the capture may
         // have been paused by another Scene's item leaving it.
@@ -263,6 +267,7 @@ fn open_capture(
 /// first item to want it.
 pub(in crate::engine) fn open(
     device: &ID3D11Device,
+    context: Arc<Mutex<ID3D11DeviceContext>>,
     handle: &D3d11VideoCompositorHandle,
     captures: &Arc<CaptureRegistry>,
     item: &SceneItemSnapshot,
@@ -286,8 +291,23 @@ pub(in crate::engine) fn open(
         .ok_or("the compositor is no longer running")?;
     // The capture is shared, so what this item gets is a branch of it. Its
     // own compositor input is still its own: position, size and z-order stay
-    // per item even when the pixels behind two of them are the same.
-    let (branch, size) = captures.attach(monitor, device, fps, sink)?;
+    // per item even when the pixels behind two of them are the same — and so
+    // are its filters, which sit in that branch and key one item's picture
+    // without touching another's.
+    let mut kept = None;
+    let (branch, size) = captures.attach(monitor, device, fps, |builder, size| {
+        let FilledRack { rack, filters } = filled_rack(
+            &name,
+            device,
+            context,
+            filters::ChainFormat::Bgra,
+            size,
+            item,
+        )?;
+        kept = Some(filters);
+        Ok(builder.pipe(rack).to(sink)?)
+    })?;
+    let filters = kept.ok_or("the capture answered without finishing the branch")?;
 
     Ok(OpenSource {
         media_file: None,
@@ -299,8 +319,8 @@ pub(in crate::engine) fn open(
         layer,
         name,
         refreshed_token: None,
-        filters: Vec::new(),
-        filter_rack: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
         // The display layout can change between runs, so the size a picker
         // reported when the item was added is a hint rather than a fact —
         // this is what duplication actually opened.
@@ -352,9 +372,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use media_pp::{buffer::MediaBuffer, elements::AppSink};
+    use media_pp::{buffer::MediaBuffer, element::Sink, elements::AppSink};
 
     use super::*;
+
+    /// Ends a branch at `sink` and nothing else — no filters between.
+    fn end(
+        sink: Box<dyn Sink>,
+    ) -> impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError> {
+        move |builder, _| Ok(builder.to(sink)?)
+    }
 
     /// A branch end that counts the pictures reaching it.
     fn counting() -> (Box<dyn Sink>, Arc<AtomicUsize>) {
@@ -435,7 +462,7 @@ mod tests {
         let captures = CaptureRegistry::default();
 
         let (sink, _) = counting();
-        let (scene_1, _) = match captures.attach(&monitor, &device, 30, sink) {
+        let (scene_1, _) = match captures.attach(&monitor, &device, 30, end(sink)) {
             Ok(attached) => attached,
             Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
         };
@@ -443,7 +470,7 @@ mod tests {
 
         let (sink, count) = counting();
         let (scene_2, _) = captures
-            .attach(&monitor, &device, 30, sink)
+            .attach(&monitor, &device, 30, end(sink))
             .expect("join the open capture");
         assert!(moves(&count), "the new item's branch gets pictures");
 
@@ -468,14 +495,14 @@ mod tests {
         let captures = CaptureRegistry::default();
 
         let (sink, count) = counting();
-        let (hidden, _) = match captures.attach(&monitor, &device, 30, sink) {
+        let (hidden, _) = match captures.attach(&monitor, &device, 30, end(sink)) {
             Ok(attached) => attached,
             Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
         };
         captures.set_showing(&monitor, hidden, false);
         let (sink, _) = counting();
         let (shown, _) = captures
-            .attach(&monitor, &device, 30, sink)
+            .attach(&monitor, &device, 30, end(sink))
             .expect("join the open capture");
         assert!(moves(&count), "running while one item is shown");
 
@@ -508,13 +535,13 @@ mod tests {
         let captures = CaptureRegistry::default();
 
         let (sink, first_count) = counting_as("scene-item-1");
-        let (first, _) = match captures.attach(&monitor, &device, 30, sink) {
+        let (first, _) = match captures.attach(&monitor, &device, 30, end(sink)) {
             Ok(attached) => attached,
             Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
         };
         let (sink, _) = counting_as("scene-item-2");
         let (second, _) = captures
-            .attach(&monitor, &device, 30, sink)
+            .attach(&monitor, &device, 30, end(sink))
             .expect("join the open capture");
         assert!(moves(&first_count), "the capture is delivering");
 
