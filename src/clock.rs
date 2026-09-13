@@ -38,11 +38,17 @@ static LOCAL_OFFSET: OnceLock<UtcOffset> = OnceLock::new();
 /// condition that makes it succeed at all. Calling it twice is harmless and
 /// the second call is ignored; calling it late is not an error either, it
 /// just fails and leaves everything on UTC.
-pub fn capture_local_offset() {
-    if let Ok(offset) = UtcOffset::current_local_offset() {
-        let _ = LOCAL_OFFSET.set(offset);
-    } else {
-        eprintln!("could not read this machine's time zone; clocks will show UTC");
+///
+/// Answers whether it found one, for the caller to say so once there is a
+/// log to say it in — which there cannot be yet: the log writes on a thread
+/// of its own.
+pub fn capture_local_offset() -> bool {
+    match UtcOffset::current_local_offset() {
+        Ok(offset) => {
+            let _ = LOCAL_OFFSET.set(offset);
+            true
+        }
+        Err(_) => false,
     }
 }
 

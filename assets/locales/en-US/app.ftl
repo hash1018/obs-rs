@@ -12,6 +12,7 @@ language-english = English
 language-korean = Korean
 menu-help = Help
 menu-about = About obs-rs
+menu-show-logs = Show Logs
 about-description = Live capture and recording, built with media-pp.
 
 dock-scenes = Scenes

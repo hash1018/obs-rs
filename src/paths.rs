@@ -26,6 +26,12 @@ pub fn data_dir() -> PathBuf {
     base(Kind::Data).join(APPLICATION)
 }
 
+/// Where both logs are written: this application's and `media-pp`'s, side
+/// by side — see [`crate::log`].
+pub fn logs_dir() -> PathBuf {
+    data_dir().join("logs")
+}
+
 /// Shows `directory` to the user in whatever file manager this platform has.
 ///
 /// The one action in a module of locations, and here because a location is

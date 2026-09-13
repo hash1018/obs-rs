@@ -55,16 +55,20 @@ pub enum Trouble {
 /// hundred times a second, and is empty on almost all of them.
 ///
 /// Everything that is not a muxer failing is logged and dropped. A dropped
-/// buffer says the encoder is behind, which is worth having in the log and is
-/// not worth a line in the status bar: it can happen many times a second, and
-/// a report that appears that often is one nobody reads.
+/// buffer is logged at `debug` only: the only queues here that drop are the
+/// ones meant to — the Preview's, a screenshot's, the monitor mix's — where
+/// losing a frame is the choice made over waiting for one. A screenshot's
+/// alone drops every frame the Canvas makes until its one picture is saved,
+/// so at `warn` these were most of the log and said nothing was wrong. The
+/// outputs that must not lose anything block instead, and time out as an
+/// error above when they cannot.
 pub(in crate::engine) fn drain(bus: &BusReceiver, source: &str) -> Vec<Trouble> {
     let mut troubles = Vec::new();
     while let Some(message) = bus.try_recv_message() {
         match message.event {
             BusEvent::Error { name, error, .. } => {
                 let reason = format!("{name}: {error}");
-                eprintln!("{source}: {reason}");
+                tracing::error!("{source}: {reason}");
                 // Attributed by name. `media-pp` traces an error back to
                 // the element that raised it, so what arrives here names the
                 // muxer that stopped writing rather than the queue in front
@@ -88,7 +92,7 @@ pub(in crate::engine) fn drain(bus: &BusReceiver, source: &str) -> Vec<Trouble> 
             // the ordinary way one ends.
             BusEvent::Eos { .. } | BusEvent::Seeked { .. } => {}
             BusEvent::Dropped { element_type, name } => {
-                eprintln!("{source}: {element_type:?}({name}) dropped a buffer");
+                tracing::debug!("{source}: {element_type:?}({name}) dropped a buffer");
             }
             // `BusEvent` is `#[non_exhaustive]`: a new kind of report must
             // not stop this compiling, and the ones this acts on are named

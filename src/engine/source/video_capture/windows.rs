@@ -142,11 +142,11 @@ fn start(
         Err(error) => error,
     };
     if requested.is_none() {
-        eprintln!("\"{item_name}\": the camera is not available: {error}");
+        tracing::warn!("\"{item_name}\": the camera is not available: {error}");
         return Err(format!("the camera is not available: {error}"));
     }
 
-    eprintln!(
+    tracing::warn!(
         "\"{item_name}\": the stored mode is not on offer ({error}); taking the camera's own"
     );
     MfCaptureSource::open(
@@ -157,7 +157,7 @@ fn start(
         },
     )
     .map_err(|error| {
-        eprintln!("\"{item_name}\": the camera is not available: {error}");
+        tracing::warn!("\"{item_name}\": the camera is not available: {error}");
         format!("the camera is not available: {error}")
     })
 }

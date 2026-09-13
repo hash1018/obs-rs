@@ -287,6 +287,7 @@ text_keys! {
     SourceDisplayMonitorPrimary   => "source-display-monitor-primary";
     MenuSettings                  => "menu-settings";
     MenuShowRecordings            => "menu-show-recordings";
+    MenuShowLogs                  => "menu-show-logs";
     MenuScreenshot                => "menu-screenshot";
     MenuScreenshotSource          => "menu-screenshot-source";
     SourceScreenshot              => "source-screenshot";

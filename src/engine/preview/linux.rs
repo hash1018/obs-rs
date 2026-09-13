@@ -671,7 +671,7 @@ static TAIL_UNWRITTEN: std::sync::Once = std::sync::Once::new();
 /// Says something once, however often it happens. A per-frame failure would
 /// otherwise write sixty lines a second about one broken thing.
 fn report_once(once: &std::sync::Once, message: std::fmt::Arguments<'_>) {
-    once.call_once(|| eprintln!("{message}"));
+    once.call_once(|| tracing::warn!("{message}"));
 }
 
 // The handful of CUDA driver entry points this interop calls, declared here

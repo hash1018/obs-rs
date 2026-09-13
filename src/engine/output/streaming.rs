@@ -72,7 +72,7 @@ pub(in crate::engine) fn connect(
         let Some(fallback) = audio_codecs.first().copied() else {
             return Err("this build has no audio codec a broadcast can carry".into());
         };
-        eprintln!(
+        tracing::warn!(
             "{:?} cannot be opened here; broadcasting with {fallback:?}",
             settings.audio_codec
         );
@@ -82,7 +82,7 @@ pub(in crate::engine) fn connect(
         let Some(fallback) = backend.available_encoders().first().copied() else {
             return Err("this machine has no encoder a broadcast can use".into());
         };
-        eprintln!(
+        tracing::warn!(
             "{:?} cannot be opened here; broadcasting with {fallback:?}",
             settings.encoder
         );
@@ -99,7 +99,7 @@ pub(in crate::engine) fn connect(
     )?;
     // The address without its key, which is the only form of it that leaves
     // this function.
-    println!("broadcasting to {}", redacted(&settings.server));
+    tracing::info!("broadcasting to {}", redacted(&settings.server));
     Ok(running)
 }
 

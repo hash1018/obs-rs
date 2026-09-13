@@ -12,6 +12,7 @@ language-english = 영어
 language-korean = 한국어
 menu-help = 도움말
 menu-about = obs-rs 정보
+menu-show-logs = 로그 폴더 열기
 about-description = media-pp로 만든 실시간 캡처 및 녹화 프로그램입니다.
 
 dock-scenes = 장면

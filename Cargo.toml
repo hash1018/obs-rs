@@ -49,6 +49,12 @@ time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 toml = "0.9"
 unic-langid = "0.9.6"
 rfd = "0.17.2"
+# This application's own log file — see `log`. All three are already in the
+# tree through `media-pp`'s logger, at these versions and with these
+# features, so what this adds is the edges and not the code.
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 # The window, named to the platform by the global hotkey listener: on Linux the
 # system's dialog asking to allow a set of shortcuts is shown over it, which
 # is what keeps that dialog from opening behind whatever has focus. Already in

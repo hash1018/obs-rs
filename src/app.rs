@@ -99,7 +99,7 @@ impl ObsApp {
         let mut ui_state =
             UiState::restored(&settings.workspace.docks, &settings.workspace.preview);
         if let Err(error) = settings_store.save(&settings) {
-            eprintln!("could not save app settings: {error}");
+            tracing::error!("could not save app settings: {error}");
         }
         let localization = LocalizationManager::new(settings.locale);
         let engine_repaint_ctx = cc.egui_ctx.clone();
@@ -132,7 +132,7 @@ impl ObsApp {
             match ProjectManager::spawn(move || project_repaint_ctx.request_repaint()) {
                 Ok(manager) => (Some(manager), None),
                 Err(error) => {
-                    eprintln!("the project could not be opened: {error}");
+                    tracing::error!("the project could not be opened: {error}");
                     (None, Some(error.to_string()))
                 }
             };
@@ -157,7 +157,7 @@ impl ObsApp {
             move || audio_repaint_ctx.request_repaint(),
             meter_wake.clone(),
         )
-        .inspect_err(|error| eprintln!("could not start audio: {error}"))
+        .inspect_err(|error| tracing::error!("could not start audio: {error}"))
         .ok();
         // Taken before the engine is built, because the engine loop is the
         // one thing that can act on what comes down it — and there is one
@@ -219,7 +219,7 @@ impl ObsApp {
                     },
                     move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
                 )
-                .inspect_err(|error| eprintln!("could not start the engine: {error}"))
+                .inspect_err(|error| tracing::error!("could not start the engine: {error}"))
                 .ok()
             }),
             #[cfg(target_os = "linux")]
@@ -267,7 +267,7 @@ impl ObsApp {
                         engine.apply(&self.snapshots.sources);
                     }
                 }
-                ProjectUpdate::Error(error) => eprintln!("project database error: {error}"),
+                ProjectUpdate::Error(error) => tracing::error!("project database error: {error}"),
             }
         }
     }
@@ -368,7 +368,7 @@ impl ObsApp {
         }
         self.settings = settings;
         if let Err(error) = self.settings_store.save(&self.settings) {
-            eprintln!("could not save app settings: {error}");
+            tracing::error!("could not save app settings: {error}");
         }
         ctx.request_repaint();
     }
@@ -442,7 +442,7 @@ impl ObsApp {
         self.settings.workspace.docks = self.ui_state.docks();
         self.settings.workspace.preview = self.ui_state.preview_zoom();
         if let Err(error) = self.settings_store.save(&self.settings) {
-            eprintln!("could not save the workspace layout: {error}");
+            tracing::error!("could not save the workspace layout: {error}");
         }
     }
 
@@ -573,7 +573,7 @@ impl ObsApp {
                 }
             }
             Some(SystemDisplayPickerUpdate::Error(error)) => {
-                eprintln!("system display picker error: {error}");
+                tracing::warn!("system display picker error: {error}");
             }
             Some(SystemDisplayPickerUpdate::Cancelled) | None => {}
         }
@@ -605,7 +605,7 @@ impl ObsApp {
                 }
             });
         if let Err(error) = spawned {
-            eprintln!("could not open the font picker: {error}");
+            tracing::warn!("could not open the font picker: {error}");
             return;
         }
         self.font_picker = Some((item_id, receiver));
@@ -854,7 +854,13 @@ impl ObsApp {
                 // user is looking for is where their recordings actually go.
                 let directory = self.settings.recording.directory_or_default();
                 if let Err(error) = crate::paths::show_in_file_manager(&directory) {
-                    eprintln!("could not show {}: {error}", directory.display());
+                    tracing::warn!("could not show {}: {error}", directory.display());
+                }
+            }
+            UiAction::ShowLogs => {
+                let directory = crate::paths::logs_dir();
+                if let Err(error) = crate::paths::show_in_file_manager(&directory) {
+                    tracing::warn!("could not show {}: {error}", directory.display());
                 }
             }
             UiAction::TakeScreenshot => {
@@ -885,7 +891,7 @@ impl ObsApp {
                 self.localization.set_locale(locale);
                 self.settings.locale = locale;
                 if let Err(error) = self.settings_store.save(&self.settings) {
-                    eprintln!("could not save app settings: {error}");
+                    tracing::error!("could not save app settings: {error}");
                 }
                 ctx.request_repaint();
             }

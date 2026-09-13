@@ -334,7 +334,7 @@ pub fn watch_audio_devices(
     #[cfg(target_os = "windows")]
     {
         windows::watch_audio_devices(on_change)
-            .inspect_err(|error| eprintln!("could not watch audio devices: {error}"))
+            .inspect_err(|error| tracing::warn!("could not watch audio devices: {error}"))
             .ok()
     }
     #[cfg(target_os = "linux")]

@@ -142,7 +142,7 @@ impl SettingsDialogState {
                 }
             });
         if let Err(error) = spawned {
-            eprintln!("could not open the folder picker: {error}");
+            tracing::warn!("could not open the folder picker: {error}");
             return;
         }
         self.folder_picker = Some(receiver);

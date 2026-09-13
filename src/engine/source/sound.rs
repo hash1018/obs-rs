@@ -154,7 +154,7 @@ impl SoundRouting {
     /// channel.
     pub(in crate::engine) fn apply_filters(&mut self, filters: &[AudioFilter]) {
         if let Err(error) = self.filters.apply(filters) {
-            eprintln!("could not put the audio filters on {}: {error}", self.name);
+            tracing::error!("could not put the audio filters on {}: {error}", self.name);
         }
     }
 
@@ -185,7 +185,7 @@ impl SoundRouting {
                     // leaves a branch pushing into a mixer input that has
                     // been taken back.
                     if let Err(error) = self.tee.detach(branch) {
-                        eprintln!("could not take {name} off the monitor mix: {error}");
+                        tracing::warn!("could not take {name} off the monitor mix: {error}");
                     }
                     if let Some(monitor) = monitor {
                         monitor.remove_source(&name);
@@ -202,7 +202,7 @@ impl SoundRouting {
             return false;
         };
         let Some(input) = monitor.add_source(name) else {
-            eprintln!("could not register {name} with the monitor mix: it is gone");
+            tracing::warn!("could not register {name} with the monitor mix: it is gone");
             return false;
         };
         let attached = self
@@ -217,7 +217,7 @@ impl SoundRouting {
                 true
             }
             Err(error) => {
-                eprintln!("could not put {name} on the monitor mix: {error}");
+                tracing::error!("could not put {name} on the monitor mix: {error}");
                 monitor.remove_source(name);
                 false
             }

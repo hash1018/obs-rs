@@ -20,7 +20,7 @@ pub fn install_locale_fonts(ctx: &egui::Context) {
         .into_iter()
         .find_map(|path| std::fs::read(path).ok())
     else {
-        eprintln!("no CJK system font found; Korean glyphs may be unavailable");
+        tracing::warn!("no CJK system font found; Korean glyphs may be unavailable");
         return;
     };
 

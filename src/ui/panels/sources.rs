@@ -942,7 +942,7 @@ fn open_file_picker(
             }
         });
     if let Err(error) = spawned {
-        eprintln!("could not open the file picker: {error}");
+        tracing::warn!("could not open the file picker: {error}");
         return;
     }
     state.file_picker = Some((scene_id, receiver));

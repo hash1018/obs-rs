@@ -251,7 +251,7 @@ pub fn video_capture_devices() -> Vec<crate::capture::VideoCaptureTarget> {
             })
             .collect(),
         Err(error) => {
-            eprintln!("could not list cameras: {error}");
+            tracing::warn!("could not list cameras: {error}");
             Vec::new()
         }
     }
@@ -429,7 +429,7 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
     let devices = match PipeWireAudioCaptureSource::list_devices() {
         Ok(devices) => devices,
         Err(error) => {
-            eprintln!("could not list audio devices: {error}");
+            tracing::warn!("could not list audio devices: {error}");
             return Vec::new();
         }
     };
@@ -483,7 +483,7 @@ pub fn watch_audio_devices(on_change: impl Fn() + Send + 'static) -> Option<Audi
                 }
             }
         })
-        .inspect_err(|error| eprintln!("could not watch audio devices: {error}"))
+        .inspect_err(|error| tracing::warn!("could not watch audio devices: {error}"))
         .ok()?;
     Some(AudioDeviceWatch {
         stop: Some(stop),

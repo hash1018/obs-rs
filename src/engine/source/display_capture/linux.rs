@@ -64,10 +64,10 @@ pub(in crate::engine) fn open(
     let refreshed_token = refreshed_token
         .filter(|token| Some(token) != restore_token.as_ref())
         .map(|token| {
-            eprintln!("\"{}\": the portal issued a new restore token", item.name);
+            tracing::info!("\"{}\": the portal issued a new restore token", item.name);
             Some(token)
         });
-    eprintln!(
+    tracing::info!(
         "\"{}\": opened {}x{} (token {})",
         item.name,
         format.width,

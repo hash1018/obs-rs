@@ -117,6 +117,8 @@ pub enum UiAction {
     /// Shows the folder recordings are written to in the system's own file
     /// manager, creating it first if nothing has recorded yet.
     ShowRecordings,
+    /// Shows the folder both logs are written to — see `crate::log`.
+    ShowLogs,
     /// Save what is being composited as a picture, beside the recordings.
     /// Carries no path, for the reason `StartRecording` does not.
     TakeScreenshot,

@@ -152,7 +152,7 @@ fn connect(
     item_name: &str,
 ) -> Result<(RtspSource, Vec<StreamInfo>), String> {
     RtspSource::open(name.to_owned(), &settings.url, options(settings)).map_err(|error| {
-        eprintln!("\"{item_name}\" is not answering: {error}");
+        tracing::warn!("\"{item_name}\" is not answering: {error}");
         format!("not answering: {error}")
     })
 }

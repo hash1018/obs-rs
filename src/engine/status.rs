@@ -136,7 +136,7 @@ pub(super) fn notice_dropped_streams(
         if !source.source.ended() {
             continue;
         }
-        eprintln!("\"{}\": the stream stopped arriving", item.name);
+        tracing::warn!("\"{}\": the stream stopped arriving", item.name);
         source.source.stop();
         backend.remove_source(&source.name);
         // What ended it is in media-pp's log by now; what this can say is

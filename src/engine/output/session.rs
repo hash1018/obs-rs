@@ -149,7 +149,7 @@ pub(in crate::engine) fn start_recording(
         |tracks| super::open_muxer(&path, settings, tracks),
     )?;
     recording.running = Some(running);
-    println!("recording to {}", path.display());
+    tracing::info!("recording to {}", path.display());
     Ok(Instant::now())
 }
 
@@ -178,7 +178,7 @@ fn usable_settings(
     if !audio_codecs.contains(&settings.audio_codec)
         && let Some(codec) = crate::settings::RecordingAudioCodec::best_of(audio_codecs)
     {
-        eprintln!(
+        tracing::warn!(
             "{} cannot be opened here; recording audio with {} instead",
             settings.audio_codec.label(),
             codec.label()
@@ -197,7 +197,7 @@ fn usable_settings(
         // caller did not make.
         return settings.clone();
     };
-    eprintln!(
+    tracing::warn!(
         "{} cannot be opened here; recording with {} instead",
         settings.encoder.label(),
         encoder.label()

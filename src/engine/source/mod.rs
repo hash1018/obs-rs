@@ -76,7 +76,7 @@ pub(in crate::engine) fn repush(source: &OpenSource) {
     if let Some(surface) = &source.pushed
         && let Err(error) = surface.pusher.push(surface.frame.clone())
     {
-        eprintln!("could not refilter \"{}\": {error}", source.name);
+        tracing::warn!("could not refilter \"{}\": {error}", source.name);
     }
 }
 
@@ -506,7 +506,7 @@ pub(in crate::engine) fn push_content(source: &mut OpenSource, wanted: PushedCon
             // what was last drawn stays on the Canvas — which is a better
             // answer for a caption than blanking it.
             Err(error) => {
-                eprintln!("could not redraw \"{}\": {error}", source.name);
+                tracing::warn!("could not redraw \"{}\": {error}", source.name);
                 return;
             }
         },
@@ -518,7 +518,7 @@ pub(in crate::engine) fn push_content(source: &mut OpenSource, wanted: PushedCon
         PushedContent::Image(_) => return,
     };
     if let Err(error) = surface.push(frame) {
-        eprintln!("could not update \"{}\": {error}", source.name);
+        tracing::warn!("could not update \"{}\": {error}", source.name);
         return;
     }
     surface.content = wanted;

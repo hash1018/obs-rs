@@ -444,7 +444,7 @@ impl EngineManager {
                 ) {
                     // The Preview keeps showing "no frame" rather than the
                     // application failing to start over a compositor.
-                    eprintln!("engine stopped: {error}");
+                    tracing::error!("engine stopped: {error}");
                 }
             }
         })?;
@@ -1030,12 +1030,12 @@ fn finish_broadcast(
             // two attached branches, so it has to be ended properly rather
             // than dropped.
             if let Err(error) = running.stop(engine.backend) {
-                eprintln!("could not stop the broadcast that arrived late: {error}");
+                tracing::warn!("could not stop the broadcast that arrived late: {error}");
             }
         }
         Err(error) => {
             let reason = describe(error.as_ref());
-            eprintln!("could not start streaming: {reason}");
+            tracing::error!("could not start streaming: {reason}");
             published.streaming_error.store(Some(Arc::new(reason)));
             broadcast_dropped(state, published);
         }
@@ -1098,7 +1098,7 @@ fn watch_outputs(
                 // attached to both `Tee`s and would go on feeding a muxer
                 // that has stopped accepting anything.
                 if let Err(error) = running.stop(engine.backend) {
-                    eprintln!("could not end the dropped broadcast: {error}");
+                    tracing::warn!("could not end the dropped broadcast: {error}");
                 }
                 published.streaming_error.store(Some(Arc::new(reason)));
                 broadcast_dropped(state, published);
@@ -1109,9 +1109,9 @@ fn watch_outputs(
                 if let Some(running) = state.running.take()
                     && let Err(error) = running.stop(engine.backend)
                 {
-                    eprintln!("could not end the failed recording: {error}");
+                    tracing::warn!("could not end the failed recording: {error}");
                 }
-                eprintln!("the recording stopped: {reason}");
+                tracing::error!("the recording stopped: {reason}");
                 published.recording_error.store(Some(Arc::new(reason)));
             }
         }
@@ -1460,8 +1460,8 @@ fn screenshot_sink(
 /// is being read.
 fn report_screenshot(published: &Published, outcome: output::screenshot::Taken) {
     match &outcome {
-        Ok(path) => println!("screenshot saved to {}", path.display()),
-        Err(reason) => eprintln!("could not save a screenshot: {reason}"),
+        Ok(path) => tracing::info!("screenshot saved to {}", path.display()),
+        Err(reason) => tracing::error!("could not save a screenshot: {reason}"),
     }
     published
         .screenshot
@@ -1585,7 +1585,7 @@ fn apply_command(
                 // Reported and dropped: a refused seek leaves playback where
                 // it was, which is a scrub that did nothing rather than a
                 // Source that has gone wrong.
-                eprintln!("could not seek \"{}\": {error}", source.name);
+                tracing::warn!("could not seek \"{}\": {error}", source.name);
             }
             false
         }
@@ -1639,7 +1639,7 @@ fn apply_command(
                 Ok(started) => published.recording_since.store(Some(Arc::new(started))),
                 Err(error) => {
                     let reason = describe(error.as_ref());
-                    eprintln!("could not start recording: {reason}");
+                    tracing::error!("could not start recording: {reason}");
                     published.recording_error.store(Some(Arc::new(reason)));
                 }
             }
@@ -1707,7 +1707,7 @@ fn apply_command(
             match recording.screenshot.take() {
                 Some(PendingScreenshot::Canvas(branch)) => {
                     if let Err(error) = engine.backend.detach_screenshot(branch) {
-                        eprintln!("could not take the screenshot's branch off: {error}");
+                        tracing::warn!("could not take the screenshot's branch off: {error}");
                     }
                 }
                 // Finished by itself already, its one frame through; this is
@@ -1720,7 +1720,7 @@ fn apply_command(
         }
         EngineCommand::PauseRecording(paused) => {
             let Some(running) = recording.running.as_ref() else {
-                eprintln!("no recording is running");
+                tracing::warn!("no recording is running");
                 return false;
             };
             running.set_paused(paused);
@@ -1771,12 +1771,12 @@ fn apply_command(
             match std::mem::replace(&mut recording.broadcast, Broadcast::Off) {
                 Broadcast::Live(running) => {
                     if let Err(error) = running.stop(engine.backend) {
-                        eprintln!("could not stop streaming cleanly: {error}");
+                        tracing::warn!("could not stop streaming cleanly: {error}");
                     }
                 }
-                Broadcast::Connecting => eprintln!("the broadcast was still connecting"),
+                Broadcast::Connecting => tracing::info!("the broadcast was still connecting"),
                 Broadcast::Off | Broadcast::Waiting { .. } => {
-                    eprintln!("no broadcast is running");
+                    tracing::warn!("no broadcast is running");
                 }
             }
             false
@@ -1790,10 +1790,10 @@ fn apply_command(
             match recording.running.take() {
                 Some(running) => {
                     if let Err(error) = running.stop(engine.backend) {
-                        eprintln!("could not stop recording cleanly: {error}");
+                        tracing::warn!("could not stop recording cleanly: {error}");
                     }
                 }
-                None => eprintln!("no recording is running"),
+                None => tracing::warn!("no recording is running"),
             }
             false
         }
@@ -1914,7 +1914,7 @@ fn request_open(
             open.insert(item.id, SourceState::Opening);
         }
         Err(error) => {
-            eprintln!("could not ask for \"{}\" to be opened: {error}", item.name);
+            tracing::error!("could not ask for \"{}\" to be opened: {error}", item.name);
             open.insert(
                 item.id,
                 SourceState::Failed(format!("could not ask for it to be opened: {error}").into()),
@@ -2011,7 +2011,7 @@ fn state_of(
             SourceState::Open(source)
         }
         Err(error) => {
-            eprintln!("could not open \"{}\": {error}", item.name);
+            tracing::error!("could not open \"{}\": {error}", item.name);
             let reason: Arc<str> = error.to_string().into();
             // A cancelled picker arrives here as an error, and it is an answer
             // rather than a fault: the user was asked and said not now. So a
@@ -2117,7 +2117,7 @@ fn refresh_filters(source: &mut OpenSource, item: &SceneItemSnapshot) -> bool {
             false
         }
         Err(error) => {
-            eprintln!("\"{}\": could not rebuild the filters: {error}", item.name);
+            tracing::error!("\"{}\": could not rebuild the filters: {error}", item.name);
             true
         }
     }

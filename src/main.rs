@@ -19,6 +19,7 @@ mod engine;
 mod hotkey;
 mod i18n;
 mod instance;
+mod log;
 mod paths;
 mod persistence;
 mod project;
@@ -34,10 +35,12 @@ use app::ObsApp;
 fn main() -> eframe::Result {
     // First of all, and before this process has a second thread: reading the
     // machine's time zone is only sound while it has one — see `clock`.
-    clock::capture_local_offset();
+    let local_time = clock::capture_local_offset();
     // Before anything opens a file of its own. Two instances would write one
     // log and one project database between them, so the second is turned away
-    // ahead of both — see `instance`.
+    // ahead of both — see `instance`. Which is also why what it says goes to
+    // stderr: there is no log yet, and the one there will be is the other
+    // instance's.
     let _instance = match instance::claim() {
         instance::Claim::Ours(instance) => instance,
         instance::Claim::Taken { pid } => {
@@ -50,15 +53,23 @@ fn main() -> eframe::Result {
         }
     };
 
-    // Held for the whole process: dropping it stops `media-pp`'s file logger.
-    let _log = start_media_pp_log();
+    // Held for the whole process: dropping either stops its file. This
+    // application's first, so that anything going wrong with the library's
+    // is written down.
+    let _log = log::start(&paths::logs_dir());
+    let _media_pp_log = start_media_pp_log();
+    tracing::info!("obs-rs {} starting", env!("CARGO_PKG_VERSION"));
+    // Found out before there was anywhere to say so — see above.
+    if !local_time {
+        tracing::warn!("could not read this machine's time zone; clocks will show UTC");
+    }
 
     // Read here rather than only in `ObsApp`, because where the window opens
     // has to be decided before there is one. The same values are handed on,
     // so the file is read once.
     let store = settings::SettingsStore::for_current_user();
     let settings = store.load().unwrap_or_else(|error| {
-        eprintln!("could not load app settings: {error}");
+        tracing::error!("could not load app settings: {error}");
         settings::AppSettings::default()
     });
 
@@ -111,7 +122,7 @@ fn window_icon() -> egui::IconData {
     match eframe::icon_data::from_png_bytes(PNG) {
         Ok(icon) => icon,
         Err(error) => {
-            eprintln!("could not read the window icon: {error}");
+            tracing::warn!("could not read the window icon: {error}");
             egui::IconData::default()
         }
     }
@@ -238,13 +249,13 @@ fn request_vulkan_interop(options: &mut eframe::NativeOptions) {
 #[cfg(not(target_os = "linux"))]
 fn request_vulkan_interop(_options: &mut eframe::NativeOptions) {}
 
-/// Turns on `media-pp`'s own file log, beside this user's project database.
+/// Turns on `media-pp`'s own file log, beside this application's.
 ///
 /// The library keeps a private logger rather than emitting through `log` or
-/// `tracing`, so nothing here is installed process-wide and this is the only
-/// way to see what the pipelines are doing. Failing to open it is not worth
-/// refusing to start over — the application runs perfectly well without a
-/// log — so this reports and carries on.
+/// `tracing`, so its records never reach this application's log and this is
+/// the only way to see what the pipelines are doing. Failing to open it is
+/// not worth refusing to start over — the application runs perfectly well
+/// without a log — so this reports and carries on.
 ///
 /// `OBS_RS_MEDIA_PP_LOG` raises or lowers the threshold; `info` is what a
 /// normal run wants, and chasing a frame through the graph wants `trace`.
@@ -258,11 +269,11 @@ fn start_media_pp_log() -> Option<media_pp::log::LogGuard> {
         Ok("trace") => Level::Trace,
         _ => Level::Info,
     };
-    let directory = paths::data_dir().join("logs");
+    let directory = paths::logs_dir();
     match media_pp::log::init("media-pp", &directory.to_string_lossy(), level, 7) {
         Ok(guard) => Some(guard),
         Err(error) => {
-            eprintln!("media-pp logging is off: {error}");
+            tracing::warn!("media-pp logging is off: {error}");
             None
         }
     }

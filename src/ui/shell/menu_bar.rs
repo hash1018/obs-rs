@@ -98,6 +98,15 @@ pub fn show(
                 });
 
                 ui.menu_button(i18n.text(TextKey::MenuHelp), |ui| {
+                    // Where both logs are — this application's and the
+                    // library's — for whoever is asked what went wrong. A
+                    // shipped build has no console, so this is the only way
+                    // to them short of knowing the path.
+                    if ui.button(i18n.text(TextKey::MenuShowLogs)).clicked() {
+                        actions.push(UiAction::ShowLogs);
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button(i18n.text(TextKey::MenuAbout)).clicked() {
                         state.about_open = true;
                         ui.close();

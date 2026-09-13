@@ -289,7 +289,7 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
     let devices = match WasapiCaptureSource::list_devices() {
         Ok(devices) => devices,
         Err(error) => {
-            eprintln!("could not list audio devices: {error}");
+            tracing::warn!("could not list audio devices: {error}");
             return Vec::new();
         }
     };
@@ -319,7 +319,7 @@ pub fn video_capture_devices() -> Vec<crate::capture::VideoCaptureTarget> {
             })
             .collect(),
         Err(error) => {
-            eprintln!("could not list cameras: {error}");
+            tracing::warn!("could not list cameras: {error}");
             Vec::new()
         }
     }

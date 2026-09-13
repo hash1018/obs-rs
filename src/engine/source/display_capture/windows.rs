@@ -142,7 +142,7 @@ impl CaptureRegistry {
             return;
         };
         if let Err(error) = capture.tee.detach(branch) {
-            eprintln!("could not detach a capture branch: {error}");
+            tracing::warn!("could not detach a capture branch: {error}");
         }
         // An item removed while shown was never hidden first, and would
         // otherwise keep the capture running for Scenes that are not.
@@ -229,9 +229,10 @@ fn open_capture(
         },
         device,
     )?;
-    eprintln!(
+    tracing::info!(
         "opened {monitor} as output {output_index} ({}x{})",
-        format.width, format.height
+        format.width,
+        format.height
     );
 
     // Before the move below: once the `Pipeline` owns the source there is

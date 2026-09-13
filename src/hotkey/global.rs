@@ -149,7 +149,7 @@ impl GlobalHotkeys {
                     }
                 }
             })
-            .inspect_err(|error| eprintln!("could not start global hotkeys: {error}"))
+            .inspect_err(|error| tracing::error!("could not start global hotkeys: {error}"))
             .ok()?;
         Some(Self {
             shared,
@@ -172,7 +172,7 @@ impl GlobalHotkeys {
                 let shared = Arc::clone(&shared);
                 move || listener.run(&shared, &sender, &wake)
             })
-            .inspect_err(|error| eprintln!("could not start global hotkeys: {error}"))
+            .inspect_err(|error| tracing::error!("could not start global hotkeys: {error}"))
             .ok()?;
         Some(Self {
             shared,
@@ -456,7 +456,7 @@ mod portal {
             let portal = match connected {
                 Ok(portal) => portal,
                 Err(error) => {
-                    eprintln!(
+                    tracing::warn!(
                         "global hotkeys are not available, so hotkeys work only while this \
                          window has focus: {error}. If the desktop entry is not installed, \
                          assets/linux/install-desktop-entry.sh installs it."
@@ -491,7 +491,7 @@ mod portal {
                 self.portal.receive_deactivated().await,
                 self.portal.receive_shortcuts_changed().await,
             ) else {
-                eprintln!("global hotkeys: the portal would not report its shortcuts");
+                tracing::warn!("global hotkeys: the portal would not report its shortcuts");
                 return;
             };
             let mut state = State::default();
@@ -537,7 +537,7 @@ mod portal {
                     })
                     .await;
                 let Some(event) = event else {
-                    eprintln!("global hotkeys: the portal went away");
+                    tracing::warn!("global hotkeys: the portal went away");
                     break;
                 };
                 if let Event::Reassigned { session, shortcuts } = &event {
@@ -583,7 +583,7 @@ mod portal {
                 .portal
                 .create_session(Default::default())
                 .await
-                .inspect_err(|error| eprintln!("global hotkeys: no session: {error}"))
+                .inspect_err(|error| tracing::warn!("global hotkeys: no session: {error}"))
                 .ok()?;
             let shortcuts: Vec<NewShortcut> = wanted
                 .iter()
@@ -617,7 +617,7 @@ mod portal {
             let allowed = match answer {
                 Some(Ok(allowed)) => allowed,
                 Some(Err(error)) => {
-                    eprintln!(
+                    tracing::warn!(
                         "global hotkeys were not allowed, so they work only while this \
                          window has focus: {error}"
                     );
@@ -641,7 +641,7 @@ mod portal {
                 .collect();
             log(&keyed);
             let Some(path) = path_of(&session) else {
-                eprintln!("global hotkeys: the portal's session has no path");
+                tracing::warn!("global hotkeys: the portal's session has no path");
                 let _ = session.close().await;
                 return None;
             };
@@ -658,12 +658,12 @@ mod portal {
     /// can give a different key from the one asked for.
     fn log(keyed: &[(String, String)]) {
         if keyed.is_empty() {
-            eprintln!("global hotkeys: the desktop gave none of them a key");
+            tracing::warn!("global hotkeys: the desktop gave none of them a key");
         }
         for (id, trigger) in keyed {
             match trigger.as_str() {
-                "" => eprintln!("global hotkey `{id}` has no key"),
-                trigger => eprintln!("global hotkey `{id}` is {trigger}"),
+                "" => tracing::info!("global hotkey `{id}` has no key"),
+                trigger => tracing::info!("global hotkey `{id}` is {trigger}"),
             }
         }
     }

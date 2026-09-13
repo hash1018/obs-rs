@@ -250,7 +250,7 @@ impl AudioEngine {
         let mixer = match start_mixer("audio-mix", "mix-tee", format) {
             Ok(mixer) => Some(mixer),
             Err(error) => {
-                eprintln!("could not start the audio mixer: {error}");
+                tracing::error!("could not start the audio mixer: {error}");
                 None
             }
         };
@@ -260,7 +260,7 @@ impl AudioEngine {
         let monitor = match start_mixer("audio-monitor", "monitor-tee", format) {
             Ok(mixer) => Some(mixer),
             Err(error) => {
-                eprintln!("could not start the monitor mix: {error}");
+                tracing::error!("could not start the monitor mix: {error}");
                 None
             }
         };
@@ -333,9 +333,10 @@ impl AudioEngine {
                 continue;
             }
             if !mixer.handle.set_mix_format(format) {
-                eprintln!(
+                tracing::warn!(
                     "the {what} refused {}Hz, {} channel(s)",
-                    format.sample_rate, format.channels
+                    format.sample_rate,
+                    format.channels
                 );
             }
         }
@@ -380,14 +381,14 @@ impl AudioEngine {
             && let Some(monitor) = &self.monitor
             && let Err(error) = monitor.tee.finish_branch(output.branch)
         {
-            eprintln!("could not stop the previous monitoring device: {error}");
+            tracing::warn!("could not stop the previous monitoring device: {error}");
         }
 
         let Some(device) = device else {
             return;
         };
         let Some(monitor) = &self.monitor else {
-            eprintln!("the monitor mix never started, so there is nothing to play");
+            tracing::warn!("the monitor mix never started, so there is nothing to play");
             return;
         };
         match attach_monitor_output(&monitor.tee, device, format) {
@@ -401,7 +402,7 @@ impl AudioEngine {
             // Reported and left off rather than retried: the endpoint named
             // is gone or refused, and every source stays wired to the
             // recording, which is the state `Wiring::for_mode` falls back to.
-            Err(error) => eprintln!("could not open the monitoring device {device}: {error}"),
+            Err(error) => tracing::error!("could not open the monitoring device {device}: {error}"),
         }
     }
 
@@ -516,7 +517,7 @@ impl AudioEngine {
                     open.volume
                         .set_muted(source.muted || self.hotkey_muted.contains(&source.id));
                     if let Err(error) = open.filters.apply(&source.filters) {
-                        eprintln!("could not change the filters on {}: {error}", source.name);
+                        tracing::error!("could not change the filters on {}: {error}", source.name);
                     }
                 }
                 _ => self.reopen(source),
@@ -553,7 +554,7 @@ impl AudioEngine {
             .map(|(id, open)| (*id, open.name.clone()))
             .collect();
         for (id, name) in &ended {
-            eprintln!("the capture behind {name} stopped on its own");
+            tracing::warn!("the capture behind {name} stopped on its own");
             self.close(*id);
         }
         !ended.is_empty()
@@ -620,7 +621,7 @@ impl AudioEngine {
                 // theirs — a missing microphone is not a reason to lose
                 // desktop audio. The mixer dock leaves its channel out until
                 // it opens, which is what says so.
-                eprintln!("could not open audio source {}: {error}", source.name);
+                tracing::error!("could not open audio source {}: {error}", source.name);
                 mixer.remove_source(&name);
                 if let Some(monitor) = &monitor {
                     monitor.remove_source(&monitor_registration(&name));
@@ -785,7 +786,7 @@ fn open_source(
     // A filter that cannot be built costs the filters and not the channel —
     // the microphone is still worth recording unfiltered.
     if let Err(error) = filter_rack.apply(&source.filters) {
-        eprintln!("could not put the filters on {}: {error}", source.name);
+        tracing::error!("could not put the filters on {}: {error}", source.name);
     }
     pipeline.run()?;
 

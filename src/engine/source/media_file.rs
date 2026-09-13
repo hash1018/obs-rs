@@ -197,7 +197,7 @@ fn start(pipeline: &Arc<Pipeline>, paused: bool) -> Result<(), BackendError> {
             // Reported and carried on. What was lost is the first frame, so
             // the layer stays empty until someone presses play — which is a
             // Source that opened, not one that failed to.
-            eprintln!("could not show the first frame while paused: {error}");
+            tracing::warn!("could not show the first frame while paused: {error}");
         }
     }
     Ok(())
