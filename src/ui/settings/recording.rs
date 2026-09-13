@@ -10,8 +10,8 @@ use eframe::egui;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{
     AUDIO_BIT_RATE_KBPS_RANGE, AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE,
-    RecordingAudioCodec, RecordingEncoder, RecordingFormat, RecordingSplit, SPLIT_MEGABYTES_RANGE,
-    SPLIT_MINUTES_RANGE,
+    REPLAY_SECONDS_RANGE, RecordingAudioCodec, RecordingEncoder, RecordingFormat, RecordingSplit,
+    SPLIT_MEGABYTES_RANGE, SPLIT_MINUTES_RANGE,
 };
 
 /// Room for "Browse…" in either language, fixed so the field beside it does
@@ -256,6 +256,61 @@ pub(super) fn show(
             ui.end_row();
         });
     browse
+}
+
+/// The replay buffer's settings, under the recording's: it is encoded with
+/// everything above, so what is here is only whether it is offered and how
+/// much it keeps — and what that costs, which is the one number here nobody
+/// could be expected to work out for themselves.
+pub(super) fn show_replay(
+    ui: &mut egui::Ui,
+    draft: &mut AppSettings,
+    replaying: bool,
+    i18n: &LocalizationManager,
+) {
+    ui.add_space(12.0);
+    ui.strong(i18n.text(TextKey::SettingsReplay));
+    ui.add_space(4.0);
+    if replaying {
+        ui.label(
+            egui::RichText::new(i18n.text(TextKey::SettingsReplayWhileRunning))
+                .color(ui.visuals().warn_fg_color),
+        );
+    }
+    ui.checkbox(
+        &mut draft.recording.replay_buffer,
+        i18n.text(TextKey::SettingsReplayEnabled),
+    );
+    let enabled = draft.recording.replay_buffer;
+    egui::Grid::new("settings_replay")
+        .num_columns(2)
+        .spacing([12.0, 8.0])
+        .show(ui, |ui| {
+            ui.add_enabled(
+                enabled,
+                egui::Label::new(i18n.text(TextKey::SettingsReplaySeconds)),
+            );
+            ui.add_enabled(
+                enabled,
+                egui::DragValue::new(&mut draft.recording.replay_seconds)
+                    .range(REPLAY_SECONDS_RANGE)
+                    .suffix(" s"),
+            );
+            ui.end_row();
+        });
+    // Worked out from the bit rates above as they stand in the draft, so it
+    // moves as either of them is dragged.
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set(
+        "megabytes",
+        (draft.recording.replay_memory_bytes() / 1_000_000) as i64,
+    );
+    ui.add_enabled(
+        enabled,
+        egui::Label::new(
+            egui::RichText::new(i18n.text_with(TextKey::SettingsReplayMemory, &args)).weak(),
+        ),
+    );
 }
 
 /// The file the next recording would be written to, as a whole path.

@@ -261,6 +261,18 @@ pub struct RecordingSettings {
     /// mid-GOP, and a segment that does not start at a keyframe is one no
     /// player can open on its own.
     pub split_megabytes: u32,
+    /// Whether the replay buffer is offered at all — what puts its button in
+    /// the Controls dock. Off by default: a buffer that is running holds an
+    /// encoder and its seconds of video in memory, which nobody should be
+    /// paying for without having asked.
+    ///
+    /// A recording setting because a replay is one: it is encoded with
+    /// everything above and saved beside the recordings.
+    pub replay_buffer: bool,
+    /// How much the replay buffer keeps, in seconds. The most, not the
+    /// exact length: a clip starts on a keyframe, so it can be up to one
+    /// keyframe interval shorter.
+    pub replay_seconds: u32,
 }
 
 impl Default for RecordingSettings {
@@ -279,6 +291,8 @@ impl Default for RecordingSettings {
             split_minutes: DEFAULT_SPLIT_MINUTES,
             split_megabytes: DEFAULT_SPLIT_MEGABYTES,
             output_height: 0,
+            replay_buffer: false,
+            replay_seconds: DEFAULT_REPLAY_SECONDS,
         }
     }
 }
@@ -712,6 +726,16 @@ pub const SPLIT_MINUTES_RANGE: std::ops::RangeInclusive<u32> = 1..=720;
 /// file limit, which is the practical reason to split by size at all.
 pub const SPLIT_MEGABYTES_RANGE: std::ops::RangeInclusive<u32> = 50..=4_096;
 
+/// What OBS starts a replay buffer at: long enough for the moment someone
+/// reaches for the key after, short enough to cost tens of megabytes.
+pub const DEFAULT_REPLAY_SECONDS: u32 = 30;
+
+/// Five at the bottom, since a replay starts on a keyframe and anything much
+/// shorter is mostly the wait for one. Ten minutes at the top, which at the
+/// default bit rate is already most of a gigabyte held in memory — past it
+/// the answer is a recording, not a replay.
+pub const REPLAY_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 5..=600;
+
 impl RecordingSettings {
     /// Where recordings actually go: the configured directory, or the
     /// platform's own when none was set.
@@ -818,6 +842,28 @@ impl RecordingSettings {
             .split_megabytes
             .clamp(*SPLIT_MEGABYTES_RANGE.start(), *SPLIT_MEGABYTES_RANGE.end());
         megabytes as u64 * 1_024 * 1_024
+    }
+
+    /// How much the replay buffer keeps, clamped so a hand-edited settings
+    /// file cannot ask it to hold nothing or an hour.
+    pub fn replay_length(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(
+            self.replay_seconds
+                .clamp(*REPLAY_SECONDS_RANGE.start(), *REPLAY_SECONDS_RANGE.end()),
+        ))
+    }
+
+    /// Roughly what a full replay buffer holds, in bytes: both bit rates
+    /// over its length.
+    ///
+    /// An estimate, and on the high side for most of what is composited — an
+    /// encoder aims at its rate rather than always spending it, and a still
+    /// screen costs far less. What is held never exceeds the length, since a
+    /// clip only ever gets shorter than it to start on a keyframe.
+    pub fn replay_memory_bytes(&self) -> u64 {
+        let bits_per_second =
+            self.bit_rate_bits() as u64 + u64::from(self.audio_bit_rate_kbps) * 1_000;
+        bits_per_second / 8 * self.replay_length().as_secs()
     }
 }
 
@@ -1199,5 +1245,28 @@ mod tests {
         assert_eq!(RecordingAudioCodec::best_of(&[Aac, Opus]), Some(Aac));
         assert_eq!(RecordingAudioCodec::best_of(&[Opus]), Some(Opus));
         assert_eq!(RecordingAudioCodec::best_of(&[]), None);
+    }
+
+    /// What the page says a full buffer holds is both bit rates over its
+    /// length — 12 Mb/s and 160 kb/s for thirty seconds is about 45 MB.
+    #[test]
+    fn the_replay_buffers_memory_is_both_bit_rates_over_its_length() {
+        let settings = RecordingSettings {
+            bit_rate_mbps: 12,
+            audio_bit_rate_kbps: 160,
+            replay_seconds: 30,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(settings.replay_memory_bytes(), 12_160_000 / 8 * 30);
+
+        // A hand-edited file cannot ask for a buffer of nothing.
+        let none = RecordingSettings {
+            replay_seconds: 0,
+            ..RecordingSettings::default()
+        };
+        assert_eq!(
+            none.replay_length(),
+            std::time::Duration::from_secs(u64::from(*REPLAY_SECONDS_RANGE.start()))
+        );
     }
 }

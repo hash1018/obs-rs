@@ -113,6 +113,30 @@ pub fn screenshot_file_in(directory: &Path, prefix: &str, taken: OffsetDateTime)
     directory.join(format!("{prefix}-{stamp}.png"))
 }
 
+/// One saved replay's path, named for the moment it was saved.
+///
+/// Beside the recordings and under their prefix, for the reason a
+/// screenshot is, with `replay` in the name so a listing tells a clip saved
+/// from the buffer apart from a recording that happened to be short. In the
+/// recording's container, except that an HLS setting saves an `.mp4`: a
+/// replay is one clip, not a playlist and a folder of segments.
+pub fn replay_file_in(
+    directory: &Path,
+    prefix: &str,
+    saved: OffsetDateTime,
+    format: RecordingFormat,
+) -> PathBuf {
+    let stamp = saved
+        .format(STAMP)
+        .unwrap_or_else(|_| String::from("unknown"));
+    let extension = if format.segments_itself() {
+        RecordingFormat::Mp4.extension()
+    } else {
+        format.extension()
+    };
+    directory.join(format!("{prefix}-replay-{stamp}.{extension}"))
+}
+
 /// Something a user named, made fit to stand in a file name on every
 /// filesystem this runs on: what Windows refuses is replaced with `_`, and
 /// what it quietly strips from the end — dots and spaces — is taken off.
@@ -298,6 +322,23 @@ mod tests {
         assert_eq!(
             screenshot_file_in(Path::new("/tmp/clips"), "demo", taken),
             Path::new("/tmp/clips/demo-2026-09-13-143005.png")
+        );
+    }
+
+    /// A replay is named like a recording, marked as a replay, and is one
+    /// file even where recordings are HLS.
+    #[test]
+    fn a_replay_is_one_file_named_like_a_recording() {
+        let saved = time::macros::datetime!(2026-09-13 14:30:05 +09:00);
+        let directory = Path::new("/tmp/clips");
+
+        assert_eq!(
+            replay_file_in(directory, "demo", saved, RecordingFormat::Mkv),
+            Path::new("/tmp/clips/demo-replay-2026-09-13-143005.mkv")
+        );
+        assert_eq!(
+            replay_file_in(directory, "demo", saved, RecordingFormat::Hls),
+            Path::new("/tmp/clips/demo-replay-2026-09-13-143005.mp4")
         );
     }
 

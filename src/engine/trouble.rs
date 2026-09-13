@@ -43,6 +43,9 @@ pub enum Trouble {
     Broadcast(String),
     /// The recording stopped being written — a full disk, a removed drive.
     Recording(String),
+    /// The replay buffer stopped filling. Nothing it holds is on disk yet, so
+    /// what fails here is an encoder or a queue rather than a write.
+    Replay(String),
 }
 
 /// Reads everything waiting on one bus and answers what the engine should act
@@ -78,10 +81,11 @@ pub(in crate::engine) fn drain(bus: &BusReceiver, source: &str) -> Vec<Trouble> 
                 // So what says *which* output has stopped is the prefix its
                 // elements are named with, which is why they are named after
                 // `OutputKind` and why that lives beside this.
-                if name.starts_with(OutputKind::Broadcast.prefix()) {
-                    troubles.push(Trouble::Broadcast(reason));
-                } else if name.starts_with(OutputKind::Recording.prefix()) {
-                    troubles.push(Trouble::Recording(reason));
+                match OutputKind::of(&name) {
+                    Some(OutputKind::Broadcast) => troubles.push(Trouble::Broadcast(reason)),
+                    Some(OutputKind::Recording) => troubles.push(Trouble::Recording(reason)),
+                    Some(OutputKind::Replay) => troubles.push(Trouble::Replay(reason)),
+                    None => {}
                 }
                 // Anything else is a Source or a stage inside one. It has
                 // been logged, by the line above and by `media-pp` itself;
@@ -135,18 +139,20 @@ mod tests {
         let (bus, receiver) = Bus::new();
         post(&bus, "stream-queue", "connection reset");
         post(&bus, "record-audio-queue", "no space left");
+        post(&bus, "replay-encode", "encoder gone");
         // A Source's own queue, which is neither and must be left alone: a
         // camera dropping a buffer is not a recording ending.
         post(&bus, "camera", "one frame");
 
         let troubles = drain(&receiver, "test");
-        assert_eq!(troubles.len(), 2, "got {troubles:?}");
+        assert_eq!(troubles.len(), 3, "got {troubles:?}");
         assert!(
             matches!(&troubles[0], Trouble::Broadcast(reason) if reason.contains("connection reset"))
         );
         assert!(
             matches!(&troubles[1], Trouble::Recording(reason) if reason.contains("no space left"))
         );
+        assert!(matches!(&troubles[2], Trouble::Replay(reason) if reason.contains("encoder gone")));
     }
 
     /// Draining empties the queue rather than sampling it. What is left

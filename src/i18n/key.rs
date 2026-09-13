@@ -189,6 +189,12 @@ text_keys! {
     ControlPauseRecording         => "control-pause-recording";
     ControlResumeRecording        => "control-resume-recording";
     ControlStopRecording          => "control-stop-recording";
+    ControlStartReplay            => "control-start-replay";
+    ControlStopReplay             => "control-stop-replay";
+    ControlSaveReplay             => "control-save-replay";
+    ControlReplayKey              => "control-replay-key";
+    ControlReplayNoKey            => "control-replay-no-key";
+    ControlReplayFilling          => "control-replay-filling";
     ControlSettings               => "control-settings";
     SettingsTitle                 => "settings-title";
     SettingsPageGeneral           => "settings-page-general";
@@ -201,6 +207,8 @@ text_keys! {
     HotkeyToggleStreaming         => "hotkey-toggle-streaming";
     HotkeyScreenshot              => "hotkey-screenshot";
     HotkeyScreenshotSource        => "hotkey-screenshot-source";
+    HotkeyToggleReplay            => "hotkey-toggle-replay";
+    HotkeySaveReplay              => "hotkey-save-replay";
     HotkeyPushToTalk              => "hotkey-push-to-talk";
     HotkeyPushToMute              => "hotkey-push-to-mute";
     HotkeyToggleMute              => "hotkey-toggle-mute";
@@ -246,6 +254,11 @@ text_keys! {
     SettingsRecordingSplitSize    => "settings-recording-split-size";
     SettingsRecordingSplitHls     => "settings-recording-split-hls";
     SettingsRecordingWhileRunning => "settings-recording-while-running";
+    SettingsReplay                => "settings-replay";
+    SettingsReplayEnabled         => "settings-replay-enabled";
+    SettingsReplaySeconds         => "settings-replay-seconds";
+    SettingsReplayMemory          => "settings-replay-memory";
+    SettingsReplayWhileRunning    => "settings-replay-while-running";
     SettingsFpsWhileRecording     => "settings-fps-while-recording";
     ActionApply                   => "action-apply";
     ActionBrowse                  => "action-browse";
@@ -294,6 +307,13 @@ text_keys! {
     SourceScreenshotUnavailable   => "source-screenshot-unavailable";
     StatusScreenshotSaved         => "status-screenshot-saved";
     StatusScreenshotFailed        => "status-screenshot-failed";
+    StatusReplay                  => "status-replay";
+    StatusReplaySaved             => "status-replay-saved";
+    StatusReplaySaveFailed        => "status-replay-save-failed";
+    StatusReplayStartFailed       => "status-replay-start-failed";
+    StatusReplayStopped           => "status-replay-stopped";
+    StatusReplayEmpty             => "status-replay-empty";
+    MenuSaveReplay                => "menu-save-replay";
     StatusMemory                  => "status-memory";
     StatusMemoryResident          => "status-memory-resident";
     StatusMemoryBoth              => "status-memory-both";
@@ -375,6 +395,7 @@ text_keys! {
     StatsCompositor                   => "stats-compositor";
     StatsRecording                    => "stats-recording";
     StatsBroadcast                    => "stats-broadcast";
+    StatsReplay                       => "stats-replay";
     StatsErrors                       => "stats-errors";
     StatsCpu                          => "stats-cpu";
     StatsDiskAvailable                => "stats-disk-available";

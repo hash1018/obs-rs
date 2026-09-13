@@ -5,7 +5,7 @@ use eframe::egui;
 
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::resources::{GpuScope, GpuUsage, MemoryUsage};
-use crate::snapshots::{ScreenshotReport, StatusSnapshot};
+use crate::snapshots::{ReplayFailure, ReplayFill, ReplayReport, ScreenshotReport, StatusSnapshot};
 
 pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
     egui::Panel::bottom("status_bar")
@@ -76,6 +76,15 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
                         None => {
                             ui.monospace(live);
                         }
+                    }
+                    // Only while one runs, and last so it is the leftmost of
+                    // these: appearing there moves nothing else in the bar,
+                    // which a segment held at width for a buffer most people
+                    // never start would not be worth.
+                    if let Some(fill) = status.replay {
+                        ui.separator();
+                        ui.monospace(format_replay(fill))
+                            .on_hover_text(i18n.text(TextKey::StatusReplay));
                     }
                 });
             });
@@ -184,27 +193,52 @@ const SEGMENT_GAP: f32 = 3.0;
 /// readings on the right are what this bar exists for, and a long message
 /// from a driver must not push them off the end.
 fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
-    // A screenshot first while it is news: it is the one thing here someone
-    // has just asked for and is waiting to hear about.
-    let line = status
+    // A screenshot or a replay first while it is news: each is something
+    // someone has just asked for and is waiting to hear about. The newer of
+    // the two, where both have something to say.
+    let now = Instant::now();
+    let screenshot = status
         .screenshot
         .as_deref()
-        .and_then(|report| screenshot_line(report, Instant::now()));
+        .and_then(|report| Some((report.at, screenshot_line(report, now)?)));
+    let replay = status
+        .replay_report
+        .as_deref()
+        .and_then(|report| Some((report.at, replay_line(report, now)?)));
+    let line = match (screenshot, replay) {
+        (Some(screenshot), Some(replay)) => Some(if replay.0 > screenshot.0 {
+            replay.1
+        } else {
+            screenshot.1
+        }),
+        (one, other) => one.or(other).map(|(_, line)| line),
+    };
     match line {
-        Some(ScreenshotLine::Saved { path, left }) => {
+        Some(Notice::Saved {
+            key,
+            path,
+            length,
+            left,
+        }) => {
             let file = path.file_name().map_or_else(
                 || path.display().to_string(),
                 |name| name.to_string_lossy().into_owned(),
             );
             let mut args = fluent_bundle::FluentArgs::new();
             args.set("file", file);
-            ui.label(i18n.text_with(TextKey::StatusScreenshotSaved, &args))
+            // Rounded rather than cut: a clip of 29.8 seconds is thirty.
+            if let Some(length) = length {
+                args.set("seconds", length.as_secs_f64().round() as i64);
+            }
+            ui.label(i18n.text_with(key, &args))
                 .on_hover_text(path.display().to_string());
             // Nothing else may repaint the bar when the time is up.
             ui.ctx().request_repaint_after(left);
         }
-        Some(ScreenshotLine::Failed(reason)) => {
-            show_error(ui, TextKey::StatusScreenshotFailed, reason, i18n);
+        Some(Notice::Failed { key, reason }) => show_error(ui, key, reason, i18n),
+        Some(Notice::Note { key, left }) => {
+            ui.label(i18n.text(key));
+            ui.ctx().request_repaint_after(left);
         }
         None => match &status.recording_error {
             Some(error) => show_error(ui, TextKey::StatusRecordingFailed, error, i18n),
@@ -231,29 +265,84 @@ fn show_error(ui: &mut egui::Ui, key: TextKey, reason: &str, i18n: &Localization
     });
 }
 
-/// What the bar says about the last screenshot, if anything.
+/// What the bar says about the last file something was asked to save — a
+/// screenshot or a replay — if anything.
 #[derive(Debug, PartialEq)]
-enum ScreenshotLine<'a> {
+enum Notice<'a> {
     /// Written, and still recent enough to mention — with how much longer.
-    Saved { path: &'a Path, left: Duration },
+    /// A replay says how long the clip came out, which is not always what
+    /// the buffer was set to keep.
+    Saved {
+        key: TextKey,
+        path: &'a Path,
+        length: Option<Duration>,
+        left: Duration,
+    },
     /// Not written. Kept until the next one, as a failed recording is: a
     /// message that clears itself is one somebody looking away never sees.
-    Failed(&'a str),
+    Failed { key: TextKey, reason: &'a str },
+    /// Nothing written, and nothing wrong either — asked before there was
+    /// anything to write. Said in the ordinary colour, and let go as a saved
+    /// file is: it is only the answer to a press.
+    Note { key: TextKey, left: Duration },
 }
 
 /// How long "saved" stays in the bar. A file that was written needs no more
 /// than a glance, and the bar has other things to say.
-const SCREENSHOT_SAVED_SHOWN: Duration = Duration::from_secs(5);
+const SAVED_SHOWN: Duration = Duration::from_secs(5);
 
-fn screenshot_line(report: &ScreenshotReport, now: Instant) -> Option<ScreenshotLine<'_>> {
+/// How much longer a file saved at `at` is worth mentioning, if at all.
+fn still_news(at: Instant, now: Instant) -> Option<Duration> {
+    let left = SAVED_SHOWN.checked_sub(now.saturating_duration_since(at))?;
+    (!left.is_zero()).then_some(left)
+}
+
+fn screenshot_line(report: &ScreenshotReport, now: Instant) -> Option<Notice<'_>> {
     match &report.outcome {
-        Ok(path) => {
-            let left =
-                SCREENSHOT_SAVED_SHOWN.checked_sub(now.saturating_duration_since(report.at))?;
-            (!left.is_zero()).then_some(ScreenshotLine::Saved { path, left })
-        }
-        Err(reason) => Some(ScreenshotLine::Failed(reason)),
+        Ok(path) => Some(Notice::Saved {
+            key: TextKey::StatusScreenshotSaved,
+            path,
+            length: None,
+            left: still_news(report.at, now)?,
+        }),
+        Err(reason) => Some(Notice::Failed {
+            key: TextKey::StatusScreenshotFailed,
+            reason,
+        }),
     }
+}
+
+fn replay_line(report: &ReplayReport, now: Instant) -> Option<Notice<'_>> {
+    match &report.outcome {
+        Ok(saved) => Some(Notice::Saved {
+            key: TextKey::StatusReplaySaved,
+            path: &saved.path,
+            length: Some(saved.length),
+            left: still_news(report.at, now)?,
+        }),
+        Err(ReplayFailure::Empty) => Some(Notice::Note {
+            key: TextKey::StatusReplayEmpty,
+            left: still_news(report.at, now)?,
+        }),
+        Err(failure) => Some(Notice::Failed {
+            key: match failure {
+                ReplayFailure::Start(_) => TextKey::StatusReplayStartFailed,
+                ReplayFailure::Stopped(_) => TextKey::StatusReplayStopped,
+                ReplayFailure::Save(_) | ReplayFailure::Empty => TextKey::StatusReplaySaveFailed,
+            },
+            reason: failure.reason(),
+        }),
+    }
+}
+
+/// The replay buffer's segment: how much it holds against how much it keeps,
+/// in whole seconds, at one width for every length the settings allow.
+fn format_replay(fill: ReplayFill) -> String {
+    format!(
+        "RPL {:>3}/{:>3}s",
+        fill.buffered.as_secs(),
+        fill.length.as_secs()
+    )
 }
 
 /// How much of the bar an error message may take before it is elided. The
@@ -426,13 +515,15 @@ mod tests {
         };
         assert_eq!(
             screenshot_line(&saved, at + Duration::from_secs(2)),
-            Some(ScreenshotLine::Saved {
+            Some(Notice::Saved {
+                key: TextKey::StatusScreenshotSaved,
                 path: Path::new("/videos/obs-rs-2026-09-13-143005.png"),
+                length: None,
                 left: Duration::from_secs(3),
             })
         );
         assert_eq!(
-            screenshot_line(&saved, at + SCREENSHOT_SAVED_SHOWN),
+            screenshot_line(&saved, at + SAVED_SHOWN),
             None,
             "and then the bar goes back to what it was saying"
         );
@@ -443,8 +534,89 @@ mod tests {
         };
         assert_eq!(
             screenshot_line(&failed, at + Duration::from_secs(3600)),
-            Some(ScreenshotLine::Failed("access denied"))
+            Some(Notice::Failed {
+                key: TextKey::StatusScreenshotFailed,
+                reason: "access denied"
+            })
         );
+    }
+
+    /// A saved clip is mentioned as a screenshot is, with how long it came
+    /// out; each way a replay can fail is said as what was being attempted.
+    #[test]
+    fn a_saved_replay_says_how_long_it_is_and_a_failure_what_failed() {
+        let at = Instant::now();
+        let saved = ReplayReport {
+            at,
+            outcome: Ok(crate::snapshots::SavedReplay {
+                path: std::path::PathBuf::from("/videos/obs-rs-replay-2026-09-13-143005.mp4"),
+                length: Duration::from_secs(29),
+            }),
+        };
+        assert!(matches!(
+            replay_line(&saved, at + Duration::from_secs(1)),
+            Some(Notice::Saved {
+                key: TextKey::StatusReplaySaved,
+                length: Some(length),
+                ..
+            }) if length == Duration::from_secs(29)
+        ));
+        assert_eq!(replay_line(&saved, at + SAVED_SHOWN), None);
+
+        for (failure, key) in [
+            (
+                ReplayFailure::Start("no encoder".to_owned()),
+                TextKey::StatusReplayStartFailed,
+            ),
+            (
+                ReplayFailure::Save("nothing is buffered yet".to_owned()),
+                TextKey::StatusReplaySaveFailed,
+            ),
+            (
+                ReplayFailure::Stopped("encoder gone".to_owned()),
+                TextKey::StatusReplayStopped,
+            ),
+        ] {
+            let reason = failure.reason().to_owned();
+            let report = ReplayReport {
+                at,
+                outcome: Err(failure),
+            };
+            assert_eq!(
+                replay_line(&report, at + Duration::from_secs(3600)),
+                Some(Notice::Failed {
+                    key,
+                    reason: &reason
+                })
+            );
+        }
+
+        // Asking too early is a passing note, not an error kept on screen.
+        let early = ReplayReport {
+            at,
+            outcome: Err(ReplayFailure::Empty),
+        };
+        assert_eq!(
+            replay_line(&early, at + Duration::from_secs(1)),
+            Some(Notice::Note {
+                key: TextKey::StatusReplayEmpty,
+                left: Duration::from_secs(4),
+            })
+        );
+        assert_eq!(replay_line(&early, at + SAVED_SHOWN), None);
+    }
+
+    /// The segment holds one width from an empty buffer to a full one at the
+    /// longest length the settings allow.
+    #[test]
+    fn the_replay_segment_keeps_its_width() {
+        let fill = |buffered, length| ReplayFill {
+            buffered: Duration::from_secs(buffered),
+            length: Duration::from_secs(length),
+        };
+        assert_eq!(format_replay(fill(18, 30)), "RPL  18/ 30s");
+        let width = format_replay(fill(0, 5)).len();
+        assert_eq!(format_replay(fill(600, 600)).len(), width);
     }
 
     #[test]

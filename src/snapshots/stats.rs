@@ -147,6 +147,9 @@ pub enum Subject {
     Recording,
     /// A broadcast, likewise.
     Broadcast,
+    /// The replay buffer, likewise — its encoders cost what a recording's
+    /// do, whether or not a clip is ever saved.
+    Replay,
     /// One Source, by the name the Sources dock shows it under.
     Source(String),
 }

@@ -219,18 +219,24 @@ pub enum HotkeyAction {
     Screenshot,
     /// Save the selected Source's own picture.
     ScreenshotSource,
+    /// Start the replay buffer, or stop it.
+    ToggleReplayBuffer,
+    /// Save what the replay buffer holds.
+    SaveReplay,
     Fullscreen,
     OpenSettings,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::ToggleRecording,
         Self::TogglePause,
         Self::ToggleStreaming,
         Self::Screenshot,
         Self::ScreenshotSource,
+        Self::ToggleReplayBuffer,
+        Self::SaveReplay,
         Self::Fullscreen,
         Self::OpenSettings,
     ];
@@ -315,6 +321,8 @@ pub struct HotkeySettings {
     pub toggle_streaming: Binding,
     pub screenshot: Binding,
     pub screenshot_source: Binding,
+    pub toggle_replay_buffer: Binding,
+    pub save_replay: Binding,
     pub fullscreen: Binding,
     pub open_settings: Binding,
     /// Only the channels and Scenes that have a key, so a file that binds
@@ -339,6 +347,11 @@ impl Default for HotkeySettings {
             // somewhere else — a Save As, a browser's own shortcut.
             screenshot: Binding(None),
             screenshot_source: Binding(None),
+            // Nothing, for the screenshot's reason — though saving a replay
+            // is the one thing most people want a key for, and the Controls
+            // dock says so while the buffer runs without one.
+            toggle_replay_buffer: Binding(None),
+            save_replay: Binding(None),
             fullscreen: Chord::plain(Key::F11).into(),
             open_settings: Chord::ctrl(Key::Comma).into(),
             channels: Vec::new(),
@@ -356,6 +369,8 @@ impl HotkeySettings {
                 HotkeyAction::ToggleStreaming => self.toggle_streaming.0,
                 HotkeyAction::Screenshot => self.screenshot.0,
                 HotkeyAction::ScreenshotSource => self.screenshot_source.0,
+                HotkeyAction::ToggleReplayBuffer => self.toggle_replay_buffer.0,
+                HotkeyAction::SaveReplay => self.save_replay.0,
                 HotkeyAction::Fullscreen => self.fullscreen.0,
                 HotkeyAction::OpenSettings => self.open_settings.0,
             },
@@ -379,6 +394,8 @@ impl HotkeySettings {
                 HotkeyAction::ToggleStreaming => self.toggle_streaming = binding,
                 HotkeyAction::Screenshot => self.screenshot = binding,
                 HotkeyAction::ScreenshotSource => self.screenshot_source = binding,
+                HotkeyAction::ToggleReplayBuffer => self.toggle_replay_buffer = binding,
+                HotkeyAction::SaveReplay => self.save_replay = binding,
                 HotkeyAction::Fullscreen => self.fullscreen = binding,
                 HotkeyAction::OpenSettings => self.open_settings = binding,
             },

@@ -500,6 +500,7 @@ fn subject(subject: &Subject, i18n: &LocalizationManager) -> String {
         Subject::Compositor => i18n.text(TextKey::StatsCompositor).into_owned(),
         Subject::Recording => i18n.text(TextKey::StatsRecording).into_owned(),
         Subject::Broadcast => i18n.text(TextKey::StatsBroadcast).into_owned(),
+        Subject::Replay => i18n.text(TextKey::StatsReplay).into_owned(),
         Subject::Source(name) => name.clone(),
     }
 }

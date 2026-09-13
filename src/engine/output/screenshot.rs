@@ -130,7 +130,10 @@ fn encode(file: File, frame: &ffmpeg::frame::Video, colour: png::ColorType) -> i
 
 /// Opens `path` for writing if nothing is there, or `stem-2.ext`, `stem-3.ext`
 /// and so on — never a file that already exists.
-fn create_unique(path: &Path) -> io::Result<(File, PathBuf)> {
+///
+/// A saved replay's name is claimed through this too, since its stamp is
+/// one second fine for the same reason.
+pub(super) fn create_unique(path: &Path) -> io::Result<(File, PathBuf)> {
     let stem = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())

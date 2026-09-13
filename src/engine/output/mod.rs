@@ -41,6 +41,7 @@
 //! per recording, from what is actually running.
 
 pub(in crate::engine) mod disk;
+pub(in crate::engine) mod replay;
 pub(in crate::engine) mod screenshot;
 mod session;
 mod streaming;
@@ -124,6 +125,10 @@ fn media_codec(codec: RecordingAudioCodec) -> AudioCodec {
 pub(in crate::engine) enum OutputKind {
     Recording,
     Broadcast,
+    /// The replay buffer — an output like the other two, whose packets are
+    /// kept in memory until a clip is saved rather than written as they
+    /// come. See `replay`.
+    Replay,
 }
 
 impl OutputKind {
@@ -133,7 +138,18 @@ impl OutputKind {
         match self {
             Self::Recording => "record",
             Self::Broadcast => "stream",
+            Self::Replay => "replay",
         }
+    }
+
+    pub(in crate::engine) const ALL: [Self; 3] = [Self::Recording, Self::Broadcast, Self::Replay];
+
+    /// Which output an element belongs to, by its name — `None` for one
+    /// that is not an output's at all.
+    pub(in crate::engine) fn of(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| name.starts_with(kind.prefix()))
     }
 }
 

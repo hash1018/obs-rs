@@ -49,6 +49,10 @@ struct DockContent<'a> {
     /// Whether a monitoring endpoint has been chosen, which is what decides
     /// whether the mixer's monitor buttons can do anything at all.
     monitoring: bool,
+    /// The key that saves a replay, as it is written, if one is bound — the
+    /// Controls dock says so beside the button, since that key is how a
+    /// replay is saved from inside a game.
+    replay_save_key: Option<String>,
     i18n: &'a LocalizationManager,
     actions: &'a mut Vec<UiAction>,
 }
@@ -77,6 +81,11 @@ pub(super) fn show(
         snapshots: resources.snapshots,
         audio_devices: resources.audio_devices,
         monitoring: resources.settings.audio.monitor_device.is_some(),
+        replay_save_key: resources
+            .settings
+            .hotkeys
+            .binding(crate::hotkey::HotkeyAction::SaveReplay)
+            .map(|chord| chord.to_string()),
         i18n: resources.i18n,
         actions,
     };
@@ -283,6 +292,7 @@ fn show_panel(
             panels::controls::show(
                 &mut child,
                 &content.snapshots.status,
+                content.replay_save_key.as_deref(),
                 content.i18n,
                 content.actions,
             );

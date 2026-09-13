@@ -114,6 +114,8 @@ pub enum UiAction {
     ReopenSource(SceneItemId),
     /// Show the Settings dialog, seeded from what is currently set.
     OpenSettings,
+    /// The same, on the Hotkeys page.
+    OpenHotkeySettings,
     /// Shows the folder recordings are written to in the system's own file
     /// manager, creating it first if nothing has recorded yet.
     ShowRecordings,
@@ -125,6 +127,14 @@ pub enum UiAction {
     /// Save one Source's own picture — filters and all, without the item's
     /// crop or placement — beside the recordings.
     TakeSourceScreenshot(SceneItemId),
+    /// Start keeping the last stretch of what is composited, for a clip to
+    /// be saved from later. Carries nothing, for the reason `StartRecording`
+    /// does not.
+    StartReplayBuffer,
+    /// Stop it, letting go of what it holds.
+    StopReplayBuffer,
+    /// Save what the replay buffer holds, beside the recordings.
+    SaveReplay,
     /// Commit the dialog's draft: persist it, and hand the engine the part it
     /// needs. Boxed because it is much the largest variant here and every
     /// other one would otherwise be padded to its size.

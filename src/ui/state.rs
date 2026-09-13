@@ -83,4 +83,11 @@ impl UiState {
     pub fn open_settings(&mut self, settings: &crate::settings::AppSettings) {
         self.settings.open_with(settings);
     }
+
+    /// The same, on the Hotkeys page — for whatever says a key is missing
+    /// and should take the user to where one is set.
+    pub fn open_hotkey_settings(&mut self, settings: &crate::settings::AppSettings) {
+        self.settings.open_with(settings);
+        self.settings.show_hotkeys();
+    }
 }

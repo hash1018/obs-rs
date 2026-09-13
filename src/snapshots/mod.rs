@@ -8,7 +8,10 @@ pub use audio::{AudioSnapshot, AudioSourceSnapshot};
 pub use scenes::{SceneSnapshot, ScenesSnapshot};
 pub use sources::{SceneItemSnapshot, SourcesSnapshot};
 pub use stats::{OutputStats, Rendering, Role, StatsRow, StatsSnapshot, Subject};
-pub use status::{ScreenshotReport, SourceStatus, StatusSnapshot};
+pub use status::{
+    ReplayFailure, ReplayFill, ReplayReport, SavedReplay, ScreenshotReport, SourceStatus,
+    StatusSnapshot,
+};
 
 /// Read-only application state consumed while drawing one UI frame.
 ///

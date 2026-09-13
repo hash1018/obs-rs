@@ -75,6 +75,12 @@ pub(in crate::engine) struct OutputState {
     /// One at a time: a second asked for while the first is still on its
     /// way would be the same frame, and is not worth a second of anything.
     pub(in crate::engine) screenshot: Option<PendingScreenshot>,
+    /// The replay buffer, while it is filling. Beside the recording and the
+    /// broadcast rather than instead of either, for the reason those two sit
+    /// side by side: each is its own branches off the same two `Tee`s.
+    pub(in crate::engine) replay: Option<super::replay::Replay>,
+    /// Clips still being written — see `replay::Saves`.
+    pub(in crate::engine) replay_saves: super::replay::Saves,
 }
 
 /// Whichever way the screenshot on its way is being taken — what has to be
@@ -165,7 +171,9 @@ pub(in crate::engine) fn start_recording(
 /// machine that has it should still find it selected after recording once on
 /// a laptop that does not, rather than having their setting quietly replaced
 /// by whatever that laptop could manage.
-fn usable_settings(
+///
+/// The replay buffer is encoded with these too, and falls back the same way.
+pub(super) fn usable_settings(
     backend: &Backend,
     audio_codecs: &[crate::settings::RecordingAudioCodec],
     settings: &crate::settings::RecordingSettings,

@@ -8,6 +8,7 @@ use super::{UiAction, UiState, docking::DockPanel};
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
+    status: &crate::snapshots::StatusSnapshot,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -50,6 +51,21 @@ pub fn show(
                         && let Some(item) = selected
                     {
                         actions.push(UiAction::TakeSourceScreenshot(item));
+                        ui.close();
+                    }
+                    // Beside the screenshots, and for the same reason: the
+                    // Controls dock's button can be closed away, and its
+                    // hotkey is set nowhere by default. Only while the
+                    // buffer holds a clip is there anything to save.
+                    if (status.replay_enabled || status.replay.is_some())
+                        && ui
+                            .add_enabled(
+                                status.replay.is_some_and(|fill| fill.saveable()),
+                                egui::Button::new(i18n.text(TextKey::MenuSaveReplay)),
+                            )
+                            .clicked()
+                    {
+                        actions.push(UiAction::SaveReplay);
                         ui.close();
                     }
                     ui.separator();

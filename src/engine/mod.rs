@@ -44,7 +44,7 @@ use media_pp::elements::{VideoFit, VideoLayer, VideoRect, VideoSourceRect};
 
 use crate::domain::{Crop, SceneCanvas, SceneItemId, SourceSettings, Transform};
 use crate::project::{ProjectCommand, ProjectDispatcher, SourceCommand};
-use crate::snapshots::{Role, SceneItemSnapshot, SourceStatus, SourcesSnapshot};
+use crate::snapshots::{ReplayFailure, Role, SceneItemSnapshot, SourceStatus, SourcesSnapshot};
 use output::{
     Broadcast, BroadcastRequest, OutputKind, OutputState, PendingScreenshot, describe,
     start_recording,
@@ -163,6 +163,16 @@ enum EngineCommand {
     /// What the screenshot's branch wrote, from the branch's own thread —
     /// the engine's cue to take the branch off again.
     ScreenshotTaken(output::screenshot::Taken),
+    /// Start filling the replay buffer, with the recording's settings as
+    /// they are now.
+    StartReplay,
+    /// Stop it, letting go of everything it holds.
+    StopReplay,
+    /// Save what the replay buffer holds as a clip beside the recordings.
+    /// Carries no path, for the reason `StartRecording` does not.
+    SaveReplay,
+    /// What a save came to, from the thread that wrote it.
+    ReplaySaved(output::replay::Saved),
 }
 
 /// What the engine is started with, as opposed to what it is told afterwards
@@ -257,6 +267,18 @@ struct Published {
     /// The last screenshot and what came of it — the one thing that says one
     /// was taken, since nothing on screen changes when it is.
     screenshot: Arc<ArcSwapOption<crate::snapshots::ScreenshotReport>>,
+    /// The running replay buffer's own handle, which the UI asks how full
+    /// it is — a lock the tracks write under, held for a subtraction — or
+    /// `None` while none is running.
+    replay: Arc<ArcSwapOption<ReplayRunning>>,
+    /// The replay buffer's last report — see `ReplayReport`.
+    replay_report: Arc<ArcSwapOption<crate::snapshots::ReplayReport>>,
+}
+
+/// What the UI reads of a running replay buffer.
+struct ReplayRunning {
+    handle: media_pp::elements::ReplayBufferHandle,
+    length: Duration,
 }
 
 /// What the engine is handed at construction about where output goes.
@@ -311,6 +333,9 @@ pub struct EngineManager {
     recording_error: Arc<ArcSwapOption<String>>,
     /// The last screenshot — see `Published::screenshot`.
     screenshot: Arc<ArcSwapOption<crate::snapshots::ScreenshotReport>>,
+    /// The running replay buffer — see `Published::replay`.
+    replay: Arc<ArcSwapOption<ReplayRunning>>,
+    replay_report: Arc<ArcSwapOption<crate::snapshots::ReplayReport>>,
     /// When the running broadcast started — see `Published::streaming_since`.
     streaming_since: Arc<ArcSwapOption<Instant>>,
     streaming_error: Arc<ArcSwapOption<String>>,
@@ -366,6 +391,8 @@ impl EngineManager {
         let stop = Arc::new(AtomicBool::new(false));
         let recording_error = Arc::new(ArcSwapOption::empty());
         let screenshot = Arc::new(ArcSwapOption::empty());
+        let replay = Arc::new(ArcSwapOption::empty());
+        let replay_report = Arc::new(ArcSwapOption::empty());
         let streaming_since = Arc::new(ArcSwapOption::empty());
         let streaming_error = Arc::new(ArcSwapOption::empty());
         let streaming_reconnecting = Arc::new(AtomicBool::new(false));
@@ -384,6 +411,8 @@ impl EngineManager {
             let recording_paused_at = Arc::clone(&recording_paused_at);
             let recording_error = Arc::clone(&recording_error);
             let screenshot = Arc::clone(&screenshot);
+            let replay = Arc::clone(&replay);
+            let replay_report = Arc::clone(&replay_report);
             let streaming_since = Arc::clone(&streaming_since);
             let streaming_error = Arc::clone(&streaming_error);
             let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
@@ -405,6 +434,8 @@ impl EngineManager {
                     recording_paused_at,
                     recording_error,
                     screenshot,
+                    replay,
+                    replay_report,
                     streaming_since,
                     streaming_error,
                     streaming_reconnecting,
@@ -431,6 +462,8 @@ impl EngineManager {
                         running: None,
                         broadcast: Broadcast::Off,
                         screenshot: None,
+                        replay: None,
+                        replay_saves: output::replay::Saves::default(),
                     },
                 };
                 if let Err(error) = run(
@@ -456,6 +489,8 @@ impl EngineManager {
             recording_paused_at,
             recording_error,
             screenshot,
+            replay,
+            replay_report,
             streaming_since,
             streaming_error,
             streaming_reconnecting,
@@ -694,6 +729,43 @@ impl EngineManager {
     /// The last screenshot and what came of it, once one has been taken.
     pub fn screenshot(&self) -> Option<Arc<crate::snapshots::ScreenshotReport>> {
         self.screenshot.load_full()
+    }
+
+    /// Starts filling the replay buffer. Asks rather than tells, as a
+    /// recording does: [`EngineManager::replay`] says whether it started and
+    /// [`EngineManager::replay_report`] why not.
+    pub fn start_replay_buffer(&self) {
+        let _ = self.commands.send(EngineCommand::StartReplay);
+    }
+
+    /// Stops the replay buffer, letting go of what it holds.
+    pub fn stop_replay_buffer(&self) {
+        let _ = self.commands.send(EngineCommand::StopReplay);
+    }
+
+    /// Saves what the replay buffer holds as a clip beside the recordings.
+    /// Where it went, or why it did not, arrives as
+    /// [`EngineManager::replay_report`].
+    pub fn save_replay(&self) {
+        let _ = self.commands.send(EngineCommand::SaveReplay);
+    }
+
+    /// How full the replay buffer is, or `None` when it is not running.
+    ///
+    /// Asked of the buffer itself, so what it says is what a save would
+    /// write — at the cost of the lock its tracks write under, held for a
+    /// subtraction.
+    pub fn replay(&self) -> Option<crate::snapshots::ReplayFill> {
+        let running = self.replay.load_full()?;
+        Some(crate::snapshots::ReplayFill {
+            buffered: running.handle.buffered(),
+            length: running.length,
+        })
+    }
+
+    /// The replay buffer's last report, once it has one.
+    pub fn replay_report(&self) -> Option<Arc<crate::snapshots::ReplayReport>> {
+        self.replay_report.load_full()
     }
 
     /// The SceneItems that are not producing a picture right now.
@@ -973,6 +1045,11 @@ fn run(
     // is what lets this drop run at all.
     drop(opener);
     drop(broadcasts);
+    // A clip being written is finished rather than cut off: the file would
+    // otherwise be left without the trailer that makes it playable. Before
+    // the backend stops, so a save that has not yet gathered its clip still
+    // finds the buffer there to gather it from.
+    recording.replay_saves.wait();
 
     for (_, state) in open.drain() {
         if let SourceState::Open(source) = state {
@@ -1114,6 +1191,16 @@ fn watch_outputs(
                 tracing::error!("the recording stopped: {reason}");
                 published.recording_error.store(Some(Arc::new(reason)));
             }
+            Trouble::Replay(reason) => {
+                // Both of its branches report when either goes, so the
+                // second finds nothing left to stop and says nothing twice.
+                if state.replay.is_none() {
+                    continue;
+                }
+                stop_replay(engine, state, published);
+                tracing::error!("the replay buffer stopped: {reason}");
+                report_replay(published, Err(ReplayFailure::Stopped(reason)));
+            }
         }
     }
 
@@ -1199,43 +1286,34 @@ fn publish_stats<'a>(
             .iter()
             .map(|(element, _, stats)| (element.as_str(), load::elements(stats))),
     );
-    let mut snapshot = reading.take(&pipelines, |element| match element.name {
-        // The compositor takes nothing in — it is its pipeline's source, and
-        // what it made is on its output pad. What compositing costs is not
-        // an element's `busy` at all: it happens in the thread that drives
-        // it rather than in a call into it.
-        "preview-compositor" => Some((Subject::Compositor, Role::Throughput)),
+    let mut snapshot = reading.take(&pipelines, |element| {
         // Every element of an output's branch, by the names
         // `OutputKind::prefix` already decides — the same naming `trouble`
         // and `Load` read. The muxer at the end says how much reached the
         // file or the wire; the queue at the head says what the encoding
         // cost and how close it is to blocking.
-        name if is_an_output(name) => {
-            let kind = if name.starts_with(OutputKind::Recording.prefix()) {
-                Subject::Recording
-            } else {
-                Subject::Broadcast
-            };
-            Some((kind, output_role(element)))
+        if let Some(kind) = OutputKind::of(element.name) {
+            return Some((load::subject_of(kind), output_role(element)));
         }
-        // A Source's own name belongs to two of its elements — the head
-        // that produces and the input it feeds the compositor through. The
-        // input is the one worth reporting: its count is frames that
-        // actually reached the Canvas, which is the question a Source
-        // raises. It is the one with nothing downstream of it.
-        name if element.pushed.is_none() => sources
-            .get(name)
-            .map(|name| (Subject::Source((*name).to_owned()), Role::Throughput)),
-        _ => None,
+        match element.name {
+            // The compositor takes nothing in — it is its pipeline's source,
+            // and what it made is on its output pad. What compositing costs
+            // is not an element's `busy` at all: it happens in the thread
+            // that drives it rather than in a call into it.
+            "preview-compositor" => Some((Subject::Compositor, Role::Throughput)),
+            // A Source's own name belongs to two of its elements — the head
+            // that produces and the input it feeds the compositor through.
+            // The input is the one worth reporting: its count is frames that
+            // actually reached the Canvas, which is the question a Source
+            // raises. It is the one with nothing downstream of it.
+            name if element.pushed.is_none() => sources
+                .get(name)
+                .map(|name| (Subject::Source((*name).to_owned()), Role::Throughput)),
+            _ => None,
+        }
     });
     snapshot.disk_available = output::disk::available(directory);
     published.stats.store(Some(Arc::new(snapshot)));
-}
-
-/// Whether an element belongs to one of the outputs.
-fn is_an_output(name: &str) -> bool {
-    name.starts_with(OutputKind::Recording.prefix())
-        || name.starts_with(OutputKind::Broadcast.prefix())
 }
 
 /// What part of an output's row one of its elements supplies.
@@ -1471,6 +1549,45 @@ fn report_screenshot(published: &Published, outcome: output::screenshot::Taken) 
         })));
 }
 
+/// Publishes what the replay buffer last came to, and logs it.
+fn report_replay(
+    published: &Published,
+    outcome: Result<crate::snapshots::SavedReplay, ReplayFailure>,
+) {
+    match &outcome {
+        Ok(saved) => tracing::info!(
+            "replay saved to {} ({:.1}s)",
+            saved.path.display(),
+            saved.length.as_secs_f32()
+        ),
+        Err(ReplayFailure::Save(reason)) => tracing::error!("could not save a replay: {reason}"),
+        Err(ReplayFailure::Empty) => {
+            tracing::info!("nothing to save yet: the replay buffer is filling")
+        }
+        // Logged where they happened, with more around them.
+        Err(ReplayFailure::Start(_) | ReplayFailure::Stopped(_)) => {}
+    }
+    published
+        .replay_report
+        .store(Some(Arc::new(crate::snapshots::ReplayReport {
+            at: Instant::now(),
+            outcome,
+        })));
+}
+
+/// Ends the replay buffer, if one is running, and says so to the UI.
+///
+/// Its report is left alone: a clip saved a moment before stopping is still
+/// worth the few seconds it is mentioned for.
+fn stop_replay(engine: &Engine<'_>, state: &mut OutputState, published: &Published) {
+    published.replay.store(None);
+    if let Some(replay) = state.replay.take()
+        && let Err(error) = replay.stop(engine.backend)
+    {
+        tracing::warn!("could not stop the replay buffer cleanly: {error}");
+    }
+}
+
 /// Applies one change, reporting whether the running Sources may have moved
 /// on — a Scene change can start or stop them, a drag never does.
 fn apply_command(
@@ -1613,7 +1730,13 @@ fn apply_command(
             // timestamps it is being handed would change meaning underneath
             // it. The setting is kept either way, and takes at the next
             // change once the recording has stopped.
-            if recording.running.is_none() && settings.fps != engine.backend.frame_rate() {
+            //
+            // A running replay buffer holds it too, for the same reason: its
+            // encoder is stamping at the old rate.
+            if recording.running.is_none()
+                && recording.replay.is_none()
+                && settings.fps != engine.backend.frame_rate()
+            {
                 engine.backend.set_frame_rate(settings.fps);
             }
             recording.settings = *settings;
@@ -1716,6 +1839,73 @@ fn apply_command(
                 None => {}
             }
             report_screenshot(published, taken);
+            false
+        }
+        EngineCommand::StartReplay => {
+            if recording.replay.is_some() {
+                return false;
+            }
+            // Cleared before the attempt, for the reason a recording's error
+            // is: what is shown then describes this attempt.
+            published.replay_report.store(None);
+            match output::replay::Replay::start(engine.backend, recording) {
+                Ok(replay) => {
+                    let (handle, length) = replay.fill();
+                    published
+                        .replay
+                        .store(Some(Arc::new(ReplayRunning { handle, length })));
+                    recording.replay = Some(replay);
+                }
+                Err(error) => {
+                    let reason = describe(error.as_ref());
+                    tracing::error!("could not start the replay buffer: {reason}");
+                    report_replay(published, Err(ReplayFailure::Start(reason)));
+                }
+            }
+            false
+        }
+        EngineCommand::StopReplay => {
+            stop_replay(engine, recording, published);
+            false
+        }
+        EngineCommand::SaveReplay => {
+            let Some(replay) = recording.replay.as_ref() else {
+                tracing::warn!("no replay buffer is running");
+                return false;
+            };
+            // The button waits for this too; a key pressed straight after
+            // starting does not, and is answered with a note rather than a
+            // clip of one frame.
+            if replay.buffered() < crate::snapshots::ReplayFill::SAVEABLE_AFTER {
+                report_replay(published, Err(ReplayFailure::Empty));
+                return false;
+            }
+            let path = crate::paths::replay_file_in(
+                &recording.settings.directory_or_default(),
+                recording.settings.prefix_or_default(),
+                crate::clock::now_local(),
+                recording.settings.format,
+            );
+            let replies = engine.replies.clone();
+            match replay.save(path, move |saved| {
+                let _ = replies.send(EngineCommand::ReplaySaved(saved));
+            }) {
+                Ok(save) => recording.replay_saves.add(save),
+                Err(error) => report_replay(
+                    published,
+                    Err(ReplayFailure::Save(format!(
+                        "could not start writing the clip: {error}"
+                    ))),
+                ),
+            }
+            false
+        }
+        EngineCommand::ReplaySaved(saved) => {
+            recording.replay_saves.collect_finished();
+            report_replay(
+                published,
+                saved.map(|(path, length)| crate::snapshots::SavedReplay { path, length }),
+            );
             false
         }
         EngineCommand::PauseRecording(paused) => {
@@ -2337,6 +2527,8 @@ mod tests {
             audio_codecs: Arc::new(ArcSwapOption::empty()),
             recording_error: Arc::new(ArcSwapOption::empty()),
             screenshot: Arc::new(ArcSwapOption::empty()),
+            replay: Arc::new(ArcSwapOption::empty()),
+            replay_report: Arc::new(ArcSwapOption::empty()),
             streaming_since: Arc::new(ArcSwapOption::empty()),
             streaming_error: Arc::new(ArcSwapOption::empty()),
             streaming_reconnecting: Arc::new(AtomicBool::new(false)),

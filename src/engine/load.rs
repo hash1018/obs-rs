@@ -132,11 +132,19 @@ fn fullness(queue: media_pp::stats::QueueStats) -> f32 {
     queue.len as f32 / queue.capacity as f32
 }
 
+/// The Stats dock's row for one output.
+pub(super) fn subject_of(kind: OutputKind) -> crate::snapshots::Subject {
+    match kind {
+        OutputKind::Recording => crate::snapshots::Subject::Recording,
+        OutputKind::Broadcast => crate::snapshots::Subject::Broadcast,
+        OutputKind::Replay => crate::snapshots::Subject::Replay,
+    }
+}
+
 /// Whether a queue by this name belongs to an output rather than to
 /// something that drops on purpose.
 fn is_an_outputs(name: &str) -> bool {
-    name.starts_with(OutputKind::Recording.prefix())
-        || name.starts_with(OutputKind::Broadcast.prefix())
+    OutputKind::of(name).is_some()
 }
 
 #[cfg(test)]
@@ -152,6 +160,10 @@ mod tests {
         assert!(is_an_outputs("record-audio-queue"));
         assert!(is_an_outputs("stream-queue"));
         assert!(is_an_outputs("stream-audio-queue"));
+        // A replay buffer's queues block too, and an encoder behind on it
+        // holds the compositor up exactly as a recording's does.
+        assert!(is_an_outputs("replay-queue"));
+        assert!(is_an_outputs("replay-audio-queue"));
 
         assert!(!is_an_outputs("preview-queue"));
         assert!(!is_an_outputs("monitor-queue"));
@@ -482,10 +494,7 @@ impl Reading {
         pipelines: &[(&str, Vec<Element<'_>>)],
         interval: Duration,
     ) -> Option<crate::snapshots::OutputStats> {
-        let subject = match kind {
-            OutputKind::Recording => crate::snapshots::Subject::Recording,
-            OutputKind::Broadcast => crate::snapshots::Subject::Broadcast,
-        };
+        let subject = subject_of(kind);
         let prefix = kind.prefix();
         let attached = || {
             pipelines
@@ -534,7 +543,8 @@ fn order(subject: &crate::snapshots::Subject) -> (u8, String) {
         Subject::Compositor => (0, String::new()),
         Subject::Recording => (1, String::new()),
         Subject::Broadcast => (2, String::new()),
-        Subject::Source(name) => (3, name.clone()),
+        Subject::Replay => (3, String::new()),
+        Subject::Source(name) => (4, name.clone()),
     }
 }
 

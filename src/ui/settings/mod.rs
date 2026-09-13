@@ -109,6 +109,11 @@ impl SettingsDialogState {
         self.open = true;
     }
 
+    /// Turns to the Hotkeys page.
+    pub(in crate::ui) fn show_hotkeys(&mut self) {
+        self.page = SettingsPage::Hotkeys;
+    }
+
     /// Whether the Hotkeys page is waiting for a key.
     pub(in crate::ui) fn capturing_hotkey(&self) -> bool {
         self.capturing_hotkey.is_some()
@@ -189,6 +194,7 @@ pub(in crate::ui) fn show(
     ctx: &egui::Context,
     state: &mut SettingsDialogState,
     recording: bool,
+    replaying: bool,
     streaming: bool,
     encoders: &[crate::settings::RecordingEncoder],
     audio_codecs: &[crate::settings::RecordingAudioCodec],
@@ -245,64 +251,78 @@ pub(in crate::ui) fn show(
                         // told not to shrink takes the height *available* to it,
                         // which inside a window is the rest of the screen, and the
                         // dialog then grew past the bottom of the application.
+                        //
+                        // Top-down inside it: the scroll area takes the
+                        // layout of the row it sits in, and a page of more
+                        // than one piece — the Recording page's replay
+                        // section, the note above it while one runs — would
+                        // otherwise be laid out side by side.
                         egui::ScrollArea::vertical()
                             .max_height(PAGE_HEIGHT)
                             .auto_shrink([false, false])
-                            .show(ui, |ui| match state.page {
-                                SettingsPage::General => {
-                                    general::show(ui, &mut state.draft, i18n);
-                                }
-                                SettingsPage::Video => {
-                                    video::show(ui, &mut state.draft, recording, i18n);
-                                }
-                                SettingsPage::Audio => {
-                                    audio::show(
-                                        ui,
-                                        &mut state.draft,
-                                        recording,
-                                        audio_devices,
-                                        audio,
-                                        i18n,
-                                    );
-                                }
-                                SettingsPage::Hotkeys => {
-                                    let outcome = hotkeys::show(
-                                        ui,
-                                        &mut state.draft,
-                                        state.capturing_hotkey,
-                                        audio,
-                                        scenes,
-                                        i18n,
-                                    );
-                                    if outcome.captured {
-                                        state.capturing_hotkey = None;
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| match state.page {
+                                    SettingsPage::General => {
+                                        general::show(ui, &mut state.draft, i18n);
                                     }
-                                    if let Some(action) = outcome.capture {
-                                        state.capturing_hotkey = Some(action);
+                                    SettingsPage::Video => {
+                                        video::show(ui, &mut state.draft, recording, i18n);
                                     }
-                                }
-                                SettingsPage::Streaming => {
-                                    streaming::show(
-                                        ui,
-                                        &mut state.draft,
-                                        &mut state.streaming_page,
-                                        streaming,
-                                        encoders,
-                                        audio_codecs,
-                                        i18n,
-                                    );
-                                }
-                                SettingsPage::Recording => {
-                                    browse = recording::show(
-                                        ui,
-                                        &mut state.draft,
-                                        recording,
-                                        picking,
-                                        encoders,
-                                        audio_codecs,
-                                        i18n,
-                                    );
-                                }
+                                    SettingsPage::Audio => {
+                                        audio::show(
+                                            ui,
+                                            &mut state.draft,
+                                            recording,
+                                            audio_devices,
+                                            audio,
+                                            i18n,
+                                        );
+                                    }
+                                    SettingsPage::Hotkeys => {
+                                        let outcome = hotkeys::show(
+                                            ui,
+                                            &mut state.draft,
+                                            state.capturing_hotkey,
+                                            audio,
+                                            scenes,
+                                            i18n,
+                                        );
+                                        if outcome.captured {
+                                            state.capturing_hotkey = None;
+                                        }
+                                        if let Some(action) = outcome.capture {
+                                            state.capturing_hotkey = Some(action);
+                                        }
+                                    }
+                                    SettingsPage::Streaming => {
+                                        streaming::show(
+                                            ui,
+                                            &mut state.draft,
+                                            &mut state.streaming_page,
+                                            streaming,
+                                            encoders,
+                                            audio_codecs,
+                                            i18n,
+                                        );
+                                    }
+                                    SettingsPage::Recording => {
+                                        browse = recording::show(
+                                            ui,
+                                            &mut state.draft,
+                                            recording,
+                                            picking,
+                                            encoders,
+                                            audio_codecs,
+                                            i18n,
+                                        );
+                                        recording::show_replay(
+                                            ui,
+                                            &mut state.draft,
+                                            replaying,
+                                            i18n,
+                                        );
+                                    }
+                                })
                             });
                     });
                 });

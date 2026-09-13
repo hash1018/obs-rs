@@ -149,6 +149,23 @@ fn pressed_action(
                 actions.push(UiAction::TakeSourceScreenshot(item));
             }
         }
+        // As its button does: stopping always, starting only where Settings
+        // offers the buffer at all — a key must not start something whose
+        // button is not there to stop it.
+        Hotkey::Action(HotkeyAction::ToggleReplayBuffer) => {
+            if status.replay.is_some() {
+                actions.push(UiAction::StopReplayBuffer);
+            } else if status.replay_enabled {
+                actions.push(UiAction::StartReplayBuffer);
+            }
+        }
+        // Only while there is something to save, as the pause key is only
+        // heard while there is a recording to pause.
+        Hotkey::Action(HotkeyAction::SaveReplay) => {
+            if status.replay.is_some() {
+                actions.push(UiAction::SaveReplay);
+            }
+        }
         // The window's own, which never come through here — see `dispatch`.
         Hotkey::Action(HotkeyAction::Fullscreen | HotkeyAction::OpenSettings) => {}
         Hotkey::ToggleMute(id) => {
@@ -455,6 +472,43 @@ mod tests {
         assert!(matches!(
             press(Key::R, Modifiers::CTRL, &running).as_slice(),
             [UiAction::StopRecording]
+        ));
+    }
+
+    /// The replay keys follow its buttons: the toggle starts a buffer only
+    /// where Settings offers one and stops a running one always, and saving
+    /// needs a buffer to save from.
+    #[test]
+    fn the_replay_keys_do_what_its_buttons_would() {
+        let heard = |hotkey: HotkeyAction, snapshots: &Snapshots| {
+            let mut actions = Vec::new();
+            pressed_action(Hotkey::Action(hotkey), snapshots, None, &mut actions);
+            actions
+        };
+        let mut snapshots = Snapshots::default();
+        assert!(heard(HotkeyAction::ToggleReplayBuffer, &snapshots).is_empty());
+        assert!(heard(HotkeyAction::SaveReplay, &snapshots).is_empty());
+
+        snapshots.status.replay_enabled = true;
+        assert!(matches!(
+            heard(HotkeyAction::ToggleReplayBuffer, &snapshots).as_slice(),
+            [UiAction::StartReplayBuffer]
+        ));
+        assert!(heard(HotkeyAction::SaveReplay, &snapshots).is_empty());
+
+        // Running, and — once Settings has turned it off — still stoppable.
+        snapshots.status.replay_enabled = false;
+        snapshots.status.replay = Some(crate::snapshots::ReplayFill {
+            buffered: Duration::from_secs(4),
+            length: Duration::from_secs(30),
+        });
+        assert!(matches!(
+            heard(HotkeyAction::SaveReplay, &snapshots).as_slice(),
+            [UiAction::SaveReplay]
+        ));
+        assert!(matches!(
+            heard(HotkeyAction::ToggleReplayBuffer, &snapshots).as_slice(),
+            [UiAction::StopReplayBuffer]
         ));
     }
 

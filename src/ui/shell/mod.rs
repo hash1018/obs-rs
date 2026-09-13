@@ -103,7 +103,13 @@ pub fn show(
         &resources.global_hotkeys,
         actions,
     );
-    menu_bar::show(ui, state, resources.i18n, actions);
+    menu_bar::show(
+        ui,
+        state,
+        &resources.snapshots.status,
+        resources.i18n,
+        actions,
+    );
     status_bar::show(ui, &resources.snapshots.status, resources.i18n);
     docking::show(
         ui,
@@ -133,6 +139,7 @@ pub fn show(
         ui.ctx(),
         &mut state.settings,
         resources.snapshots.status.recording_elapsed.is_some(),
+        resources.snapshots.status.replay.is_some(),
         resources.snapshots.status.streaming_elapsed.is_some(),
         &resources.snapshots.status.encoders,
         &resources.snapshots.status.audio_codecs,

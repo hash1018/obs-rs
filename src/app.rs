@@ -292,6 +292,9 @@ impl ObsApp {
         self.snapshots.status.recording_paused = engine.recording_paused();
         self.snapshots.status.recording_error = engine.recording_error();
         self.snapshots.status.screenshot = engine.screenshot();
+        self.snapshots.status.replay_enabled = self.settings.recording.replay_buffer;
+        self.snapshots.status.replay = engine.replay();
+        self.snapshots.status.replay_report = engine.replay_report();
         self.snapshots.status.source_status = engine.source_status();
         if self.snapshots.status.encoders.is_empty()
             && let Some(encoders) = engine.encoders()
@@ -348,12 +351,20 @@ impl ObsApp {
         if let Some(engine) = &self.engine {
             engine.set_recording_settings(settings.recording.clone());
             engine.set_streaming_settings(settings.streaming.clone());
+            // Turning the replay buffer off takes its button away, so one
+            // that is running is stopped rather than left with no way to
+            // stop it but turning it back on.
+            if !settings.recording.replay_buffer && self.snapshots.status.replay.is_some() {
+                engine.stop_replay_buffer();
+            }
         }
         // The mixer's own format, which takes immediately — so it is refused
         // while a recording runs, the same as the frame rate and for the same
         // reason: the running file's audio encoder was opened for the old one.
+        // A running replay buffer's audio encoder was too.
         if settings.audio.mix_differs_from(&self.settings.audio)
             && self.snapshots.status.recording_elapsed.is_none()
+            && self.snapshots.status.replay.is_none()
             && let Some(audio) = &self.audio
         {
             audio.set_mix_format(mix_format(&settings));
@@ -873,12 +884,28 @@ impl ObsApp {
                     engine.take_source_screenshot(item);
                 }
             }
+            UiAction::StartReplayBuffer => {
+                if let Some(engine) = &self.engine {
+                    engine.start_replay_buffer();
+                }
+            }
+            UiAction::StopReplayBuffer => {
+                if let Some(engine) = &self.engine {
+                    engine.stop_replay_buffer();
+                }
+            }
+            UiAction::SaveReplay => {
+                if let Some(engine) = &self.engine {
+                    engine.save_replay();
+                }
+            }
             UiAction::OpenSettings => {
                 // Seeded here rather than in the dialog: this is what holds
                 // the live settings, and a draft taken from anywhere else
                 // could be stale.
                 self.ui_state.open_settings(&self.settings);
             }
+            UiAction::OpenHotkeySettings => self.ui_state.open_hotkey_settings(&self.settings),
             UiAction::ApplySettings(settings) => self.apply_settings(ctx, *settings),
             UiAction::SetTheme(theme) => {
                 // Through the same path the dialog takes, so the menu's
