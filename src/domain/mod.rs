@@ -66,7 +66,8 @@ pub use audio_filter::{
 };
 pub use canvas::SceneCanvas;
 pub use filter::{
-    ChromaKeyMethod, ChromaKeySettings, Filter, FilterId, FilterKind, FilterSettings,
+    ChromaKeyMethod, ChromaKeySettings, ColorCorrectionSettings, Filter, FilterId, FilterKind,
+    FilterSettings, LumaKeySettings,
 };
 pub use scene::{Scene, SceneId};
 pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};

@@ -39,7 +39,7 @@ use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract,
 use media_pp::element::Filter as PpFilter;
 use media_pp::elements::{Rack, RackHandle};
 
-use crate::domain::{Filter, FilterId, FilterSettings};
+use crate::domain::{Filter, FilterId, FilterKind, FilterSettings};
 
 use super::super::backend::BackendError;
 
@@ -68,7 +68,7 @@ pub(in crate::engine) enum ChainFormat {
 /// One running filter, and the way back to it.
 ///
 /// The id is the database row's, which is what a command names when it
-/// retunes one — see `SourceCommand::SetChromaKeySettings`.
+/// retunes one — see `SourceCommand::SetFilterSettings`.
 pub(in crate::engine) struct OpenFilter {
     pub(in crate::engine) id: FilterId,
     pub(in crate::engine) handle: FilterHandle,
@@ -86,13 +86,17 @@ type Built = Result<(Vec<Box<dyn PpFilter>>, Vec<OpenFilter>), BackendError>;
 /// The runtime control for one filter, by kind.
 pub(in crate::engine) enum FilterHandle {
     ChromaKey(media_pp::elements::ChromaKeyHandle),
+    /// A colour correction or a luma key — one element serves both, so the
+    /// kind is kept beside the handle rather than read from it.
+    VideoEffect(FilterKind, media_pp::elements::VideoEffectHandle),
 }
 
 impl OpenFilter {
     /// Which kind this is, read from the handle it holds.
-    fn kind(&self) -> crate::domain::FilterKind {
+    fn kind(&self) -> FilterKind {
         match self.handle {
-            FilterHandle::ChromaKey(_) => crate::domain::FilterKind::ChromaKey,
+            FilterHandle::ChromaKey(_) => FilterKind::ChromaKey,
+            FilterHandle::VideoEffect(kind, _) => kind,
         }
     }
 
@@ -105,6 +109,7 @@ impl OpenFilter {
     pub(in crate::engine) fn apply(&self, filter: &Filter) {
         match &self.handle {
             FilterHandle::ChromaKey(handle) => handle.set_enabled(filter.enabled),
+            FilterHandle::VideoEffect(_, handle) => handle.set_enabled(filter.enabled),
         }
         self.retune(&filter.settings);
     }
@@ -114,11 +119,21 @@ impl OpenFilter {
     /// The project is not told until the gesture ends — see the mixer's own
     /// fader, which splits the same way and for the same reason — so this is
     /// how the picture follows the pointer meanwhile.
+    ///
+    /// Settings of another kind than this filter's change nothing: the kind
+    /// is part of [`shape`], so a filter whose kind changed is rebuilt rather
+    /// than retuned.
     pub(in crate::engine) fn retune(&self, settings: &FilterSettings) {
         match (&self.handle, settings) {
             (FilterHandle::ChromaKey(handle), FilterSettings::ChromaKey(settings)) => {
                 handle.set_options(chroma_key_options(settings));
             }
+            (FilterHandle::VideoEffect(kind, handle), settings) if settings.kind() == *kind => {
+                if let Some(effect) = video_effect(settings) {
+                    handle.set_effect(effect);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -177,24 +192,15 @@ fn new_rack(name: &str, memory: MemoryDomain) -> (Rack, RackHandle) {
 /// Which filters, of which kinds, in which order — and nothing else. Change
 /// any of it and the rack is refilled; change anything else and
 /// [`OpenFilter::apply`] is enough.
-pub(in crate::engine) fn shape(filters: &[Filter]) -> Vec<(FilterId, crate::domain::FilterKind)> {
+pub(in crate::engine) fn shape(filters: &[Filter]) -> Vec<(FilterId, FilterKind)> {
     filters
         .iter()
-        .map(|filter| {
-            (
-                filter.id,
-                match filter.settings {
-                    FilterSettings::ChromaKey(_) => crate::domain::FilterKind::ChromaKey,
-                },
-            )
-        })
+        .map(|filter| (filter.id, filter.settings.kind()))
         .collect()
 }
 
 /// The same, for the chain that is actually running.
-pub(in crate::engine) fn running_shape(
-    open: &[OpenFilter],
-) -> Vec<(FilterId, crate::domain::FilterKind)> {
+pub(in crate::engine) fn running_shape(open: &[OpenFilter]) -> Vec<(FilterId, FilterKind)> {
     open.iter()
         .map(|filter| (filter.id, filter.kind()))
         .collect()
@@ -216,7 +222,9 @@ mod windows {
 
     use media_pp::contract::MemoryDomain;
     use media_pp::element::Filter as PpFilter;
-    use media_pp::elements::{D3d11ChromaKey, D3d11Scaler, D3d11ScalerFormat, Rack};
+    use media_pp::elements::{
+        D3d11ChromaKey, D3d11Scaler, D3d11ScalerFormat, D3d11VideoEffect, Rack,
+    };
     use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
     use super::{
@@ -295,22 +303,34 @@ mod windows {
 
         let mut open = Vec::with_capacity(filters.len());
         for filter in filters {
-            match &filter.settings {
-                FilterSettings::ChromaKey(settings) => {
-                    let (element, handle) = D3d11ChromaKey::new(
-                        format!("{name}-key-{}", filter.id.0),
-                        device,
-                        context.clone(),
-                        super::chroma_key_options(settings),
-                    )
-                    .map_err(|error| BackendError::from(error.to_string()))?;
-                    handle.set_enabled(filter.enabled);
-                    elements.push(Box::new(element));
-                    open.push(OpenFilter {
-                        id: filter.id,
-                        handle: FilterHandle::ChromaKey(handle),
-                    });
-                }
+            if let FilterSettings::ChromaKey(settings) = &filter.settings {
+                let (element, handle) = D3d11ChromaKey::new(
+                    format!("{name}-key-{}", filter.id.0),
+                    device,
+                    context.clone(),
+                    super::chroma_key_options(settings),
+                )
+                .map_err(|error| BackendError::from(error.to_string()))?;
+                handle.set_enabled(filter.enabled);
+                elements.push(Box::new(element));
+                open.push(OpenFilter {
+                    id: filter.id,
+                    handle: FilterHandle::ChromaKey(handle),
+                });
+            } else if let Some(effect) = super::video_effect(&filter.settings) {
+                let (element, handle) = D3d11VideoEffect::new(
+                    format!("{name}-effect-{}", filter.id.0),
+                    device,
+                    context.clone(),
+                    effect,
+                )
+                .map_err(|error| BackendError::from(error.to_string()))?;
+                handle.set_enabled(filter.enabled);
+                elements.push(Box::new(element));
+                open.push(OpenFilter {
+                    id: filter.id,
+                    handle: FilterHandle::VideoEffect(filter.settings.kind(), handle),
+                });
             }
         }
         Ok((elements, open))
@@ -323,7 +343,9 @@ mod linux {
 
     use media_pp::contract::MemoryDomain;
     use media_pp::element::Filter as PpFilter;
-    use media_pp::elements::{CudaChromaKey, CudaConverter, CudaDevice, CudaFrameFormat, Rack};
+    use media_pp::elements::{
+        CudaChromaKey, CudaConverter, CudaDevice, CudaFrameFormat, CudaVideoEffect, Rack,
+    };
 
     use super::{
         BackendError, ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter,
@@ -390,23 +412,36 @@ mod linux {
 
         let mut open = Vec::with_capacity(filters.len());
         for filter in filters {
-            match &filter.settings {
-                FilterSettings::ChromaKey(settings) => {
-                    let (element, handle) = CudaChromaKey::new(
-                        format!("{name}-key-{}", filter.id.0),
-                        device,
-                        *width,
-                        *height,
-                        super::chroma_key_options(settings),
-                    )
-                    .map_err(|error| BackendError::from(error.to_string()))?;
-                    handle.set_enabled(filter.enabled);
-                    elements.push(Box::new(element));
-                    open.push(OpenFilter {
-                        id: filter.id,
-                        handle: FilterHandle::ChromaKey(handle),
-                    });
-                }
+            if let FilterSettings::ChromaKey(settings) = &filter.settings {
+                let (element, handle) = CudaChromaKey::new(
+                    format!("{name}-key-{}", filter.id.0),
+                    device,
+                    *width,
+                    *height,
+                    super::chroma_key_options(settings),
+                )
+                .map_err(|error| BackendError::from(error.to_string()))?;
+                handle.set_enabled(filter.enabled);
+                elements.push(Box::new(element));
+                open.push(OpenFilter {
+                    id: filter.id,
+                    handle: FilterHandle::ChromaKey(handle),
+                });
+            } else if let Some(effect) = super::video_effect(&filter.settings) {
+                let (element, handle) = CudaVideoEffect::new(
+                    format!("{name}-effect-{}", filter.id.0),
+                    device,
+                    *width,
+                    *height,
+                    effect,
+                )
+                .map_err(|error| BackendError::from(error.to_string()))?;
+                handle.set_enabled(filter.enabled);
+                elements.push(Box::new(element));
+                open.push(OpenFilter {
+                    id: filter.id,
+                    handle: FilterHandle::VideoEffect(filter.settings.kind(), handle),
+                });
             }
         }
         Ok((elements, open))
@@ -434,5 +469,58 @@ fn chroma_key_options(
         },
         threshold: settings.threshold,
         smoothing: settings.smoothing,
+    }
+}
+
+/// The library's effect for a colour correction or a luma key, and `None`
+/// for a chroma key, which is an element of its own.
+///
+/// One place for both backends, as `chroma_key_options` is: the fields are
+/// the same on both sides of this and nothing else knows it.
+fn video_effect(settings: &FilterSettings) -> Option<media_pp::elements::VideoEffect> {
+    use media_pp::elements::{ColorCorrection, LumaKey, VideoEffect};
+    match *settings {
+        FilterSettings::ChromaKey(_) => None,
+        FilterSettings::ColorCorrection(settings) => {
+            Some(VideoEffect::ColorCorrection(ColorCorrection {
+                brightness: settings.brightness,
+                contrast: settings.contrast,
+                saturation: settings.saturation,
+                hue_degrees: settings.hue_degrees,
+                gamma: settings.gamma,
+                opacity: settings.opacity,
+            }))
+        }
+        FilterSettings::LumaKey(settings) => Some(VideoEffect::LumaKey(LumaKey {
+            min: settings.min,
+            min_smoothing: settings.min_smoothing,
+            max: settings.max,
+            max_smoothing: settings.max_smoothing,
+        })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a filter starts on is what the library calls neutral, so adding
+    /// one changes nothing on screen until it is tuned — and the library
+    /// then hands frames straight through rather than drawing a copy.
+    #[test]
+    fn a_new_colour_correction_or_luma_key_is_the_librarys_neutral_effect() {
+        use media_pp::elements::{ColorCorrection, LumaKey, VideoEffect};
+        assert_eq!(
+            video_effect(&FilterSettings::defaults(FilterKind::ColorCorrection)),
+            Some(VideoEffect::ColorCorrection(ColorCorrection::default()))
+        );
+        assert_eq!(
+            video_effect(&FilterSettings::defaults(FilterKind::LumaKey)),
+            Some(VideoEffect::LumaKey(LumaKey::default()))
+        );
+        assert_eq!(
+            video_effect(&FilterSettings::defaults(FilterKind::ChromaKey)),
+            None
+        );
     }
 }

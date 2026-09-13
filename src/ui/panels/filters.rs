@@ -32,8 +32,9 @@ use eframe::egui;
 
 use crate::domain::{
     AudioFilter, AudioFilterId, AudioFilterKind, AudioFilterSettings, ChromaKeyMethod,
-    CompressorSettings, Filter, FilterId, FilterKind, FilterSettings, LimiterSettings,
-    NoiseGateSettings, SceneItemId, SourceKind, SourceSettings,
+    ChromaKeySettings, ColorCorrectionSettings, CompressorSettings, Filter, FilterId, FilterKind,
+    FilterSettings, LimiterSettings, LumaKeySettings, NoiseGateSettings, SceneItemId, SourceKind,
+    SourceSettings,
 };
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{AudioCommand, ProjectCommand, SourceCommand};
@@ -123,7 +124,13 @@ pub(in crate::ui) fn show(
         return;
     };
     ui.separator();
-    show_settings(ui, item, selected, i18n, actions);
+    // Scrolled on its own, as a sound's are: a colour correction's six rows
+    // under a chain are taller than the dock starts out.
+    egui::ScrollArea::vertical()
+        .id_salt("filter-settings")
+        .show(ui, |ui| {
+            show_settings(ui, item, selected, i18n, actions);
+        });
 }
 
 /// What the panel remembers between frames: which row is open below, and
@@ -228,7 +235,7 @@ fn show_list(
                     if ui.checkbox(&mut enabled, "").changed() {
                         actions.push(command(SourceCommand::SetFilterEnabled(filter.id, enabled)));
                     }
-                    let label = i18n.text(kind_key(filter));
+                    let label = i18n.text(kind_key(filter.settings.kind()));
                     if ui
                         .selectable_label(state.selected == Some(filter.id), label.as_ref())
                         .clicked()
@@ -248,16 +255,20 @@ fn show_toolbar(
     actions: &mut Vec<UiAction>,
 ) {
     ui.horizontal(|ui| {
-        if ui
-            .button("+")
-            .on_hover_text(i18n.text(TextKey::FiltersAdd))
-            .clicked()
-        {
-            actions.push(command(SourceCommand::AddFilter {
-                scene_item_id: item.id,
-                kind: FilterKind::ChromaKey,
-            }));
-        }
+        // A menu, as a sound's is: there is more than one kind to add.
+        ui.menu_button("+", |ui| {
+            for kind in FilterKind::ALL {
+                if ui.button(i18n.text(kind_key(kind))).clicked() {
+                    actions.push(command(SourceCommand::AddFilter {
+                        scene_item_id: item.id,
+                        kind,
+                    }));
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(i18n.text(TextKey::FiltersAdd));
 
         let selected = state.selected;
         ui.add_enabled_ui(selected.is_some(), |ui| {
@@ -300,50 +311,25 @@ fn show_settings(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let FilterSettings::ChromaKey(settings) = filter.settings;
-    let mut edited = settings;
+    let settings = filter.settings;
 
     // Collected so the pushes below can ask what the gesture was.
     let mut sliders: Vec<egui::Response> = Vec::new();
-    egui::Grid::new("filter-settings")
+    let edited = egui::Grid::new("filter-settings")
         .num_columns(2)
         .spacing([10.0, 6.0])
-        .show(ui, |ui| {
-            ui.label(i18n.text(TextKey::FiltersChromaKeyColour).as_ref());
-            egui::ComboBox::from_id_salt("chroma-key-method")
-                .selected_text(i18n.text(method_key(edited.method)))
-                .show_ui(ui, |ui| {
-                    for method in [
-                        ChromaKeyMethod::Green,
-                        ChromaKeyMethod::Blue,
-                        ChromaKeyMethod::Custom,
-                    ] {
-                        ui.selectable_value(
-                            &mut edited.method,
-                            method,
-                            i18n.text(method_key(method)),
-                        );
-                    }
-                });
-            ui.end_row();
-
-            // Shown whichever method is selected, and only editable for the
-            // one that uses it — the value is kept either way, so comparing
-            // against Green and coming back finds the colour still there.
-            ui.label(i18n.text(TextKey::FiltersChromaKeyCustom).as_ref());
-            ui.add_enabled_ui(edited.method == ChromaKeyMethod::Custom, |ui| {
-                ui.color_edit_button_srgb(&mut edited.custom_rgb);
-            });
-            ui.end_row();
-
-            ui.label(i18n.text(TextKey::FiltersChromaKeyThreshold).as_ref());
-            sliders.push(ui.add(egui::Slider::new(&mut edited.threshold, 0.0..=1.0)));
-            ui.end_row();
-
-            ui.label(i18n.text(TextKey::FiltersChromaKeySmoothing).as_ref());
-            sliders.push(ui.add(egui::Slider::new(&mut edited.smoothing, 0.0..=1.0)));
-            ui.end_row();
-        });
+        .show(ui, |ui| match settings {
+            FilterSettings::ChromaKey(chroma) => {
+                FilterSettings::ChromaKey(chroma_key_rows(ui, chroma, i18n, &mut sliders))
+            }
+            FilterSettings::ColorCorrection(correction) => FilterSettings::ColorCorrection(
+                colour_correction_sliders(ui, correction, i18n, &mut sliders),
+            ),
+            FilterSettings::LumaKey(luma) => {
+                FilterSettings::LumaKey(luma_key_sliders(ui, luma, i18n, &mut sliders))
+            }
+        })
+        .inner;
 
     // Two destinations, the split the mixer's fader already documents: the
     // picture has to follow the pointer, and the project should hear one edit
@@ -352,17 +338,135 @@ fn show_settings(
     // differs is how many rows get written. See `Gesture` for when each.
     let gesture = Gesture::of(&sliders, edited != settings);
     if gesture.drag {
-        actions.push(UiAction::DragFilterSettings(
-            item.id,
-            filter.id,
-            FilterSettings::ChromaKey(edited),
-        ));
+        actions.push(UiAction::DragFilterSettings(item.id, filter.id, edited));
     }
     if gesture.record {
-        actions.push(command(SourceCommand::SetChromaKeySettings(
-            filter.id, edited,
-        )));
+        actions.push(command(SourceCommand::SetFilterSettings(filter.id, edited)));
     }
+}
+
+fn chroma_key_rows(
+    ui: &mut egui::Ui,
+    mut edited: ChromaKeySettings,
+    i18n: &LocalizationManager,
+    sliders: &mut Vec<egui::Response>,
+) -> ChromaKeySettings {
+    ui.label(i18n.text(TextKey::FiltersChromaKeyColour).as_ref());
+    egui::ComboBox::from_id_salt("chroma-key-method")
+        .selected_text(i18n.text(method_key(edited.method)))
+        .show_ui(ui, |ui| {
+            for method in [
+                ChromaKeyMethod::Green,
+                ChromaKeyMethod::Blue,
+                ChromaKeyMethod::Custom,
+            ] {
+                ui.selectable_value(&mut edited.method, method, i18n.text(method_key(method)));
+            }
+        });
+    ui.end_row();
+
+    // Shown whichever method is selected, and only editable for the one that
+    // uses it — the value is kept either way, so comparing against Green and
+    // coming back finds the colour still there.
+    ui.label(i18n.text(TextKey::FiltersChromaKeyCustom).as_ref());
+    ui.add_enabled_ui(edited.method == ChromaKeyMethod::Custom, |ui| {
+        ui.color_edit_button_srgb(&mut edited.custom_rgb);
+    });
+    ui.end_row();
+
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersChromaKeyThreshold).as_ref(),
+        egui::Slider::new(&mut edited.threshold, 0.0..=1.0),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersChromaKeySmoothing).as_ref(),
+        egui::Slider::new(&mut edited.smoothing, 0.0..=1.0),
+        sliders,
+    );
+    edited
+}
+
+/// Each range reaches well past what a camera needs in either direction,
+/// and has its neutral value inside it.
+fn colour_correction_sliders(
+    ui: &mut egui::Ui,
+    mut edited: ColorCorrectionSettings,
+    i18n: &LocalizationManager,
+    sliders: &mut Vec<egui::Response>,
+) -> ColorCorrectionSettings {
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersBrightness).as_ref(),
+        egui::Slider::new(&mut edited.brightness, -1.0..=1.0),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersContrast).as_ref(),
+        egui::Slider::new(&mut edited.contrast, 0.0..=3.0),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersSaturation).as_ref(),
+        egui::Slider::new(&mut edited.saturation, 0.0..=3.0),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersHue).as_ref(),
+        egui::Slider::new(&mut edited.hue_degrees, -180.0..=180.0).suffix("°"),
+        sliders,
+    );
+    // Logarithmic, so 1.0 sits in the middle of the track: halving and
+    // doubling are the same distance either side of neutral.
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersGamma).as_ref(),
+        egui::Slider::new(&mut edited.gamma, 0.2..=5.0).logarithmic(true),
+        sliders,
+    );
+    slider_row(
+        ui,
+        i18n.text(TextKey::FiltersOpacity).as_ref(),
+        egui::Slider::new(&mut edited.opacity, 0.0..=1.0),
+        sliders,
+    );
+    edited
+}
+
+/// Brightness from black at `0.0` to white at `1.0`. The two ends are not
+/// kept apart: a minimum above the maximum keeps nothing, which is what it
+/// says, and the element takes it as readily as any other value.
+fn luma_key_sliders(
+    ui: &mut egui::Ui,
+    mut edited: LumaKeySettings,
+    i18n: &LocalizationManager,
+    sliders: &mut Vec<egui::Response>,
+) -> LumaKeySettings {
+    for (key, value) in [
+        (TextKey::FiltersLumaKeyMin, &mut edited.min),
+        (
+            TextKey::FiltersLumaKeyMinSmoothing,
+            &mut edited.min_smoothing,
+        ),
+        (TextKey::FiltersLumaKeyMax, &mut edited.max),
+        (
+            TextKey::FiltersLumaKeyMaxSmoothing,
+            &mut edited.max_smoothing,
+        ),
+    ] {
+        slider_row(
+            ui,
+            i18n.text(key).as_ref(),
+            egui::Slider::new(value, 0.0..=1.0),
+            sliders,
+        );
+    }
+    edited
 }
 
 /// Where one frame's edit to a filter's settings goes.
@@ -403,9 +507,11 @@ fn command(command: SourceCommand) -> UiAction {
     UiAction::Project(ProjectCommand::Source(command))
 }
 
-fn kind_key(filter: &Filter) -> TextKey {
-    match filter.settings {
-        FilterSettings::ChromaKey(_) => TextKey::FiltersChromaKey,
+fn kind_key(kind: FilterKind) -> TextKey {
+    match kind {
+        FilterKind::ChromaKey => TextKey::FiltersChromaKey,
+        FilterKind::ColorCorrection => TextKey::FiltersColorCorrection,
+        FilterKind::LumaKey => TextKey::FiltersLumaKey,
     }
 }
 

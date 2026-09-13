@@ -22,23 +22,34 @@ pub struct FilterId(pub i64);
 
 /// What a filter does.
 ///
-/// One variant today. The list, the ordering and the per-kind settings table
-/// are what make the second one small — see [`FilterSettings`].
+/// Each kind is a `kind` value in `source_filters` and a settings table of
+/// its own — see [`FilterSettings`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterKind {
     ChromaKey,
+    /// Brightness, contrast, saturation, hue, gamma and opacity.
+    ColorCorrection,
+    /// Transparency by brightness.
+    LumaKey,
 }
 
 impl FilterKind {
+    /// Every kind, in the order the Add menu offers them.
+    pub const ALL: [Self; 3] = [Self::ChromaKey, Self::LumaKey, Self::ColorCorrection];
+
     pub(crate) fn storage_name(self) -> &'static str {
         match self {
             Self::ChromaKey => "chroma_key",
+            Self::ColorCorrection => "color_correction",
+            Self::LumaKey => "luma_key",
         }
     }
 
     pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
         match name {
             "chroma_key" => Some(Self::ChromaKey),
+            "color_correction" => Some(Self::ColorCorrection),
+            "luma_key" => Some(Self::LumaKey),
             _ => None,
         }
     }
@@ -64,9 +75,98 @@ pub struct Filter {
 }
 
 /// The settings of whichever filter this is.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FilterSettings {
     ChromaKey(ChromaKeySettings),
+    ColorCorrection(ColorCorrectionSettings),
+    LumaKey(LumaKeySettings),
+}
+
+impl FilterSettings {
+    /// Which kind of filter these are the settings of.
+    pub fn kind(&self) -> FilterKind {
+        match self {
+            Self::ChromaKey(_) => FilterKind::ChromaKey,
+            Self::ColorCorrection(_) => FilterKind::ColorCorrection,
+            Self::LumaKey(_) => FilterKind::LumaKey,
+        }
+    }
+
+    /// What a filter of `kind` starts on when it is added.
+    pub fn defaults(kind: FilterKind) -> Self {
+        match kind {
+            FilterKind::ChromaKey => Self::ChromaKey(ChromaKeySettings::default()),
+            FilterKind::ColorCorrection => {
+                Self::ColorCorrection(ColorCorrectionSettings::default())
+            }
+            FilterKind::LumaKey => Self::LumaKey(LumaKeySettings::default()),
+        }
+    }
+}
+
+/// A picture's tone and colour, adjusted — mirrors
+/// `media_pp::elements::ColorCorrection`, for the reason
+/// [`ChromaKeySettings`] mirrors its own element's options.
+///
+/// Every field's neutral value leaves the picture as it was, and the
+/// default is all of them: a correction just added changes nothing until a
+/// slider is moved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorCorrectionSettings {
+    /// Added to every channel, as a fraction of full scale. `0.0` is neutral.
+    pub brightness: f32,
+    /// Distance from mid grey, as a multiple. `1.0` is neutral.
+    pub contrast: f32,
+    /// Distance from each pixel's own grey, as a multiple. `1.0` is neutral,
+    /// `0.0` greyscale.
+    pub saturation: f32,
+    /// Rotation around the grey axis, in degrees. `0.0` is neutral.
+    pub hue_degrees: f32,
+    /// Each channel becomes `channel^(1 / gamma)`. `1.0` is neutral.
+    pub gamma: f32,
+    /// Multiplies the picture's alpha. `1.0` is neutral.
+    pub opacity: f32,
+}
+
+impl Default for ColorCorrectionSettings {
+    fn default() -> Self {
+        Self {
+            brightness: 0.0,
+            contrast: 1.0,
+            saturation: 1.0,
+            hue_degrees: 0.0,
+            gamma: 1.0,
+            opacity: 1.0,
+        }
+    }
+}
+
+/// Which brightness range stays, and how softly the rest goes — mirrors
+/// `media_pp::elements::LumaKey`.
+///
+/// Brightness runs `0.0` for black to `1.0` for white. The default keeps
+/// everything, so a key just added changes nothing until it is tuned.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LumaKeySettings {
+    /// Darker than this becomes transparent.
+    pub min: f32,
+    /// How far below `min` the fade reaches. `0.0` is a hard edge.
+    pub min_smoothing: f32,
+    /// Brighter than this becomes transparent.
+    pub max: f32,
+    /// How far above `max` the fade reaches. `0.0` is a hard edge.
+    pub max_smoothing: f32,
+}
+
+impl Default for LumaKeySettings {
+    fn default() -> Self {
+        Self {
+            min: 0.0,
+            min_smoothing: 0.0,
+            max: 1.0,
+            max_smoothing: 0.0,
+        }
+    }
 }
 
 /// Which colour a chroma key treats as transparent, and how forgivingly.
@@ -151,13 +251,14 @@ mod tests {
 
     #[test]
     fn every_kind_survives_a_round_trip_through_storage() {
-        // One kind today, so this reads as a list of one rather than a
-        // loop. It is the shape the second one is added to.
-        let kind = FilterKind::ChromaKey;
-        assert_eq!(
-            FilterKind::from_storage_name(kind.storage_name()),
-            Some(kind)
-        );
+        for kind in FilterKind::ALL {
+            assert_eq!(
+                FilterKind::from_storage_name(kind.storage_name()),
+                Some(kind)
+            );
+            // And what it starts on is a filter of that kind.
+            assert_eq!(FilterSettings::defaults(kind).kind(), kind);
+        }
         assert_eq!(FilterKind::from_storage_name("motion_blur"), None);
     }
 

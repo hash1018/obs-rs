@@ -337,8 +337,8 @@ fn handle_source_command(
         SourceCommand::SetFilterEnabled(filter_id, enabled) => {
             FilterStore::set_enabled(transaction, filter_id, enabled)
         }
-        SourceCommand::SetChromaKeySettings(filter_id, settings) => {
-            FilterStore::set_chroma_key(transaction, filter_id, settings)
+        SourceCommand::SetFilterSettings(filter_id, settings) => {
+            FilterStore::set_settings(transaction, filter_id, settings)
         }
     })
 }
@@ -602,11 +602,14 @@ mod tests {
         };
         handle_source_command(
             &mut database,
-            SourceCommand::SetChromaKeySettings(second, tuned),
+            SourceCommand::SetFilterSettings(second, FilterSettings::ChromaKey(tuned)),
         )
         .unwrap();
-        let FilterSettings::ChromaKey(stored) = filters_now(&database)[0].settings;
-        assert_eq!(stored, tuned, "every field came back as it went in");
+        assert_eq!(
+            filters_now(&database)[0].settings,
+            FilterSettings::ChromaKey(tuned),
+            "every field came back as it went in"
+        );
         assert!(
             !filters_now(&database)[0].enabled,
             "and retuning one did not turn it back on"
@@ -616,6 +619,101 @@ mod tests {
         let filters = filters_now(&database);
         assert_eq!(filters.len(), 1, "only the one named was removed");
         assert_eq!(filters[0].id, first);
+    }
+
+    /// The two picture filters beside the chroma key: each starts on its own
+    /// neutral settings, keeps what it is tuned to, and ignores settings of
+    /// another kind rather than growing a row nothing reads.
+    #[test]
+    fn a_colour_correction_and_a_luma_key_keep_their_own_settings() {
+        use crate::domain::{
+            ColorCorrectionSettings, FilterKind, FilterSettings, LumaKeySettings, SceneId,
+        };
+        use crate::persistence::{SceneStore, SourceStore};
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(SceneId(1))).unwrap();
+        let item = sources_snapshot(&database, &scene_snapshot(&database).unwrap())
+            .unwrap()
+            .items[0]
+            .id;
+        let filters_now = |database: &ProjectDatabase| {
+            let connection = database.connection();
+            let scene_id = SceneStore::selected_scene_id(connection).unwrap().unwrap();
+            SourceStore::list_for_scene(connection, scene_id).unwrap()[0]
+                .1
+                .filters
+                .clone()
+        };
+        for kind in [FilterKind::ColorCorrection, FilterKind::LumaKey] {
+            handle_source_command(
+                &mut database,
+                SourceCommand::AddFilter {
+                    scene_item_id: item,
+                    kind,
+                },
+            )
+            .unwrap();
+        }
+        let filters = filters_now(&database);
+        assert_eq!(
+            filters
+                .iter()
+                .map(|filter| filter.settings)
+                .collect::<Vec<_>>(),
+            vec![
+                FilterSettings::ColorCorrection(ColorCorrectionSettings::default()),
+                FilterSettings::LumaKey(LumaKeySettings::default()),
+            ]
+        );
+        let (correction, key) = (filters[0].id, filters[1].id);
+
+        let tuned_correction = FilterSettings::ColorCorrection(ColorCorrectionSettings {
+            brightness: -0.1,
+            contrast: 1.3,
+            saturation: 0.5,
+            hue_degrees: 40.0,
+            gamma: 1.8,
+            opacity: 0.7,
+        });
+        let tuned_key = FilterSettings::LumaKey(LumaKeySettings {
+            min: 0.1,
+            min_smoothing: 0.05,
+            max: 0.9,
+            max_smoothing: 0.02,
+        });
+        for (id, settings) in [(correction, tuned_correction), (key, tuned_key)] {
+            handle_source_command(
+                &mut database,
+                SourceCommand::SetFilterSettings(id, settings),
+            )
+            .unwrap();
+        }
+        // The wrong kind for this filter: nothing is written.
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetFilterSettings(
+                correction,
+                FilterSettings::defaults(FilterKind::LumaKey),
+            ),
+        )
+        .unwrap();
+
+        let filters = filters_now(&database);
+        assert_eq!(filters[0].settings, tuned_correction);
+        assert_eq!(filters[1].settings, tuned_key);
+        let stray: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM luma_key_filter_settings WHERE filter_id = ?1",
+                [correction.0],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stray, 0,
+            "a luma key's settings were written for a correction"
+        );
     }
     #[test]
     fn scene_commands_are_persisted_and_ordered() {

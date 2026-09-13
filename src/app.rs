@@ -766,7 +766,7 @@ impl ObsApp {
             }
             UiAction::DragFilterSettings(item_id, filter_id, settings) => {
                 if let Some(engine) = &self.engine {
-                    engine.set_filter_settings(item_id, filter_id, settings.clone());
+                    engine.set_filter_settings(item_id, filter_id, settings);
                 }
                 // And into the snapshot the dock reads back, for the reason
                 // `DragMediaGain` does it: the project is not told until the

@@ -1,6 +1,6 @@
 use crate::domain::{
-    AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId, ChromaKeySettings,
-    ClockFormat, Crop, DisplayCaptureSettings, FilterId, FilterKind, ImageSourceSettings,
+    AudioFilterId, AudioFilterKind, AudioFilterSettings, AudioSourceId, ClockFormat, Crop,
+    DisplayCaptureSettings, FilterId, FilterKind, FilterSettings, ImageSourceSettings,
     MediaFileSettings, RtspSourceSettings, RtspTransport, SceneId, SceneItemId, SourceKind, Stroke,
     TextAlignment, TextMode, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
     WindowCaptureSettings,
@@ -125,8 +125,9 @@ pub enum SourceCommand {
     /// Turns a filter off without discarding what it was tuned to.
     #[allow(dead_code)]
     SetFilterEnabled(FilterId, bool),
-    #[allow(dead_code)]
-    SetChromaKeySettings(FilterId, ChromaKeySettings),
+    /// Replaces one filter's settings, whichever kind it is. Settings of
+    /// another kind than the filter's are not written.
+    SetFilterSettings(FilterId, FilterSettings),
     /// Replaces the portal token a Display Capture reopens with.
     SetRestoreToken(SceneItemId, Option<String>),
     SetTransform(SceneItemId, Transform),

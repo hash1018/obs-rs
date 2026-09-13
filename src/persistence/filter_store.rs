@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    ChromaKeyMethod, ChromaKeySettings, Filter, FilterId, FilterKind, FilterSettings, SourceId,
+    ChromaKeyMethod, ChromaKeySettings, ColorCorrectionSettings, Filter, FilterId, FilterKind,
+    FilterSettings, LumaKeySettings, SourceId,
 };
 
 use super::database::PersistenceResult;
@@ -64,10 +65,24 @@ impl FilterStore {
                 chroma_key_filter_settings.custom_green,
                 chroma_key_filter_settings.custom_blue,
                 chroma_key_filter_settings.threshold,
-                chroma_key_filter_settings.smoothing
+                chroma_key_filter_settings.smoothing,
+                color_correction_filter_settings.brightness,
+                color_correction_filter_settings.contrast,
+                color_correction_filter_settings.saturation,
+                color_correction_filter_settings.hue_degrees,
+                color_correction_filter_settings.gamma,
+                color_correction_filter_settings.opacity,
+                luma_key_filter_settings.min,
+                luma_key_filter_settings.min_smoothing,
+                luma_key_filter_settings.max,
+                luma_key_filter_settings.max_smoothing
              FROM source_filters
              LEFT JOIN chroma_key_filter_settings
                  ON chroma_key_filter_settings.filter_id = source_filters.id
+             LEFT JOIN color_correction_filter_settings
+                 ON color_correction_filter_settings.filter_id = source_filters.id
+             LEFT JOIN luma_key_filter_settings
+                 ON luma_key_filter_settings.filter_id = source_filters.id
              WHERE source_filters.source_id IN ({placeholders})
              ORDER BY source_filters.source_id, source_filters.position"
         );
@@ -83,6 +98,10 @@ impl FilterStore {
                     Some(FilterKind::ChromaKey) => {
                         FilterSettings::ChromaKey(chroma_key_from_row(row)?)
                     }
+                    Some(FilterKind::ColorCorrection) => {
+                        FilterSettings::ColorCorrection(color_correction_from_row(row)?)
+                    }
+                    Some(FilterKind::LumaKey) => FilterSettings::LumaKey(luma_key_from_row(row)?),
                     // A kind this build does not know, which is what an
                     // older binary opening a newer project sees. Dropping
                     // the row is the only thing it can do with one, and it
@@ -123,12 +142,7 @@ impl FilterStore {
             params![source_id.0, next_position, kind.storage_name()],
         )?;
         let filter_id = FilterId(transaction.last_insert_rowid());
-
-        match kind {
-            FilterKind::ChromaKey => {
-                write_chroma_key(transaction, filter_id, ChromaKeySettings::default())?;
-            }
-        }
+        write_settings(transaction, filter_id, FilterSettings::defaults(kind))?;
         Ok(filter_id)
     }
 
@@ -209,18 +223,71 @@ impl FilterStore {
         Ok(())
     }
 
-    /// Replaces a chroma key's settings.
+    /// Replaces one filter's settings.
     ///
-    /// Writes nothing if `filter_id` is some other kind: the row simply is
-    /// not there, and `UPDATE` matching nothing is not a failure. A caller
-    /// sending this for a filter that is not a chroma key has a bug, but not
-    /// one worth failing a transaction over.
-    pub(crate) fn set_chroma_key(
+    /// Writes nothing if the settings are for another kind than the filter
+    /// is, or the filter is gone: a settings row in the wrong table would be
+    /// one nothing reads. A caller sending that has a bug, but not one worth
+    /// failing a transaction over.
+    pub(crate) fn set_settings(
         transaction: &Transaction<'_>,
         filter_id: FilterId,
-        settings: ChromaKeySettings,
+        settings: FilterSettings,
     ) -> PersistenceResult<()> {
-        write_chroma_key(transaction, filter_id, settings)
+        let stored: Option<String> = transaction
+            .query_row(
+                "SELECT kind FROM source_filters WHERE id = ?1",
+                params![filter_id.0],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if stored.as_deref().and_then(FilterKind::from_storage_name) != Some(settings.kind()) {
+            return Ok(());
+        }
+        write_settings(transaction, filter_id, settings)
+    }
+}
+
+/// The settings row for whichever kind these are.
+fn write_settings(
+    transaction: &Transaction<'_>,
+    filter_id: FilterId,
+    settings: FilterSettings,
+) -> PersistenceResult<()> {
+    match settings {
+        FilterSettings::ChromaKey(settings) => write_chroma_key(transaction, filter_id, settings),
+        FilterSettings::ColorCorrection(settings) => {
+            transaction.execute(
+                "INSERT OR REPLACE INTO color_correction_filter_settings
+                     (filter_id, brightness, contrast, saturation, hue_degrees, gamma, opacity)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    filter_id.0,
+                    settings.brightness,
+                    settings.contrast,
+                    settings.saturation,
+                    settings.hue_degrees,
+                    settings.gamma,
+                    settings.opacity,
+                ],
+            )?;
+            Ok(())
+        }
+        FilterSettings::LumaKey(settings) => {
+            transaction.execute(
+                "INSERT OR REPLACE INTO luma_key_filter_settings
+                     (filter_id, min, min_smoothing, max, max_smoothing)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    filter_id.0,
+                    settings.min,
+                    settings.min_smoothing,
+                    settings.max,
+                    settings.max_smoothing,
+                ],
+            )?;
+            Ok(())
+        }
     }
 }
 
@@ -277,5 +344,37 @@ fn chroma_key_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChromaKeySet
         ],
         threshold: row.get::<_, Option<f32>>(8)?.unwrap_or(defaults.threshold),
         smoothing: row.get::<_, Option<f32>>(9)?.unwrap_or(defaults.smoothing),
+    })
+}
+
+/// The colour-correction columns of a joined row, defaults where they are
+/// missing — see [`chroma_key_from_row`] for why a missing row is not an
+/// error.
+fn color_correction_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ColorCorrectionSettings> {
+    let defaults = ColorCorrectionSettings::default();
+    let value = |index: usize, default: f32| -> rusqlite::Result<f32> {
+        Ok(row.get::<_, Option<f32>>(index)?.unwrap_or(default))
+    };
+    Ok(ColorCorrectionSettings {
+        brightness: value(10, defaults.brightness)?,
+        contrast: value(11, defaults.contrast)?,
+        saturation: value(12, defaults.saturation)?,
+        hue_degrees: value(13, defaults.hue_degrees)?,
+        gamma: value(14, defaults.gamma)?,
+        opacity: value(15, defaults.opacity)?,
+    })
+}
+
+/// The luma-key columns of a joined row, defaults where they are missing.
+fn luma_key_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LumaKeySettings> {
+    let defaults = LumaKeySettings::default();
+    let value = |index: usize, default: f32| -> rusqlite::Result<f32> {
+        Ok(row.get::<_, Option<f32>>(index)?.unwrap_or(default))
+    };
+    Ok(LumaKeySettings {
+        min: value(16, defaults.min)?,
+        min_smoothing: value(17, defaults.min_smoothing)?,
+        max: value(18, defaults.max)?,
+        max_smoothing: value(19, defaults.max_smoothing)?,
     })
 }

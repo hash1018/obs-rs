@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 25;
+const SCHEMA_VERSION: i64 = 26;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -520,6 +520,36 @@ fn migrate(
             PRAGMA user_version = 25;",
         )?;
     }
+    if step(26) {
+        // A colour correction and a luma key for a Source's picture: two
+        // more kinds in `source_filters` and a settings table each, the shape
+        // migration 18 laid out for the chroma key. No checks on the values:
+        // the element reads every number it can be given as an answer, and a
+        // range here would only turn a hand-edited file into a failed load.
+        transaction.execute_batch(
+            "CREATE TABLE color_correction_filter_settings (
+                filter_id   INTEGER PRIMARY KEY
+                            REFERENCES source_filters(id) ON DELETE CASCADE,
+                brightness  REAL NOT NULL,
+                contrast    REAL NOT NULL,
+                saturation  REAL NOT NULL,
+                hue_degrees REAL NOT NULL,
+                gamma       REAL NOT NULL,
+                opacity     REAL NOT NULL
+            );
+
+            CREATE TABLE luma_key_filter_settings (
+                filter_id     INTEGER PRIMARY KEY
+                              REFERENCES source_filters(id) ON DELETE CASCADE,
+                min           REAL NOT NULL,
+                min_smoothing REAL NOT NULL,
+                max           REAL NOT NULL,
+                max_smoothing REAL NOT NULL
+            );
+
+            PRAGMA user_version = 26;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -581,6 +611,8 @@ mod tests {
             "noise_gate_filter_settings",
             "compressor_filter_settings",
             "limiter_filter_settings",
+            "color_correction_filter_settings",
+            "luma_key_filter_settings",
         ] {
             assert_eq!(
                 connection
