@@ -8,6 +8,7 @@
 //! encoder and says what stream it needs, and the branch is built once the
 //! sink for it exists.
 
+use media_pp::color::ColorDescription;
 use media_pp::elements::{
     D3d11Download, D3d11Scaler, D3d11ScalerFormat, D3d11VideoCodec, D3d11VideoEncoder,
     D3d11VideoEncoderOptions, D3d11VideoInputFormat, PauseGate, SwEncoder, SwEncoderOptions,
@@ -50,7 +51,7 @@ impl PreparedOutput {
     /// What `Mp4Muxer::add_stream` needs to describe this track.
     pub(in crate::engine) fn parameters(&self) -> ffmpeg::codec::Parameters {
         match &self.encoder {
-            RecordEncoder::Hardware(encoder) => encoder.parameters(),
+            RecordEncoder::Hardware { encoder, .. } => encoder.parameters(),
             RecordEncoder::Software(encoder) => encoder.parameters(),
         }
     }
@@ -62,11 +63,33 @@ impl PreparedOutput {
 
 /// One opened encoder, and which kind of chain it needs in front of it.
 enum RecordEncoder {
-    /// Takes the compositor's frames as they are.
-    Hardware(D3d11VideoEncoder),
+    /// Stays on the GPU: the compositor's BGRA as it is, or converted to
+    /// NV12 there first — see `input`.
+    Hardware {
+        encoder: D3d11VideoEncoder,
+        /// What it was opened to take. NV12 means the branch converts,
+        /// which is how a stream gets a colour this application chose and
+        /// can say — see [`Backend::open_encoder`].
+        input: D3d11VideoInputFormat,
+    },
     /// Needs them copied back from the GPU and converted first.
     Software(SwEncoder),
 }
+
+/// What the software path hands its encoder: `SwScaler` turns the
+/// compositor's BGRA into YUV with swscale's own default, which is BT.601,
+/// limited range. The RGB it came from is the screen's — sRGB, whose
+/// primaries are BT.709's — so only the matrix is BT.601.
+///
+/// Said rather than left to a guess: untagged, FFmpeg happens to guess
+/// BT.601 and read it right, but a player that takes a 1080p stream to be
+/// BT.709 would not.
+const SOFTWARE_YUV: ColorDescription = ColorDescription {
+    space: ffmpeg::color::Space::BT470BG,
+    range: ffmpeg::color::Range::MPEG,
+    primaries: ffmpeg::color::Primaries::BT709,
+    transfer: ffmpeg::color::TransferCharacteristic::BT709,
+};
 
 impl Backend {
     pub(in crate::engine) fn prepare_output(
@@ -94,8 +117,10 @@ impl Backend {
     /// cannot exist until every track has been declared — see
     /// [`PreparedOutput`].
     ///
-    /// No colour conversion anywhere: the compositor draws BGRA and NVENC
-    /// takes BGRA directly, converting to its own YUV as part of encoding.
+    /// NVENC takes the compositor's BGRA directly, converting to its own YUV
+    /// as part of encoding. Media Foundation is given NV12 instead, converted
+    /// here on the GPU — see [`Backend::open_encoder`] for why — in the same
+    /// pass that resizes, when there is one.
     ///
     /// # What the queue's policy has to be
     ///
@@ -127,22 +152,30 @@ impl Backend {
         // has to reason about it.
         let (gate, pause) = PauseGate::new(format!("{}-pause", kind.prefix()));
         branch = branch.pipe(gate);
-        // Only when the file is smaller than the canvas. `Preserve` because
-        // this is a resize and nothing more — the compositor draws BGRA and
-        // the encoder takes BGRA, so a format change here would be work
-        // neither end asked for.
-        if size != self.size {
+        // Always for an encoder that takes NV12, which the compositor does
+        // not draw; otherwise only when the file is smaller than the canvas,
+        // and then `Preserve`, because that is a resize and nothing more —
+        // a format change would be work neither end asked for.
+        let scale = match &encoder {
+            RecordEncoder::Hardware {
+                input: D3d11VideoInputFormat::Nv12,
+                ..
+            } => Some(D3d11ScalerFormat::Nv12),
+            _ if size != self.size => Some(D3d11ScalerFormat::Preserve),
+            _ => None,
+        };
+        if let Some(format) = scale {
             branch = branch.pipe(D3d11Scaler::new(
                 format!("{}-scale", kind.prefix()),
                 &self.device,
                 Arc::clone(&self.context),
-                D3d11ScalerFormat::Preserve,
+                format,
                 width,
                 height,
             )?);
         }
         branch = match encoder {
-            RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
+            RecordEncoder::Hardware { encoder, .. } => branch.pipe(encoder),
             // A software encoder is not on the GPU and does not take BGRA, so
             // the frames have to come back across the bus and be converted
             // before it sees them. That is the cost the choice carries, and it
@@ -176,7 +209,25 @@ impl Backend {
         })
     }
 
-    /// Opens whichever encoder the output asks for.
+    /// Opens whichever encoder the output asks for, and tells it what
+    /// colour its stream holds where it would not say so itself.
+    ///
+    /// # Which colour each stream holds
+    ///
+    /// Measured with the Canvas filled (230, 20, 20), read back through
+    /// FFmpeg:
+    ///
+    /// - NVENC is handed BGRA and converts with BT.601, limited range, and
+    ///   FFmpeg's `h264_nvenc` says so in the stream by itself. Nothing to
+    ///   add.
+    /// - Media Foundation handed BGRA converted with BT.709 at 1080p and
+    ///   BT.601 at 320x240, and said nothing — so a 1080p file decoded as
+    ///   (211, 0, 22), and no one fixed description would have been right
+    ///   at every size, or for every vendor's transform. So it is handed
+    ///   NV12 the branch converts with a matrix it names — `D3d11Scaler`'s
+    ///   NV12 is BT.709, limited range — and told that.
+    /// - The software encoders get YUV from `SwScaler` — see
+    ///   [`SOFTWARE_YUV`] — and are told what it is.
     fn open_encoder(
         &self,
         kind: OutputKind,
@@ -190,49 +241,62 @@ impl Backend {
         let gop_size = fps * encoding.keyframe_seconds.max(1);
         match encoding.encoder {
             RecordingEncoder::Nvenc | RecordingEncoder::MediaFoundation => {
-                Ok(RecordEncoder::Hardware(D3d11VideoEncoder::new(
-                    format!("{}-encode", kind.prefix()),
-                    &self.device,
-                    Arc::clone(&self.context),
-                    D3d11VideoEncoderOptions {
-                        codec: if encoding.encoder == RecordingEncoder::Nvenc {
-                            D3d11VideoCodec::H264Nvenc
-                        } else {
-                            D3d11VideoCodec::H264MediaFoundation
-                        },
-                        // The compositor's own output, so neither hardware
-                        // path converts anything: both take BGRA directly.
-                        input_format: D3d11VideoInputFormat::Bgra,
-                        width,
-                        height,
-                        time_base,
-                        frame_rate,
-                        bit_rate,
-                        gop_size,
-                        // The encoder's own default, which on NVENC does use
-                        // B-frames: better quality at this bitrate, and the
-                        // reason not to was measured and did not hold. What
-                        // they delay is packets out, not frames in — 1080p60
-                        // BGRA takes ~2ms a frame to submit whether they are
-                        // on or off, and the frame comes straight back to its
-                        // pool either way.
-                        //
-                        // Kept for a live send too, now that this opens the
-                        // streaming encoder as well. Reordering costs two or
-                        // three frames steadily — 33 to 50ms at 60fps — and
-                        // the first packet arrives 15 frames in rather than
-                        // 3, once, at connect. Both disappear into what an
-                        // ingest adds: a platform is seconds behind live
-                        // whatever this does. Turning them off would be
-                        // tuning latency, which `output`'s own HLS notes say
-                        // this application does not do, and would cost
-                        // quality at the same bitrate against the encoder
-                        // everyone compares it to.
-                        max_b_frames: None,
+                let nvenc = encoding.encoder == RecordingEncoder::Nvenc;
+                let input = if nvenc {
+                    D3d11VideoInputFormat::Bgra
+                } else {
+                    D3d11VideoInputFormat::Nv12
+                };
+                let options = D3d11VideoEncoderOptions {
+                    codec: if nvenc {
+                        D3d11VideoCodec::H264Nvenc
+                    } else {
+                        D3d11VideoCodec::H264MediaFoundation
                     },
-                )?))
+                    input_format: input,
+                    width,
+                    height,
+                    time_base,
+                    frame_rate,
+                    bit_rate,
+                    gop_size,
+                    // The encoder's own default, which on NVENC does use
+                    // B-frames: better quality at this bitrate, and the
+                    // reason not to was measured and did not hold. What
+                    // they delay is packets out, not frames in — 1080p60
+                    // BGRA takes ~2ms a frame to submit whether they are
+                    // on or off, and the frame comes straight back to its
+                    // pool either way.
+                    //
+                    // Kept for a live send too, now that this opens the
+                    // streaming encoder as well. Reordering costs two or
+                    // three frames steadily — 33 to 50ms at 60fps — and
+                    // the first packet arrives 15 frames in rather than
+                    // 3, once, at connect. Both disappear into what an
+                    // ingest adds: a platform is seconds behind live
+                    // whatever this does. Turning them off would be
+                    // tuning latency, which `output`'s own HLS notes say
+                    // this application does not do, and would cost
+                    // quality at the same bitrate against the encoder
+                    // everyone compares it to.
+                    max_b_frames: None,
+                };
+                let name = format!("{}-encode", kind.prefix());
+                let context = Arc::clone(&self.context);
+                let encoder = if nvenc {
+                    D3d11VideoEncoder::new(name, &self.device, context, options)?
+                } else {
+                    D3d11VideoEncoder::with_color(
+                        name,
+                        &self.device,
+                        context,
+                        options,
+                        ColorDescription::BT709_LIMITED,
+                    )?
+                };
+                Ok(RecordEncoder::Hardware { encoder, input })
             }
-            other => Ok(RecordEncoder::Software(SwEncoder::new(
+            other => Ok(RecordEncoder::Software(SwEncoder::with_color(
                 format!("{}-encode", kind.prefix()),
                 SwEncoderOptions {
                     codec: software_codec(other),
@@ -244,6 +308,7 @@ impl Backend {
                     gop_size,
                     max_b_frames: None,
                 },
+                SOFTWARE_YUV,
             )?)),
         }
     }
