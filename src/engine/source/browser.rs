@@ -678,7 +678,7 @@ pub(in crate::engine) fn open(
             sound: routing,
         }),
         negotiated_size: None,
-        source: super::super::backend::RunningSource(pipeline),
+        source: super::super::backend::RunningSource::Owned(pipeline),
         layer,
         name,
         refreshed_token: None,

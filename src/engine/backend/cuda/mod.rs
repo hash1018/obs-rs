@@ -27,7 +27,9 @@ use crate::engine::audio::MeterWake;
 use crate::settings::RecordingEncoder;
 use crate::snapshots::SceneItemSnapshot;
 
+use crate::engine::source::shared::SharedCapture;
 use crate::engine::source::{self, OpenOutcome};
+use media_pp::graph::BranchId;
 
 use super::{BACKGROUND, BackendError};
 
@@ -59,6 +61,9 @@ pub(in crate::engine) struct Backend {
     /// rate change is applied on either platform — the D3D11 backend reaches
     /// its own through the registry that shares captures between items.
     pub(in crate::engine) capture_rates: Mutex<HashMap<String, FrameRateHandle>>,
+    /// The cameras this backend has open, each once however many items show
+    /// it — see `source::video_capture`.
+    pub(in crate::engine) cameras: Arc<source::video_capture::CameraRegistry>,
     pub(in crate::engine) preview: Arc<Pipeline>,
     /// Where a recording branch is attached — see
     /// [`Backend::attach_output`].
@@ -193,6 +198,7 @@ impl Backend {
             device: Arc::new(device),
             size,
             capture_rates: Mutex::new(HashMap::new()),
+            cameras: Arc::new(source::video_capture::CameraRegistry::default()),
             compositor: handle,
             preview,
             tee,
@@ -326,9 +332,13 @@ impl Backend {
                 item,
                 layer,
             ),
-            SourceKind::VideoCapture => {
-                source::video_capture::open(&self.device, &self.compositor, item, layer)
-            }
+            SourceKind::VideoCapture => source::video_capture::open(
+                &self.device,
+                &self.compositor,
+                &self.cameras,
+                item,
+                layer,
+            ),
             SourceKind::Image => source::image::open(&self.device, &self.compositor, item, layer),
             SourceKind::Color => source::color::open(&self.device, &self.compositor, item, layer)
                 .map(OpenOutcome::Open),
@@ -388,36 +398,76 @@ impl Backend {
 /// twice, so the second item was a black rectangle until it shared. Here both
 /// captures work, and the trade is a few percent of one core against a
 /// correctness hazard, in a configuration that is rare to begin with.
-pub(in crate::engine) struct RunningSource(
-    /// Visible to the rest of the engine because the modules that open a
-    /// Source construct one — the Windows half is an enum whose variants are
-    /// reachable for the same reason.
-    pub(in crate::engine) Arc<Pipeline>,
-);
+pub(in crate::engine) enum RunningSource {
+    /// A pipeline this item alone owns, such as a Color Source's pusher.
+    Owned(Arc<Pipeline>),
+    /// One branch of a capture other items may also be drawing from — a
+    /// camera. `key` is what that capture is registered under: the camera's
+    /// device node. See the Windows twin, which shares a display the same
+    /// way; a Linux display is a portal session per item and is not shared.
+    Shared {
+        capture: Arc<dyn SharedCapture>,
+        key: String,
+        branch: BranchId,
+    },
+}
 
 impl RunningSource {
-    /// What this Source's own pipeline is doing, for the Stats dock.
+    /// What this Source's own pipeline is doing, for the Stats dock — for a
+    /// share of a capture, only this item's branch of it.
     pub(in crate::engine) fn stats(&self) -> Option<media_pp::stats::PipelineStats> {
-        Some(self.0.stats())
+        match self {
+            Self::Owned(pipeline) => Some(pipeline.stats()),
+            Self::Shared {
+                capture,
+                key,
+                branch,
+            } => capture.stats(key, *branch),
+        }
     }
 
     pub(in crate::engine) fn pause(&self) {
-        self.0.pause();
+        match self {
+            Self::Owned(pipeline) => pipeline.pause(),
+            Self::Shared {
+                capture,
+                key,
+                branch,
+            } => capture.set_showing(key, *branch, false),
+        }
     }
 
     pub(in crate::engine) fn resume(&self) {
-        self.0.resume();
+        match self {
+            Self::Owned(pipeline) => pipeline.resume(),
+            Self::Shared {
+                capture,
+                key,
+                branch,
+            } => capture.set_showing(key, *branch, true),
+        }
     }
 
     /// Whether whatever this was capturing has ended by itself.
     ///
     /// See [`super::pipeline_ended`] for why the pipeline is asked rather
-    /// than its bus read.
+    /// than its bus read. A shared capture is the registry's to answer for:
+    /// a camera that is unplugged ends for everything drawing it.
     pub(in crate::engine) fn ended(&self) -> bool {
-        super::pipeline_ended(&self.0)
+        match self {
+            Self::Owned(pipeline) => super::pipeline_ended(pipeline),
+            Self::Shared { capture, key, .. } => capture.ended(key),
+        }
     }
 
     pub(in crate::engine) fn stop(&self) {
-        self.0.stop();
+        match self {
+            Self::Owned(pipeline) => pipeline.stop(),
+            Self::Shared {
+                capture,
+                key,
+                branch,
+            } => capture.detach(key, *branch),
+        }
     }
 }

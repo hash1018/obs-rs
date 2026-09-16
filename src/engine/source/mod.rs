@@ -18,7 +18,6 @@ pub(in crate::engine) mod filters;
 pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod rtsp;
-#[cfg(target_os = "windows")]
 pub(in crate::engine) mod shared;
 pub(in crate::engine) mod sound;
 pub(in crate::engine) mod text;

@@ -41,6 +41,6 @@ mod linux;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(in crate::engine) use linux::open;
+pub(in crate::engine) use linux::{CameraRegistry, open};
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use windows::{CameraRegistry, open};

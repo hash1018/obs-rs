@@ -409,7 +409,7 @@ pub(in crate::engine) fn open(
         audio,
     )?;
     Ok(super::OpenOutcome::Open(OpenSource {
-        source: RunningSource(Arc::clone(&pipeline)),
+        source: RunningSource::Owned(Arc::clone(&pipeline)),
         layer,
         name,
         refreshed_token: None,

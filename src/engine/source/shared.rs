@@ -13,11 +13,9 @@
 //! compositor's own rate can change without the duplication being reopened.
 //! That is `E` here, and nothing in this module reads it.
 //!
-//! Windows only in effect, so far: the CUDA backend opens a capture per
-//! SceneItem still, so nothing on Linux reaches any of this. Compiled there
-//! rather than cut out of the build, so it keeps type-checking on the
-//! platform that has yet to use it.
-#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+//! Windows shares both kinds. Linux shares cameras — which fail there
+//! outright, the second reader refused as busy — and opens a display per
+//! SceneItem, for the reasons the CUDA backend's `RunningSource` gives.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -53,6 +51,10 @@ pub(in crate::engine) struct Shared<E> {
     /// should.
     running: bool,
     /// Whatever the kind that opened this keeps beside it.
+    ///
+    /// Read only by the Windows display — a camera keeps nothing — so a
+    /// Linux build, which shares cameras alone, never reads it.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(in crate::engine) extra: E,
 }
 
@@ -224,6 +226,9 @@ impl<E> Registry<E> {
     }
 
     /// The same of every open capture of this kind.
+    ///
+    /// Asked by the Windows display, for its rate handles; see `extra`.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(in crate::engine) fn each(&self, mut tell: impl FnMut(&Shared<E>)) {
         for capture in self.lock().values() {
             tell(capture);

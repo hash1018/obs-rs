@@ -244,7 +244,7 @@ pub(in crate::engine) fn open(
 
     opened(
         name,
-        RunningSource(pipeline),
+        RunningSource::Owned(pipeline),
         layer,
         pusher,
         filters,

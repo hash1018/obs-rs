@@ -105,7 +105,7 @@ pub(in crate::engine) fn open(
             media_file: None,
             page: None,
             negotiated_size: Some([format.width, format.height]),
-            source: RunningSource(pipeline),
+            source: RunningSource::Owned(pipeline),
             layer,
             name,
             refreshed_token,

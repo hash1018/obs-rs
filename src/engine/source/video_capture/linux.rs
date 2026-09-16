@@ -1,17 +1,32 @@
 //! A camera on Linux: V4L2, by device node.
+//!
+//! # One camera, however many items show it
+//!
+//! Opened once and shared, as on Windows — see the Windows half and
+//! [`crate::engine::source::shared`]. The failure it prevents is not the
+//! Windows one: V4L2 refuses the second reader outright, as busy, so the
+//! second item of one camera never showed at all and was tried again every
+//! second for as long as the first held it. Measured with one camera twice in
+//! one Scene. The upload sits before the `Tee`, so N items cost one camera,
+//! one upload, and a rack each, and the camera runs at the mode the first
+//! item to open it asked for.
 
 use media_pp::elements::{
-    CudaDevice, CudaUpload, CudaVideoCompositorHandle, CudaVideoCompositorInput, V4l2CaptureFormat,
-    V4l2CaptureOptions, V4l2CaptureSource, V4l2Device, VideoLayer,
+    CudaDevice, CudaUpload, CudaVideoCompositorHandle, CudaVideoCompositorInput, TeeBuilder,
+    V4l2CaptureFormat, V4l2CaptureOptions, V4l2CaptureSource, V4l2Device, VideoLayer,
 };
 use std::sync::Arc;
 
 use media_pp::ffmpeg;
+use media_pp::graph::BranchId;
 use media_pp::pipeline::Pipeline;
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
-use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::{OpenOutcome, OpenSource, filters, input_name};
+use crate::engine::backend::{BackendError, RunningSource, pipeline_ended};
+use crate::engine::source::shared::{Registry, Shared, SharedCapture};
+use crate::engine::source::{
+    FilledRack, OpenOutcome, OpenSource, filled_rack, filters, input_name,
+};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Frames held between the camera and the upload — see the Windows half,
@@ -20,11 +35,42 @@ use crate::snapshots::SceneItemSnapshot;
 /// timeline to replay.
 const QUEUE_DEPTH: usize = 2;
 
+/// Every camera this backend has open, by the device node each one is of —
+/// see the Windows twin.
+#[derive(Default)]
+pub(in crate::engine) struct CameraRegistry {
+    open: Registry<()>,
+}
+
+impl SharedCapture for CameraRegistry {
+    fn detach(&self, device: &str, branch: BranchId) {
+        self.open.detach(device, branch);
+    }
+
+    fn set_showing(&self, device: &str, branch: BranchId, showing: bool) {
+        self.open.set_showing(device, branch, showing);
+    }
+
+    fn stats(&self, device: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats> {
+        self.open.stats(device, branch)
+    }
+
+    /// A camera is unplugged, or taken by something else. Its pipeline ends,
+    /// and every item drawing from it is put back to be opened again — the
+    /// first of them reopens the camera and the rest join it.
+    fn ended(&self, device: &str) -> bool {
+        self.open
+            .with(device, |camera| pipeline_ended(camera.pipeline()))
+            .unwrap_or(false)
+    }
+}
+
 /// `Absent` when the camera is not there to open — see this module's
 /// parent.
 pub(in crate::engine) fn open(
     device: &Arc<CudaDevice>,
     handle: &CudaVideoCompositorHandle,
+    cameras: &Arc<CameraRegistry>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
 ) -> Result<OpenOutcome, BackendError> {
@@ -33,63 +79,118 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let (source, format) = match start(&name, settings, &item.name) {
-        Ok(opened) => opened,
-        Err(absent) => return Ok(OpenOutcome::Absent(absent)),
-    };
+    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
+    // As on Windows: a camera that is not there is a state rather than a
+    // failure, and the attempt is the only way to find out — so what it said
+    // is kept apart from a failure to build the branch around it.
+    let mut unavailable = None;
+    let mut kept = None;
+    let attached = cameras.open.attach(
+        &settings.device,
+        || {
+            open_camera(settings, &item.name, device).map_err(|absent| {
+                unavailable = Some(absent.clone());
+                BackendError::from(absent)
+            })
+        },
+        |builder, size| {
+            // NV12 on the GPU, uploaded once for everything drawing this
+            // camera. Filters work in BGRA, so a rack with any in it puts one
+            // conversion at its head; an empty one leaves the picture NV12
+            // all the way to the compositor.
+            let FilledRack { rack, filters } =
+                filled_rack(&name, device, filters::ChainFormat::Nv12, size, item)?;
+            kept = Some(filters);
+            Ok(builder.pipe(rack).to(sink)?)
+        },
+    );
+    let (branch, size) = match attached {
+        Ok(attached) => attached,
+        Err(error) => {
+            // The input was added before the camera was asked for; one that
+            // will not be drawn into is taken back out rather than left.
+            handle.remove_source(&name);
+            return match unavailable {
+                Some(absent) => Ok(OpenOutcome::Absent(absent)),
+                None => Err(error),
+            };
+        }
+    };
+    let filters = kept.ok_or("the camera answered without finishing the branch")?;
+
+    Ok(OpenOutcome::Open(OpenSource {
+        media_file: None,
+        page: None,
+        // What the camera negotiated, which is not always the mode that was
+        // asked for — and on a camera another item opened first, it is that
+        // item's mode.
+        negotiated_size: Some(size),
+        source: RunningSource::Shared {
+            capture: Arc::clone(cameras) as Arc<dyn SharedCapture>,
+            key: settings.device.clone(),
+            branch,
+        },
+        layer,
+        name,
+        refreshed_token: None,
+        filters: filters.open,
+        filter_rack: filters.filter_rack,
+        showing: true,
+        running: true,
+        pushed: None,
+    }))
+}
+
+/// Starts one camera into a `Tee` nothing is attached to yet, with the upload
+/// between the two: every item drawing this camera draws the same surface,
+/// so it is carried to the GPU once.
+fn open_camera(
+    settings: &VideoCaptureSettings,
+    item_name: &str,
+    device: &Arc<CudaDevice>,
+) -> Result<Shared<()>, String> {
+    // The camera's own name rather than any item's: the capture outlives each
+    // of them, and this is what the log and the Stats dock show it as.
+    let name = format!("camera-{}", settings.device_name);
+    let (source, format) = start(&name, settings, item_name)?;
     // NV12 in system memory from the camera, straight into a CUDA surface —
-    // the same shape the Windows half has, and the reason the element
-    // converts rather than handing on whatever the device speaks.
+    // the reason the element converts rather than handing on whatever the
+    // device speaks.
     let upload = CudaUpload::new(
         format!("{name}-upload"),
         device,
         media_pp::elements::CudaFrameFormat::Nv12,
         format.width,
         format.height,
-    )?;
-    // Filters work in BGRA, so a rack with any in it puts one conversion at
-    // the head and the layer is BGRA from there. An empty one is untouched,
-    // NV12 all the way to the compositor as before.
-    let (rack, filter_rack) = filters::rack(
-        &name,
-        device,
-        filters::ChainFormat::Nv12,
-        format.width,
-        format.height,
-    );
-    // Filled before the pipeline runs, so the first frame is already keyed:
-    // a rack picks its contents up on the next buffer, and there is not one
-    // yet.
-    let filters = filter_rack.refill(&item.filters)?;
+    )
+    .map_err(|error| format!("the camera's upload could not be made: {error}"))?;
 
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+    let mut handle = None;
+    let pipeline = Pipeline::new(name.clone(), source, |source, context| {
+        let (tee, tee_handle) =
+            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
         let branch = context
             .branch()
             .queue("camera", QUEUE_DEPTH)
             .pipe(upload)
-            .pipe(rack)
-            .to(sink)?;
+            .to_branch(tee)?;
         context.attach(source, 0, branch)?;
+        handle = Some(tee_handle);
         Ok(())
-    })?;
-    pipeline.run()?;
+    })
+    .map_err(|error| format!("the camera could not be wired up: {error}"))?;
+    let tee = handle.expect("the wire closure always produces the TeeHandle");
+    pipeline
+        .run()
+        .map_err(|error| format!("the camera could not be started: {error}"))?;
 
-    Ok(OpenOutcome::Open(OpenSource {
-        media_file: None,
-        page: None,
-        negotiated_size: Some([format.width, format.height]),
-        source: RunningSource(pipeline),
-        layer,
-        name,
-        refreshed_token: None,
-        filters,
-        filter_rack,
-        showing: true,
-        running: true,
-        pushed: None,
-    }))
+    Ok(Shared::new(
+        pipeline,
+        tee,
+        [format.width, format.height],
+        (),
+    ))
 }
 
 /// Opens the camera, or answers why it is not available.
