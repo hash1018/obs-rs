@@ -234,7 +234,7 @@ pub struct Painted {
 /// What a page does with each picture it draws. Called on the runtime
 /// thread, so it must not block for long: nothing else is painted, loaded or
 /// closed while it runs.
-pub type OnPaint = Box<dyn Fn(Painted) + Send + Sync>;
+pub type OnPaint = Arc<dyn Fn(Painted) + Send + Sync>;
 
 /// What a page hands over when it has made a sound: one slice of samples per
 /// channel, all the same length, at [`AUDIO_RATE`].
@@ -247,7 +247,7 @@ pub struct Heard<'a> {
 
 /// What a page does with each block of sound it makes. Called on the audio
 /// thread CEF runs its own capture on, not the runtime thread.
-pub type OnAudio = Box<dyn Fn(Heard<'_>) + Send + Sync>;
+pub type OnAudio = Arc<dyn Fn(Heard<'_>) + Send + Sync>;
 
 /// The rate a page's sound is taken at, and the channel count with it.
 ///
@@ -432,6 +432,12 @@ impl Drop for Page {
 }
 
 /// What a page is opened as.
+///
+/// Cloneable, and that is why its two callbacks are `Arc`s: a Source that
+/// shuts its page down while nothing is looking at it has to be able to open
+/// the same page again — the same address, the same size, and the same
+/// callbacks, pushing into the pipeline that is still standing.
+#[derive(Clone)]
 pub struct PageOptions {
     /// Where the page comes from.
     pub url: String,
@@ -506,7 +512,7 @@ enum Command {
 wrap_render_handler! {
     struct PageRenderHandler {
         size: [u32; 2],
-        paint: Arc<OnPaint>,
+        paint: OnPaint,
         warned: Arc<AtomicBool>,
     }
 
@@ -566,7 +572,7 @@ wrap_render_handler! {
 // asked for here.
 wrap_audio_handler! {
     struct PageAudioHandler {
-        heard: Arc<OnAudio>,
+        heard: OnAudio,
         channels: Arc<AtomicUsize>,
     }
 
@@ -716,10 +722,8 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
                 audio,
             } = options;
             let mut client = PageClient::new(
-                PageRenderHandler::new(size, Arc::new(paint), Arc::new(AtomicBool::new(false))),
-                audio.map(|heard| {
-                    PageAudioHandler::new(Arc::new(heard), Arc::new(AtomicUsize::new(0)))
-                }),
+                PageRenderHandler::new(size, paint, Arc::new(AtomicBool::new(false))),
+                audio.map(|heard| PageAudioHandler::new(heard, Arc::new(AtomicUsize::new(0)))),
                 PageLifeSpanHandler::new(Arc::new(AtomicBool::new(false))),
             );
             let window = WindowInfo {

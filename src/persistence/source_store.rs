@@ -164,7 +164,8 @@ impl SourceStore {
                 browser_source_settings.fps AS browser_fps,
                 browser_source_settings.gain_db AS browser_gain_db,
                 browser_source_settings.muted AS browser_muted,
-                browser_source_settings.monitored AS browser_monitored
+                browser_source_settings.monitored AS browser_monitored,
+                browser_source_settings.shut_down_when_hidden AS browser_shut_down
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -284,6 +285,7 @@ impl SourceStore {
                         gain_db: row.get("browser_gain_db")?,
                         muted: row.get("browser_muted")?,
                         monitored: row.get("browser_monitored")?,
+                        shut_down_when_hidden: row.get("browser_shut_down")?,
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -613,6 +615,20 @@ impl SourceStore {
             params![size[0].max(1), size[1].max(1), scene_item_id.0],
         )?;
         Ok(())
+    }
+
+    /// Whether hiding the Source closes its browser rather than pausing it.
+    pub(crate) fn set_browser_shut_down_when_hidden(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        shut_down: bool,
+    ) -> PersistenceResult<()> {
+        set_browser_column(
+            transaction,
+            scene_item_id,
+            "shut_down_when_hidden",
+            shut_down,
+        )
     }
 
     /// The rate the page is redrawn at, at most.
@@ -1822,9 +1838,10 @@ mod tests {
         );
     }
 
-    /// A Browser Source is added pointed nowhere, and each of its three
-    /// settings has to survive being written and read back — a page shown at
-    /// yesterday's size or rate is a different page.
+    /// A Browser Source is added pointed nowhere, and each of the settings
+    /// it is then given has to survive being written and read back — a page
+    /// shown at yesterday's size or rate is a different page, and one that
+    /// was to close while hidden would stay open for ever instead.
     #[test]
     fn a_browser_source_is_added_blank_and_keeps_what_it_is_told() {
         let mut database = ProjectDatabase::open_in_memory().unwrap();
@@ -1843,7 +1860,8 @@ mod tests {
             .transaction(|transaction| {
                 SourceStore::set_browser_url(transaction, item_id, "https://example.com/overlay")?;
                 SourceStore::set_browser_size(transaction, item_id, [1920, 1080])?;
-                SourceStore::set_browser_fps(transaction, item_id, 60)
+                SourceStore::set_browser_fps(transaction, item_id, 60)?;
+                SourceStore::set_browser_shut_down_when_hidden(transaction, item_id, true)
             })
             .unwrap();
 
@@ -1853,6 +1871,7 @@ mod tests {
                 url: "https://example.com/overlay".to_owned(),
                 size: [1920, 1080],
                 fps: 60,
+                shut_down_when_hidden: true,
                 ..Default::default()
             })
         );

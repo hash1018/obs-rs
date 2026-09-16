@@ -436,6 +436,14 @@ pub struct BrowserSourceSettings {
     /// page's sound away from the machine's own output and putting it back
     /// on unasked is a page talking into somebody's speakers.
     pub monitored: bool,
+    /// Whether being hidden closes the browser rather than pausing it.
+    ///
+    /// Off to begin with, which is the cheaper answer for everything but
+    /// memory: a page kept alive comes back as it was, where one shut down
+    /// starts again from nothing — a video from its first frame, a login
+    /// asked for a second time. Worth turning on for a heavy page in a Scene
+    /// that is rarely shown, which is the case it exists for.
+    pub shut_down_when_hidden: bool,
 }
 
 impl Default for BrowserSourceSettings {
@@ -447,6 +455,7 @@ impl Default for BrowserSourceSettings {
             gain_db: 0.0,
             muted: false,
             monitored: false,
+            shut_down_when_hidden: false,
         }
     }
 }

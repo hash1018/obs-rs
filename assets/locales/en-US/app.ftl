@@ -76,6 +76,7 @@ properties-url = URL
 properties-url-hint = https://example.com
 properties-page-size = Page size
 properties-frame-rate = Frame rate
+properties-page-shutdown = Shut down when hidden
 properties-transport = Transport
 properties-reconnect = Reconnect
 properties-reconnect-off = Off

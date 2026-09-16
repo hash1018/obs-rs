@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 28;
+const SCHEMA_VERSION: i64 = 29;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -588,6 +588,18 @@ fn migrate(
                 ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0 CHECK (monitored IN (0, 1));
 
             PRAGMA user_version = 28;",
+        )?;
+    }
+    if step(29) {
+        // Whether a hidden Browser Source closes its browser rather than
+        // merely pausing its drawing. Off for every row there is, which is
+        // what they have been doing.
+        transaction.execute_batch(
+            "ALTER TABLE browser_source_settings
+                ADD COLUMN shut_down_when_hidden INTEGER NOT NULL DEFAULT 0
+                CHECK (shut_down_when_hidden IN (0, 1));
+
+            PRAGMA user_version = 29;",
         )?;
     }
     transaction.commit()?;

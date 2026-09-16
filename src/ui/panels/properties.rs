@@ -347,6 +347,9 @@ fn show_browser(
     let key = egui::Id::new(("browser-settings", item));
     let held: Option<crate::domain::BrowserSourceSettings> = ui.data(|data| data.get_temp(key));
     let mut edited = held.unwrap_or_else(|| stored.clone());
+    // Not one of the three below: the checkbox at the end writes straight
+    // through, so what the buffer holds for it is never the question.
+    edited.shut_down_when_hidden = stored.shut_down_when_hidden;
     let mut finished = false;
 
     ui.label(i18n.text(TextKey::PropertiesUrl));
@@ -382,6 +385,18 @@ fn show_browser(
             .suffix(" fps"),
     );
     finished |= field.drag_stopped() || field.lost_focus();
+    ui.end_row();
+
+    // Written the moment it is clicked, and it reopens nothing: a checkbox
+    // has no gesture to wait out, and the running Source is told through the
+    // page it is already holding.
+    ui.label(i18n.text(TextKey::PropertiesPageShutdown));
+    let mut shut_down = stored.shut_down_when_hidden;
+    if ui.checkbox(&mut shut_down, "").changed() {
+        actions.push(UiAction::Project(ProjectCommand::Source(
+            SourceCommand::SetBrowserShutDownWhenHidden(item, shut_down),
+        )));
+    }
     ui.end_row();
 
     if !finished {

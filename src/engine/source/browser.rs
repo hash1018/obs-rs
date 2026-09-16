@@ -74,6 +74,122 @@ fn is_address(url: &str) -> bool {
     url.contains("://") || url.starts_with("data:")
 }
 
+/// A Browser Source's page, and what it takes to open one again.
+///
+/// A page is a browser: a renderer process, its GPU allocations, and whatever
+/// the page itself is running. Hiding the Source normally only stops it
+/// drawing, which is what a page kept alive is for — a clock is right and a
+/// chat is still connected the moment it comes back. A Source set to shut
+/// down when it is hidden gives all of that up instead, and gets it back by
+/// opening the page again: the same address at the same size, pushing through
+/// the same callbacks into the pipeline that never went away.
+pub(in crate::engine) struct OpenPage {
+    /// The browser, while there is one. `None` only where the Source shut it
+    /// down because nothing was looking at it.
+    page: Option<crate::browser::Page>,
+    /// What it was opened with, kept to open it again.
+    options: crate::browser::PageOptions,
+    /// The Source's name, for the one thing here that is worth a log line.
+    name: String,
+    /// Whether anything is looking at the Source.
+    shown: bool,
+    /// Whether being hidden closes the browser rather than pausing its
+    /// drawing.
+    shut_down_when_hidden: bool,
+    /// Whether a failure to open the page again has already been said. The
+    /// browser engine stopping would otherwise be a line every frame.
+    complained: bool,
+}
+
+impl OpenPage {
+    fn new(page: crate::browser::Page, options: crate::browser::PageOptions, name: String) -> Self {
+        Self {
+            page: Some(page),
+            options,
+            name,
+            shown: true,
+            shut_down_when_hidden: false,
+            complained: false,
+        }
+    }
+
+    /// Whether anything is looking at this page.
+    ///
+    /// A page that is kept is told, and stops painting — which is the whole
+    /// point: a Source whose Scene is not the one being shown has a paused
+    /// pipeline, and every picture drawn for it is a texture copied into a
+    /// queue nothing is emptying. Its own timers and scripts keep running, so
+    /// a clock is right again the moment it comes back.
+    ///
+    /// A page that is not kept is closed, and opened again when this turns
+    /// back on — see [`Self::set_shut_down_when_hidden`].
+    pub(in crate::engine) fn set_shown(&mut self, shown: bool) {
+        if shown != self.shown {
+            self.shown = shown;
+            self.apply();
+        }
+    }
+
+    /// Whether hiding the Source closes the browser rather than pausing it.
+    ///
+    /// What it buys is everything a page costs while nobody is looking:
+    /// Chromium's processes, its memory, and whatever the page is fetching in
+    /// the background. What it costs is the page starting from nothing when it
+    /// comes back — a video from its first frame, a login asked for again —
+    /// which is why it is a switch rather than what a Browser Source does.
+    ///
+    /// Applied at once rather than at the next change: turning it on while the
+    /// Source is already hidden is a page to close now.
+    pub(in crate::engine) fn set_shut_down_when_hidden(&mut self, shut_down: bool) {
+        if shut_down != self.shut_down_when_hidden {
+            self.shut_down_when_hidden = shut_down;
+            self.apply();
+        }
+    }
+
+    /// Does something to the page — a click, a wheel, a key.
+    ///
+    /// Nothing at all where the page has been shut down, which is the right
+    /// answer: a Source nothing is showing is not one being clicked either.
+    pub(in crate::engine) fn send(&self, input: crate::browser::PageInput) {
+        if let Some(page) = &self.page {
+            page.send(input);
+        }
+    }
+
+    /// Brings the browser in line with the two switches above.
+    fn apply(&mut self) {
+        match (self.shown, self.shut_down_when_hidden) {
+            (true, _) => match &self.page {
+                Some(page) => page.set_shown(true),
+                // Shown again after being shut down, so this is a new
+                // browser for the same page.
+                None => match crate::browser::open_page(self.options.clone()) {
+                    Ok(page) => {
+                        self.page = Some(page);
+                        self.complained = false;
+                    }
+                    Err(error) => {
+                        if !std::mem::replace(&mut self.complained, true) {
+                            tracing::warn!(
+                                "\"{}\": could not open the page again: {error}",
+                                self.name
+                            );
+                        }
+                    }
+                },
+            },
+            // Dropping it is what closes the browser.
+            (false, true) => self.page = None,
+            (false, false) => {
+                if let Some(page) = &self.page {
+                    page.set_shown(false);
+                }
+            }
+        }
+    }
+}
+
 /// Blocks of a page's sound held between the browser and the mixer.
 ///
 /// CEF hands them over in hundredths of a second, so this is about a second:
@@ -268,11 +384,11 @@ pub(in crate::engine) fn open(
     // paints has somewhere to go.
     let complained = AtomicBool::new(false);
     let complained_about = name.clone();
-    let page = crate::browser::open_page(crate::browser::PageOptions {
+    let options = crate::browser::PageOptions {
         url: settings.url.clone(),
         size,
         fps: settings.fps,
-        paint: Box::new(move |painted| {
+        paint: Arc::new(move |painted| {
             // The browser was told this size, so a different one means it
             // drew something else — a device change, a page that resized
             // itself. Refused rather than stretched, and said once: this
@@ -306,7 +422,7 @@ pub(in crate::engine) fn open(
             let clock = std::sync::Mutex::new(SampleClock::default());
             let complained = AtomicBool::new(false);
             let complained_about = name.clone();
-            Box::new(move |heard: crate::browser::Heard<'_>| {
+            Arc::new(move |heard: crate::browser::Heard<'_>| {
                 let Some(frame) = clock
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -321,14 +437,17 @@ pub(in crate::engine) fn open(
                 }
             }) as crate::browser::OnAudio
         }),
-    });
-    let page = match page {
-        Ok(page) => page,
+    };
+    let mut page = match crate::browser::open_page(options.clone()) {
+        Ok(page) => OpenPage::new(page, options, name.clone()),
         // Whatever the browser engine could not do, the Sources dock says.
         // Absent rather than a failure, for the reason an unmounted drive
         // is: an engine that is not there now may be next time.
         Err(absent) => return Ok(OpenOutcome::Absent(absent)),
     };
+    // Told here as well as in the engine loop: a Source whose item is hidden
+    // is closed on the next pass rather than kept open until something moves.
+    page.set_shut_down_when_hidden(settings.shut_down_when_hidden);
 
     Ok(OpenOutcome::Open(OpenSource {
         // Named for the file it was written for; what a page shares with one

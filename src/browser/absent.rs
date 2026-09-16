@@ -18,7 +18,7 @@ pub struct Painted {
 }
 
 /// What a page would do with each picture it drew.
-pub type OnPaint = Box<dyn Fn(Painted) + Send + Sync>;
+pub type OnPaint = std::sync::Arc<dyn Fn(Painted) + Send + Sync>;
 
 /// The page that cannot exist here. Uninhabited, so the `Option<Page>` every
 /// open Source carries is always `None` and costs nothing.
@@ -61,7 +61,7 @@ pub struct Heard<'a> {
 }
 
 /// What a page would do with each block of sound it made.
-pub type OnAudio = Box<dyn Fn(Heard<'_>) + Send + Sync>;
+pub type OnAudio = std::sync::Arc<dyn Fn(Heard<'_>) + Send + Sync>;
 
 /// The shape a page's sound would be taken in — see the Windows
 /// implementation, which is what settles these.
@@ -71,6 +71,7 @@ pub const AUDIO_CHANNELS: u16 = 2;
 /// What a page would be opened as. Nothing reads these here — there is no
 /// page to open — but the caller builds one the same way on every platform.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct PageOptions {
     pub url: String,
     pub size: [u32; 2],

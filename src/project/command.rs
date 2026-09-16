@@ -203,6 +203,11 @@ pub enum SourceCommand {
     SetBrowserSize(SceneItemId, [u32; 2]),
     /// The rate the page is redrawn at, at most.
     SetBrowserFps(SceneItemId, u32),
+    /// Whether hiding the Source closes its browser rather than pausing its
+    /// drawing. Unlike the three above this does not reopen anything: the
+    /// running Source is told, and acts on it the next time it is hidden or
+    /// shown.
+    SetBrowserShutDownWhenHidden(SceneItemId, bool),
     /// The font file to draw with, or `None` for this application's own.
     SetTextFont(SceneItemId, Option<std::path::PathBuf>),
     SetTextFontSize(SceneItemId, f32),

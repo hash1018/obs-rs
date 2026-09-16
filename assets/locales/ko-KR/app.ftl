@@ -76,6 +76,7 @@ properties-url = 주소
 properties-url-hint = https://example.com
 properties-page-size = 페이지 크기
 properties-frame-rate = 프레임 레이트
+properties-page-shutdown = 안 보일 때 종료
 properties-transport = 전송
 properties-reconnect = 재연결
 properties-reconnect-off = 안 함

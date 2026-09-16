@@ -255,9 +255,10 @@ pub(in crate::engine) struct OpenSource {
     ///
     /// Two things at once: a page closes its browser when it is dropped,
     /// so this is what keeps one rendering only for as long as the Source
-    /// that asked for it — and it is what tells the page to stop drawing
-    /// while nothing is showing it.
-    pub(in crate::engine) page: Option<crate::browser::Page>,
+    /// that asked for it — and it is what tells the page whether anything is
+    /// looking at it. See [`browser::OpenPage`], which is also what opens the
+    /// page again for a Source set to shut it down while it is hidden.
+    pub(in crate::engine) page: Option<browser::OpenPage>,
     /// The Source's filters as they are running, in chain order, each with
     /// the handle that reaches it.
     ///

@@ -168,6 +168,7 @@ text_keys! {
     PropertiesUrlHint             => "properties-url-hint";
     PropertiesPageSize            => "properties-page-size";
     PropertiesFrameRate           => "properties-frame-rate";
+    PropertiesPageShutdown        => "properties-page-shutdown";
     PropertiesTransport           => "properties-transport";
     PropertiesReconnect           => "properties-reconnect";
     PropertiesReconnectOff        => "properties-reconnect-off";

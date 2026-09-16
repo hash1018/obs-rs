@@ -2412,14 +2412,22 @@ fn reconcile(
             } else {
                 source.source.pause();
             }
-            // A Source that produces its own pictures has to be told, not
-            // merely stopped from being read: a paused pipeline consumes
-            // nothing, so a browser left drawing into one is copying a
-            // texture a second into a queue nobody is emptying.
-            if let Some(page) = &source.page {
-                page.set_shown(running);
-            }
             source.running = running;
+        }
+        // A Source that produces its own pictures has to be told, not merely
+        // stopped from being read: a paused pipeline consumes nothing, so a
+        // browser left drawing into one is copying a texture a second into a
+        // queue nobody is emptying. Hidden in the Scene counts as not shown
+        // too — a layer nobody can see is not worth a page drawing for — and
+        // a page told this every pass rather than only where `running`
+        // changed is one that hears about that hiding at all.
+        if let Some(page) = &mut source.page {
+            if let Some(crate::domain::SourceSettings::Browser(settings)) =
+                item.map(|item| &item.settings)
+            {
+                page.set_shut_down_when_hidden(settings.shut_down_when_hidden);
+            }
+            page.set_shown(running && item.is_some_and(|item| item.visible));
         }
         if showing != source.showing {
             if !showing {

@@ -202,6 +202,9 @@ fn handle_source_command(
         SourceCommand::SetBrowserFps(item_id, fps) => {
             SourceStore::set_browser_fps(transaction, item_id, fps)
         }
+        SourceCommand::SetBrowserShutDownWhenHidden(item_id, shut_down) => {
+            SourceStore::set_browser_shut_down_when_hidden(transaction, item_id, shut_down)
+        }
         SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
         SourceCommand::SetTextFont(item_id, font) => {
             SourceStore::set_text_font(transaction, item_id, font.as_deref())
