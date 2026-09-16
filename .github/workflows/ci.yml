@@ -106,6 +106,10 @@ jobs:
     # rebuild everything `cargo clippy` had just built.
     env:
       RUSTFLAGS: -L ${{ github.workspace }}/target/cuda-stub
+      # Where `cef-dll-sys` looks for Chromium's binary distribution before
+      # downloading it, as on Windows. Beside the checkout rather than in it,
+      # so a cache restore never lands inside the source tree.
+      CEF_PATH: ${{ github.workspace }}/../cef
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -150,6 +154,16 @@ jobs:
             ~/.cargo/git/db
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
+
+      # As on Windows: a few hundred megabytes that change only when the
+      # pinned `cef` does. Linux needs no CMake or Ninja for it — the crate
+      # links against libcef there rather than building CEF's C++ wrapper.
+      - name: Cache the browser engine
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
 
       # Before anything is compiled, because `RUSTFLAGS` above points at it and
       # a missing `-L` directory is not an error — the failure would come much

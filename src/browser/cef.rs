@@ -1,9 +1,19 @@
 //! CEF — the Chromium Embedded Framework — as this process hosts it.
 //!
 //! See [`super`] for why a browser engine needs a module of its own. This is
-//! the Windows implementation of the two things it owes the application: the
+//! the implementation of the two things it owes the application: the
 //! helper-process entry point, and the runtime thread every browser callback
 //! arrives on.
+//!
+//! # Two ways a picture arrives
+//!
+//! On Windows a page is drawn on Chromium's GPU and handed over as a shared
+//! D3D11 texture, which the compositor's device opens directly. On Linux it
+//! is drawn on the CPU and handed over as its pixels. Chromium can hand over
+//! a GPU buffer there too, but as a dmabuf, and the Linux compositor is CUDA,
+//! which cannot open one — getting it there is a Vulkan import and an export
+//! CUDA *can* read, which is a bridge of its own. [`Painted`] is shaped for
+//! whichever this platform has.
 
 use std::{
     collections::HashMap,
@@ -103,6 +113,38 @@ wrap_app! {
                 command_line.append_switch_with_value(
                     Some(&CefString::from("autoplay-policy")),
                     Some(&CefString::from("no-user-gesture-required")),
+                );
+                // Chromium's first-run flow — the profile's welcome and
+                // default-browser steps — runs inside `initialize` the first
+                // time a profile is used, and nobody is there to finish it:
+                // measured on Linux, a fresh profile held `initialize` for as
+                // long as it was waited on, and every run after the one that
+                // left a `First Run` marker took a tenth of a second.
+                command_line.append_switch(Some(&CefString::from("no-first-run")));
+                // Linux: a page's cookies are sealed with a key Chromium
+                // otherwise keeps in the desktop's keyring, and a keyring
+                // that is locked asks to be unlocked — in a dialog of its
+                // own, over whatever is being recorded, the first time a page
+                // stores something. The basic store keeps the key with the
+                // profile instead, which is where everything else a Source's
+                // page keeps already is.
+                #[cfg(target_os = "linux")]
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("password-store")),
+                    Some(&CefString::from("basic")),
+                );
+                // Linux: no display server at all. A page here is drawn
+                // off-screen and handed over as pixels, so Chromium has no
+                // window to put anywhere, and left to itself it connects to
+                // the session's Wayland or X11 server anyway — measured, on
+                // Wayland, with a GTK complaint and a GPU process reporting
+                // that platform incompatible with Vulkan. Headless draws the
+                // same pictures at the same cost with neither, and does not
+                // care which kind of session obs-rs itself is running in.
+                #[cfg(target_os = "linux")]
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("ozone-platform")),
+                    Some(&CefString::from("headless")),
                 );
             }
         }
@@ -226,15 +268,34 @@ fn guarded(what: &str, body: impl FnOnce()) {
 /// The handle is only valid for the duration of the call — see
 /// `media_pp::elements::D3d11SharedTextureSource`, which is what this is
 /// meant to be given to.
+#[cfg(target_os = "windows")]
 pub struct Painted {
     pub handle: isize,
+    pub size: [u32; 2],
+}
+
+/// What a page hands over when it has drawn: its pixels, and the size of
+/// them.
+///
+/// Four bytes a pixel, BGRA, top row first, `size[0]` pixels to a row and no
+/// padding — and premultiplied, as Chromium composites: a pixel's colour has
+/// already been multiplied by its alpha. Borrowed for the call; what keeps
+/// them has to copy them.
+#[cfg(target_os = "linux")]
+pub struct Painted<'a> {
+    pub pixels: &'a [u8],
     pub size: [u32; 2],
 }
 
 /// What a page does with each picture it draws. Called on the runtime
 /// thread, so it must not block for long: nothing else is painted, loaded or
 /// closed while it runs.
+#[cfg(target_os = "windows")]
 pub type OnPaint = Arc<dyn Fn(Painted) + Send + Sync>;
+
+/// What a page does with each picture it draws — see the Windows twin.
+#[cfg(target_os = "linux")]
+pub type OnPaint = Arc<dyn for<'a> Fn(Painted<'a>) + Send + Sync>;
 
 /// What a page hands over when it has made a sound: one slice of samples per
 /// channel, all the same length, at [`AUDIO_RATE`].
@@ -518,10 +579,12 @@ enum Command {
 }
 
 // The page's own drawing, as CEF hands it over. `view_rect` is what makes the
-// page the size it was asked for; the GPU paint is the picture. The CPU one is
-// implemented too, and does nothing but say so once: it is what CEF falls back
-// to when the shared-texture path is unavailable, and a Source that is
-// silently blank is worth one line in the log.
+// page the size it was asked for.
+//
+// On Windows the GPU paint is the picture, and the CPU one does nothing but
+// say so once: it is what CEF falls back to when the shared-texture path is
+// unavailable, and a Source that is silently blank is worth one line in the
+// log. On Linux it is the other way round — see this module's docs.
 //
 // The macro writes the struct, so it takes neither doc comments nor derives.
 wrap_render_handler! {
@@ -544,17 +607,43 @@ wrap_render_handler! {
         fn on_paint(
             &self,
             _browser: Option<&mut Browser>,
-            _type_: PaintElementType,
+            type_: PaintElementType,
             _dirty_rects: Option<&[Rect]>,
-            _buffer: *const u8,
+            buffer: *const u8,
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
         ) {
-            if !self.warned.swap(true, Ordering::Relaxed) {
-                tracing::warn!(
-                    "the browser engine is drawing this page on the CPU ({width}x{height}); \
-                     obs-rs takes only the GPU path, so it will show nothing"
-                );
+            #[cfg(target_os = "windows")]
+            {
+                let _ = (type_, buffer);
+                if !self.warned.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        "the browser engine is drawing this page on the CPU ({width}x{height}); \
+                         obs-rs takes only the GPU path, so it will show nothing"
+                    );
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // The page itself, not a popup a `<select>` opened over it:
+                // a popup is a picture of its own, drawn to be laid on top at
+                // a place of its own, which a Source has no second layer for.
+                if type_ != PaintElementType::VIEW || buffer.is_null() {
+                    return;
+                }
+                let (Ok(columns), Ok(rows)) = (usize::try_from(width), usize::try_from(height))
+                else {
+                    return;
+                };
+                guarded("paint", || {
+                    // SAFETY: CEF hands over `width * height` BGRA pixels,
+                    // four bytes each, live for the length of this call.
+                    let pixels = unsafe { std::slice::from_raw_parts(buffer, columns * rows * 4) };
+                    (self.paint)(Painted {
+                        pixels,
+                        size: [columns as u32, rows as u32],
+                    });
+                });
             }
         }
 
@@ -565,14 +654,29 @@ wrap_render_handler! {
             _dirty_rects: Option<&[Rect]>,
             info: Option<&cef::AcceleratedPaintInfo>,
         ) {
-            let Some(info) = info else { return };
-            let coded = &info.extra.coded_size;
-            guarded("paint", || {
-                (self.paint)(Painted {
-                    handle: info.shared_texture_handle as isize,
-                    size: [coded.width.max(0) as u32, coded.height.max(0) as u32],
+            #[cfg(target_os = "windows")]
+            {
+                let Some(info) = info else { return };
+                let coded = &info.extra.coded_size;
+                guarded("paint", || {
+                    (self.paint)(Painted {
+                        handle: info.shared_texture_handle as isize,
+                        size: [coded.width.max(0) as u32, coded.height.max(0) as u32],
+                    });
                 });
-            });
+            }
+            // Never asked for here — see `shared_texture_enabled` where a page
+            // is opened — so one arriving is worth saying, once.
+            #[cfg(target_os = "linux")]
+            {
+                let _ = info;
+                if !self.warned.swap(true, Ordering::Relaxed) {
+                    tracing::warn!(
+                        "the browser engine handed over a GPU buffer, which obs-rs cannot take \
+                         on Linux; the page will show nothing"
+                    );
+                }
+            }
         }
     }
 }
@@ -743,11 +847,12 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
             );
             let window = WindowInfo {
                 windowless_rendering_enabled: 1,
-                // The whole reason a page can be a Source at all: its
-                // pictures arrive as textures this machine's GPU already
-                // holds, rather than as pixels copied out to system memory
-                // and back.
-                shared_texture_enabled: 1,
+                // On Windows, the reason a page costs so little: its pictures
+                // arrive as textures this machine's GPU already holds, rather
+                // than as pixels copied out to system memory and back. On
+                // Linux the pixels are what this can take — see this module's
+                // docs.
+                shared_texture_enabled: i32::from(cfg!(target_os = "windows")),
                 ..Default::default()
             };
             let settings = BrowserSettings {

@@ -1,5 +1,5 @@
 //! What a build without a browser engine answers — every platform but
-//! Windows, and Windows without the `browser` feature.
+//! Windows and Linux, and those two without the `browser` feature.
 //!
 //! It compiles and does nothing, so nothing above has to be written twice:
 //! `main` still asks whether this process is a helper (it never is), and
@@ -17,14 +17,28 @@ pub fn helper_process() -> Option<i32> {
 }
 
 /// What a page would hand over, so the callback a Source writes has the same
-/// shape wherever it is compiled.
+/// shape wherever it is compiled — a texture handle on Windows, pixels on
+/// Linux, as `cef.rs` has them.
+#[cfg(not(target_os = "linux"))]
 pub struct Painted {
     pub handle: isize,
     pub size: [u32; 2],
 }
 
+/// See the other platforms' twin.
+#[cfg(target_os = "linux")]
+pub struct Painted<'a> {
+    pub pixels: &'a [u8],
+    pub size: [u32; 2],
+}
+
 /// What a page would do with each picture it drew.
+#[cfg(not(target_os = "linux"))]
 pub type OnPaint = std::sync::Arc<dyn Fn(Painted) + Send + Sync>;
+
+/// What a page would do with each picture it drew.
+#[cfg(target_os = "linux")]
+pub type OnPaint = std::sync::Arc<dyn for<'a> Fn(Painted<'a>) + Send + Sync>;
 
 /// The page that cannot exist here. Uninhabited, so the `Option<Page>` every
 /// open Source carries is always `None` and costs nothing.

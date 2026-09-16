@@ -40,7 +40,7 @@ pub fn logs_dir() -> PathBuf {
 /// would share one set of logins.
 ///
 /// Only where there is a browser engine to ask — see `browser`.
-#[cfg(all(target_os = "windows", feature = "browser"))]
+#[cfg(all(any(target_os = "windows", target_os = "linux"), feature = "browser"))]
 pub fn browser_cache_dir() -> PathBuf {
     data_dir().join("browser")
 }

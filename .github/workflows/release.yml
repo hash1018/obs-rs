@@ -177,6 +177,8 @@ jobs:
     # changing it partway through would rebuild everything.
     env:
       RUSTFLAGS: -C link-arg=-Wl,-rpath,$ORIGIN/lib -L ${{ github.workspace }}/target/cuda-stub
+      # The same as the CI workflow, for the same reason — see there.
+      CEF_PATH: ${{ github.workspace }}/../cef
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -211,6 +213,13 @@ jobs:
             ~/.cargo/git/db
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
+
+      - name: Cache the browser engine
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
 
       # Before anything is compiled, because `RUSTFLAGS` above points at it and
       # a missing `-L` directory is not an error — the failure would come much
@@ -251,6 +260,25 @@ jobs:
           # installs none. Windows takes its icon from the executable.
           cp assets/obs-rs.png "$stage"
           install -m 755 assets/linux/install-desktop-entry.sh "$stage"
+          # The browser engine, beside the executable, where the build put it
+          # and where CEF looks for everything but libcef itself: `libcef.so`
+          # is linked, found through the executable's own `$ORIGIN`, and the
+          # rest is what Chromium reads before it will start a browser — its
+          # resource and locale packs, the ICU data, the V8 snapshot, and the
+          # graphics libraries it falls back through. Not `chrome-sandbox`,
+          # which only a sandboxed build uses and only as a setuid binary,
+          # and not the files the distribution keeps for building against it.
+          cp target/release/libcef.so target/release/libEGL.so \
+            target/release/libGLESv2.so target/release/libvk_swiftshader.so \
+            target/release/libvulkan.so.1 target/release/vk_swiftshader_icd.json \
+            target/release/icudtl.dat target/release/v8_context_snapshot.bin \
+            target/release/*.pak "$stage"
+          cp -r target/release/locales "$stage"
+          cp target/release/CREDITS.html "$stage/licenses/chromium-credits.html"
+          # CEF's Linux distribution ships libcef with its debug information
+          # in: 1.36 GB as it arrives, 255 MB without. Only what the dynamic
+          # linker reads is kept, which is what a library needs to be loaded.
+          strip --strip-unneeded "$stage/libcef.so"
           find "$FFMPEG_DIR/share" -name copyright -print0 |
             while IFS= read -r -d '' file; do
               cp "$file" "$stage/licenses/$(basename "$(dirname "$file")").txt"
@@ -273,6 +301,15 @@ jobs:
             || { echo "no icon for the desktop entry in the archive" >&2; exit 1; }
           sh -n "$stage/install-desktop-entry.sh" \
             || { echo "the desktop installer does not parse" >&2; exit 1; }
+          # Without these the executable does not reach `main` — `libcef.so`
+          # is a link-time dependency, which the `ldd` check below also sees
+          # — or Chromium will not start a browser at all.
+          [ -f "$stage/libcef.so" ] \
+            || { echo "no browser engine in the archive" >&2; exit 1; }
+          [ -f "$stage/icudtl.dat" ] \
+            || { echo "no browser engine data in the archive" >&2; exit 1; }
+          compgen -G "$stage/locales/*.pak" > /dev/null \
+            || { echo "no browser engine locales in the archive" >&2; exit 1; }
           # Every shared object the executable asks for has to be resolvable
           # from inside the archive, except the one that deliberately is not:
           # `libcuda.so.1` belongs to the user's NVIDIA driver and shipping a

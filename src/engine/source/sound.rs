@@ -312,7 +312,6 @@ pub(in crate::engine) fn build(
 /// `None` only for a machine whose mixer never started: a page is not asked
 /// whether it will ever make a sound, and one that does not simply pushes
 /// nothing.
-#[cfg(target_os = "windows")]
 pub(in crate::engine) fn build_pushed(
     name: &str,
     format: AudioFormat,

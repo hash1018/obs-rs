@@ -219,6 +219,19 @@ pub(in crate::engine) enum OpenOutcome {
 
 /// A Source that is running, and the controls for its layer.
 pub(in crate::engine) struct OpenSource {
+    /// The page a Browser Source is showing, and `None` for every other
+    /// kind.
+    ///
+    /// Two things at once: a page closes its browser when it is dropped,
+    /// so this is what keeps one rendering only for as long as the Source
+    /// that asked for it — and it is what tells the page whether anything is
+    /// looking at it. See [`browser::OpenPage`], which is also what opens the
+    /// page again for a Source set to shut it down while it is hidden.
+    ///
+    /// First, because fields are dropped in order: the browser is told to
+    /// close before the pipeline it paints into is stopped, rather than
+    /// painting into one that has already gone.
+    pub(in crate::engine) page: Option<browser::OpenPage>,
     pub(in crate::engine) source: RunningSource,
     pub(in crate::engine) layer: Layer,
     pub(in crate::engine) name: String,
@@ -250,15 +263,6 @@ pub(in crate::engine) struct OpenSource {
     pub(in crate::engine) pushed: Option<PushedSurface>,
     /// Set for a media file Source — see [`MediaFile`].
     pub(in crate::engine) media_file: Option<MediaFile>,
-    /// The page a Browser Source is showing, and `None` for every other
-    /// kind.
-    ///
-    /// Two things at once: a page closes its browser when it is dropped,
-    /// so this is what keeps one rendering only for as long as the Source
-    /// that asked for it — and it is what tells the page whether anything is
-    /// looking at it. See [`browser::OpenPage`], which is also what opens the
-    /// page again for a Source set to shut it down while it is hidden.
-    pub(in crate::engine) page: Option<browser::OpenPage>,
     /// The Source's filters as they are running, in chain order, each with
     /// the handle that reaches it.
     ///

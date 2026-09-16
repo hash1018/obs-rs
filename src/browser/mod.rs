@@ -10,7 +10,7 @@
 //!
 //! Chromium — which is what CEF is — runs as several processes. The browser
 //! process is this one; the render, GPU and utility processes are launched by
-//! it, and on Windows they are this same executable started again with
+//! it, and on Windows and Linux alike they are this same executable started again with
 //! `--type=` arguments. So the very first thing `main` does is ask
 //! [`helper_process`] whether this process is one of those, and if it is,
 //! that call runs the child's whole job and hands back its exit code. Nothing
@@ -24,15 +24,19 @@
 //!
 //! # Where it exists
 //!
-//! Windows, with the `browser` feature — the same pairing the D3D11 backend
-//! has, and for the same reason: an off-screen page is handed over as a
-//! shared GPU texture, and importing one is a per-backend operation. Anywhere
-//! else this module still compiles, as `absent.rs`, and answers that there is
-//! no browser engine here.
+//! Windows and Linux, with the `browser` feature. The two hand a picture over
+//! differently — a shared GPU texture on Windows, pixels on Linux; see
+//! `cef.rs` — because importing a GPU buffer is a per-backend operation and
+//! the Linux one has no bridge for what Chromium hands over there yet.
+//! Anywhere else this module still compiles, as `absent.rs`, and answers
+//! that there is no browser engine here.
 
-#[cfg_attr(all(target_os = "windows", feature = "browser"), path = "cef.rs")]
 #[cfg_attr(
-    not(all(target_os = "windows", feature = "browser")),
+    all(any(target_os = "windows", target_os = "linux"), feature = "browser"),
+    path = "cef.rs"
+)]
+#[cfg_attr(
+    not(all(any(target_os = "windows", target_os = "linux"), feature = "browser")),
     path = "absent.rs"
 )]
 mod engine;
@@ -41,3 +45,8 @@ pub use engine::{
     AUDIO_CHANNELS, AUDIO_RATE, Heard, Held, NamedKey, OnAudio, Page, PageInput, PageOptions,
     Pressed, Runtime, helper_process, open_page,
 };
+// Named only by the Linux Source, whose paint callback has to spell out the
+// picture's lifetime; the Windows one never names it, and an export nothing
+// reads is a warning there.
+#[cfg(target_os = "linux")]
+pub use engine::Painted;

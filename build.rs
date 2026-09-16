@@ -1,4 +1,5 @@
-//! Stamps the Windows executable with an icon and its version information.
+//! Stamps the Windows executable with an icon and its version information,
+//! and tells a Linux one where its browser engine is.
 //!
 //! Without this the application is a generic Windows icon in the task bar and
 //! a file with no version, product name or copyright in its properties — which
@@ -26,6 +27,27 @@ fn main() {
 
     #[cfg(windows)]
     stamp_windows_resources();
+
+    find_libcef_beside_the_executable();
+}
+
+/// Looks for `libcef.so` in the executable's own directory, on Linux.
+///
+/// The `cef` crate puts it there, as it puts `libcef.dll` beside a Windows
+/// build — but Windows loads a DLL from beside the executable on its own, and
+/// Linux does not: without a search path naming that directory the dynamic
+/// linker reports it missing, and the executable does not reach `main`.
+/// `$ORIGIN` is that directory, wherever the executable is later moved to
+/// with its libraries, which is also what a release archive needs.
+///
+/// Only for a Linux target with the browser engine in it — the target, not
+/// the host, for the reason `stamp_windows_resources` gives below.
+fn find_libcef_beside_the_executable() {
+    let linux = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
+    let browser = std::env::var_os("CARGO_FEATURE_BROWSER").is_some();
+    if linux && browser {
+        println!("cargo:rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    }
 }
 
 #[cfg(windows)]

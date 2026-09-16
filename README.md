@@ -49,11 +49,12 @@ bottom.](docs/screenshot.png)
   back and tried again on its own, at an interval you choose, or left alone
   entirely if you turn that off. TCP or UDP, because no one transport gets
   through every network.
-- **Browser.** A web page as a source, on Windows: an overlay, an alert box,
-  a chat window. It is rendered off-screen by Chromium and handed over as a
-  GPU texture, so the page reaches the compositor without a copy through
-  system memory — and its transparency is real transparency, not a black
-  rectangle. Address, size and frame rate are set in the Properties dock.
+- **Browser.** A web page as a source, on Windows and Linux: an overlay, an
+  alert box, a chat window. It is rendered off-screen by Chromium; on
+  Windows it is handed over as a GPU texture, so the page reaches the
+  compositor without a copy through system memory, and on Linux as its
+  pixels, which are copied up. Either way its transparency is real
+  transparency, not a black rectangle. Address, size and frame rate are set in the Properties dock.
   Whatever the page plays gets a channel in the audio mixer, like a media
   file's sound: it is recorded, and heard as well if you switch monitoring
   on. Select the source and the Preview's toolbar grows an **Interact**
@@ -216,7 +217,12 @@ cargo run --release
 ```
 
 Or install Ninja properly — `winget install Ninja-build.Ninja` — and it is on
-`PATH` for every shell. To skip all of it while working on something else:
+`PATH` for every shell.
+
+On Linux the default build fetches the same engine and builds nothing of it:
+the `cef` crate links against the library it downloaded, so there is no CMake
+or Ninja to install. The engine is put beside the executable, which finds it
+there. To skip all of it, on either platform, while working on something else:
 
 ```bash
 cargo run --release --no-default-features

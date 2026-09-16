@@ -54,11 +54,13 @@ hand-maintained second copy could fall out of step with them.
 
 ## The browser engine
 
-The Windows archive carries Chromium, through the Chromium Embedded
-Framework: `libcef.dll` and the data it reads — the resource and locale
-packs, the ICU table, the V8 snapshot, and the graphics libraries it falls
-back through. A Browser Source is what it is for, and the executable imports
-`libcef.dll` directly, so the archive does not start without it.
+Both archives carry Chromium, through the Chromium Embedded Framework:
+`libcef.dll` on Windows and `libcef.so` on Linux, and the data it reads — the
+resource and locale packs, the ICU table, the V8 snapshot, and the graphics
+libraries it falls back through. A Browser Source is what it is for, and the
+executable links the library directly, so the archive does not start without
+it. The Linux copy has its debug information stripped; nothing else about it
+is changed.
 
 CEF itself is BSD-3-Clause and Chromium is BSD-3-Clause with a long list of
 its own third-party components under their own permissive terms. The binary

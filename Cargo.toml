@@ -15,7 +15,7 @@ default = ["browser"]
 # `cef` fetches Chromium's binary distribution, a few hundred megabytes of
 # it, and copies the runtime beside the executable. Someone building only to
 # work on the compositor can turn that off with `--no-default-features`.
-# Windows only so far, so on every other platform this enables nothing.
+# Windows and Linux; on every other platform this enables nothing.
 browser = ["dep:cef"]
 
 [dependencies]
@@ -83,17 +83,24 @@ version = "0.2"
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"
 
-[target.'cfg(target_os = "windows")'.dependencies]
 # The browser engine a Browser Source draws with — Chromium, through CEF's C
 # API. Optional: see the `browser` feature above for what it costs to build.
 # The version tracks a CEF release rather than semver, so it is pinned to the
 # one whose shared-texture off-screen path this was written against.
+#
+# Linux as well as Windows. There the crate builds nothing — it links against
+# the libcef it fetched, where Windows compiles CEF's C++ wrapper with CMake
+# and Ninja — and a page is drawn on the CPU rather than handed over as a
+# texture: see `browser`.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 cef = { version = "152.3", optional = true, default-features = false, features = [
     # Puts libcef and its resources beside the executable, which is what a
     # build here has to run against and the first half of what a package
     # will carry.
     "resources",
 ] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dwm", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Performance", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
 windows-core = "0.62"
 

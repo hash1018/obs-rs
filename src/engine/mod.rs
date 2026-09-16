@@ -2505,7 +2505,13 @@ fn layer_for(
     // is colour already multiplied by its alpha. Blending it as though it
     // were not applies that alpha twice, and a half-transparent overlay comes
     // out dark — see `media_pp::elements::VideoLayer::premultiplied_alpha`.
-    layer.premultiplied_alpha = matches!(item.settings, SourceSettings::Browser(_));
+    //
+    // Windows only: the CUDA compositor has no such blend, so a Linux page
+    // has its alpha divided back out as its pixels are copied, and arrives
+    // straight — see `source::browser`. Saying otherwise here would be read
+    // the day the CUDA compositor learns the flag, and divide it twice.
+    layer.premultiplied_alpha =
+        cfg!(target_os = "windows") && matches!(item.settings, SourceSettings::Browser(_));
     layer
 }
 

@@ -338,9 +338,14 @@ impl Backend {
             }
             SourceKind::Text => source::text::open(&self.device, &self.compositor, item, layer)
                 .map(OpenOutcome::Open),
-            SourceKind::Browser => {
-                source::browser::open(&self.device, &self.compositor, item, layer)
-            }
+            SourceKind::Browser => source::browser::open(
+                &self.device,
+                &self.compositor,
+                mixer,
+                &self.meter_wake,
+                item,
+                layer,
+            ),
         }
     }
 }
