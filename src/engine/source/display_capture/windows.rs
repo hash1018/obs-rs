@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use media_pp::{
     elements::{CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder},
     ffmpeg,
-    graph::BranchId,
     pipeline::{ChainBuilder, DetachedBranch, Pipeline},
     rate::FrameRateHandle,
 };
@@ -27,7 +26,7 @@ use media_pp::elements::{D3d11VideoCompositorHandle, D3d11VideoCompositorInput, 
 
 use crate::domain::{DisplayCaptureTarget, SourceSettings};
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::shared::{Registry, Shared, SharedCapture};
+use crate::engine::source::shared::{Registry, Share, Shared, SharedCapture};
 use crate::engine::source::{FilledRack, OpenSource, filled_rack, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
@@ -52,7 +51,7 @@ impl CaptureRegistry {
         device: &ID3D11Device,
         fps: u32,
         finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
-    ) -> Result<(BranchId, [u32; 2]), BackendError> {
+    ) -> Result<(Share, [u32; 2]), BackendError> {
         self.open
             .attach(monitor, || open_capture(monitor, device, fps), finish)
     }
@@ -73,24 +72,24 @@ impl CaptureRegistry {
 impl SharedCapture for CaptureRegistry {
     /// Removes one item's branch, and the duplication itself once the last
     /// branch is gone.
-    fn detach(&self, monitor: &str, branch: BranchId) {
-        self.open.detach(monitor, branch);
+    fn detach(&self, monitor: &str, share: Share) {
+        self.open.detach(monitor, share);
     }
 
     /// Follows one item into or out of the Scene being shown.
-    fn set_showing(&self, monitor: &str, branch: BranchId, showing: bool) {
-        self.open.set_showing(monitor, branch, showing);
+    fn set_showing(&self, monitor: &str, share: Share, showing: bool) {
+        self.open.set_showing(monitor, share, showing);
     }
 
     /// What one item's branch of a duplication is doing, for the Stats dock.
-    fn stats(&self, monitor: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats> {
-        self.open.stats(monitor, branch)
+    fn stats(&self, monitor: &str, share: Share) -> Option<media_pp::stats::PipelineStats> {
+        self.open.stats(monitor, share)
     }
 
     /// A display is not something that ends: it is there for as long as it is
     /// plugged in, and a layout change is a reopen the item asks for rather
     /// than a capture stopping underneath it.
-    fn ended(&self, _monitor: &str) -> bool {
+    fn ended(&self, _monitor: &str, _share: Share) -> bool {
         false
     }
 }
@@ -179,7 +178,7 @@ pub(in crate::engine) fn open(
     // are its filters, which sit in that branch and key one item's picture
     // without touching another's.
     let mut kept = None;
-    let (branch, size) = captures.attach(monitor, device, fps, |builder, size| {
+    let (share, size) = captures.attach(monitor, device, fps, |builder, size| {
         let FilledRack { rack, filters } = filled_rack(
             &name,
             device,
@@ -199,7 +198,7 @@ pub(in crate::engine) fn open(
         source: RunningSource::Shared {
             capture: Arc::clone(captures) as Arc<dyn SharedCapture>,
             key: monitor.clone(),
-            branch,
+            share,
         },
         layer,
         name,

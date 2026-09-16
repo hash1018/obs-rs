@@ -18,6 +18,7 @@
 //! SceneItem, for the reasons the CUDA backend's `RunningSource` gives.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use media_pp::{
@@ -28,10 +29,48 @@ use media_pp::{
 
 use crate::engine::backend::BackendError;
 
+/// What [`Registry::attach`] answers when the capture ended before the item
+/// could join it — as it opened, most likely: a camera whose stream is bad
+/// from its first frame. Its own type so that the kind can tell it apart
+/// from a failure, and look again later rather than give up.
+#[derive(Debug)]
+pub(in crate::engine) struct CaptureEnded;
+
+impl std::fmt::Display for CaptureEnded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the capture behind this Source has stopped")
+    }
+}
+
+impl std::error::Error for CaptureEnded {}
+
+/// One item's share of a capture: which capture, and which branch of it.
+///
+/// The capture is named as well as the branch because a branch id is only
+/// unique within its own pipeline. A capture that ends by itself stays
+/// registered until every item drawing from it has let go, and a new one
+/// can be opened under the same key meanwhile — whose first branch may well
+/// have the id an item of the old one still holds. Measured on Linux: a
+/// camera whose stream went bad as it opened kept every later item of it on
+/// "the capture behind this Source has stopped" until obs-rs was restarted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine) struct Share {
+    capture: u64,
+    branch: BranchId,
+}
+
 /// One open capture, and what is currently drawing from it.
 pub(in crate::engine) struct Shared<E> {
+    /// Unique for the life of the process — see [`Share`].
+    id: u64,
     pipeline: Arc<Pipeline>,
     tee: TeeHandle,
+    /// Every branch attached and not yet detached.
+    ///
+    /// Counted here rather than asked of the `Tee`, which answers zero once
+    /// the capture has ended — while items drawing from it are still
+    /// registered, and have yet to be told.
+    branches: HashSet<BranchId>,
     /// What the capture actually opened at. Kept here rather than read per
     /// item because it is shared: every item drawing it is drawing the same
     /// picture, so they all correct their stored hint against one answer.
@@ -66,9 +105,12 @@ impl<E> Shared<E> {
         size: [u32; 2],
         extra: E,
     ) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             pipeline,
             tee,
+            branches: HashSet::new(),
             size,
             // Filled by whoever attaches the first branch, which finds the
             // pipeline already running and so has nothing to tell it.
@@ -105,12 +147,21 @@ impl<E> Shared<E> {
             self.running = running;
         }
     }
+
+    /// Whether another item can still join this capture: not once it has
+    /// ended, when its `Tee` is gone.
+    fn joinable(&self) -> bool {
+        self.tee.branch().is_some()
+    }
 }
 
 /// Every capture of one kind that is open, by whatever names its target —
 /// a display name, a camera's device link.
+///
+/// Several per key at times: the one new items join, last, and before it
+/// any that ended by themselves and still have items to be told.
 pub(in crate::engine) struct Registry<E> {
-    open: Mutex<HashMap<String, Shared<E>>>,
+    open: Mutex<HashMap<String, Vec<Shared<E>>>>,
 }
 
 impl<E> Default for Registry<E> {
@@ -137,49 +188,101 @@ impl<E> Registry<E> {
         key: &str,
         open: impl FnOnce() -> Result<Shared<E>, BackendError>,
         finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
-    ) -> Result<(BranchId, [u32; 2]), BackendError> {
+    ) -> Result<(Share, [u32; 2]), BackendError> {
         let mut captures = self.lock();
-        if !captures.contains_key(key) {
-            captures.insert(key.to_owned(), open()?);
+        let versions = captures.entry(key.to_owned()).or_default();
+        // A capture that has ended is left for its own items to leave, and a
+        // new one opened beside it.
+        let opened = !versions.last().is_some_and(Shared::joinable);
+        if opened {
+            match open() {
+                Ok(capture) => versions.push(capture),
+                Err(error) => {
+                    if versions.is_empty() {
+                        captures.remove(key);
+                    }
+                    return Err(error);
+                }
+            }
         }
-        let capture = captures
-            .get_mut(key)
-            .expect("the capture was just inserted if it was missing");
+        let versions = captures.get_mut(key).expect("filled above");
+        let capture = versions.last_mut().expect("filled above");
+        let attached = Self::attach_to(capture, finish);
+        // One this just opened and could not attach to has nobody to close
+        // it later.
+        if attached.is_err() && opened && capture.branches.is_empty() {
+            let capture = versions.pop().expect("the one just opened");
+            capture.pipeline.stop();
+            if versions.is_empty() {
+                captures.remove(key);
+            }
+        }
+        attached
+    }
 
+    fn attach_to(
+        capture: &mut Shared<E>,
+        finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
+    ) -> Result<(Share, [u32; 2]), BackendError> {
         // Every branch is attached at runtime, the first one included: a
         // branch handed to `TeeBuilder` is fixed and has no id, and this one
         // has to be removable when its item goes away.
-        let builder = capture
-            .tee
-            .branch()
-            .ok_or("the capture behind this Source has stopped")?;
+        let builder = capture.tee.branch().ok_or(CaptureEnded)?;
         let branch = finish(builder, capture.size)?;
-        let id = capture.tee.attach(branch)?;
+        let branch = capture
+            .tee
+            .attach(branch)
+            // The capture can end between the two calls — as it opens, most
+            // likely — and what the `Tee` says then names an element rather
+            // than the capture.
+            .map_err(|error| match capture.joinable() {
+                true => BackendError::from(error),
+                false => BackendError::from(CaptureEnded),
+            })?;
+        capture.branches.insert(branch);
         // A new item is added to the Scene being shown, but the capture may
         // have been paused by another Scene's item leaving it.
-        capture.show(id, true);
-        Ok((id, capture.size))
+        capture.show(branch, true);
+        Ok((
+            Share {
+                capture: capture.id,
+                branch,
+            },
+            capture.size,
+        ))
     }
 
-    /// Removes one item's branch, and the capture itself once the last branch
-    /// is gone.
-    pub(in crate::engine) fn detach(&self, key: &str, branch: BranchId) {
+    /// Removes one item's branch, and its capture once that capture's last
+    /// branch is gone.
+    pub(in crate::engine) fn detach(&self, key: &str, share: Share) {
         let mut captures = self.lock();
-        let Some(capture) = captures.get_mut(key) else {
+        let Some(versions) = captures.get_mut(key) else {
             return;
         };
-        if let Err(error) = capture.tee.detach(branch) {
+        let Some(at) = versions
+            .iter()
+            .position(|capture| capture.id == share.capture)
+        else {
+            return;
+        };
+        let capture = &mut versions[at];
+        // An ended capture has no `Tee` left to take the branch from.
+        if capture.joinable()
+            && let Err(error) = capture.tee.detach(share.branch)
+        {
             tracing::warn!("could not detach a capture branch: {error}");
         }
+        capture.branches.remove(&share.branch);
         // An item removed while shown was never hidden first, and would
         // otherwise keep the capture running for Scenes that are not.
-        capture.show(branch, false);
+        capture.show(share.branch, false);
         // Only once nothing draws from it: another SceneItem may still be
         // showing this capture.
-        if capture.tee.sink_count() == 0
-            && let Some(capture) = captures.remove(key)
-        {
-            capture.pipeline.stop();
+        if capture.branches.is_empty() {
+            versions.remove(at).pipeline.stop();
+            if versions.is_empty() {
+                captures.remove(key);
+            }
         }
     }
 
@@ -187,10 +290,8 @@ impl<E> Registry<E> {
     ///
     /// The capture keeps running while any item shows it, so this only
     /// reaches the pipeline at the transitions to and from none.
-    pub(in crate::engine) fn set_showing(&self, key: &str, branch: BranchId, showing: bool) {
-        if let Some(capture) = self.lock().get_mut(key) {
-            capture.show(branch, showing);
-        }
+    pub(in crate::engine) fn set_showing(&self, key: &str, share: Share, showing: bool) {
+        self.with_share(key, share, |capture| capture.show(share.branch, showing));
     }
 
     /// What one item's branch of a capture is doing, for the Stats dock.
@@ -203,26 +304,31 @@ impl<E> Registry<E> {
     pub(in crate::engine) fn stats(
         &self,
         key: &str,
-        branch: BranchId,
+        share: Share,
     ) -> Option<media_pp::stats::PipelineStats> {
         // The pipeline is taken out of the lock before it is read: a reading
         // takes the graph's own lock, and nothing about it needs this one.
-        let pipeline = Arc::clone(self.lock().get(key)?.pipeline());
+        let pipeline = self.with_share(key, share, |capture| Arc::clone(capture.pipeline()))?;
         let mut stats = pipeline.stats();
         stats
             .elements
-            .retain(|element| element.branch == Some(branch));
+            .retain(|element| element.branch == Some(share.branch));
         Some(stats)
     }
 
-    /// Asks one open capture something only its own kind knows how to ask.
-    /// `None` where there is no capture under that key.
-    pub(in crate::engine) fn with<R>(
+    /// Asks the capture behind one item's share something only its own kind
+    /// knows how to ask. `None` where that capture is no longer registered.
+    pub(in crate::engine) fn with_share<R>(
         &self,
         key: &str,
-        ask: impl FnOnce(&Shared<E>) -> R,
+        share: Share,
+        ask: impl FnOnce(&mut Shared<E>) -> R,
     ) -> Option<R> {
-        self.lock().get(key).map(ask)
+        self.lock()
+            .get_mut(key)?
+            .iter_mut()
+            .find(|capture| capture.id == share.capture)
+            .map(ask)
     }
 
     /// The same of every open capture of this kind.
@@ -230,12 +336,12 @@ impl<E> Registry<E> {
     /// Asked by the Windows display, for its rate handles; see `extra`.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(in crate::engine) fn each(&self, mut tell: impl FnMut(&Shared<E>)) {
-        for capture in self.lock().values() {
+        for capture in self.lock().values().flatten() {
             tell(capture);
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Shared<E>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<Shared<E>>>> {
         self.open
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -251,12 +357,130 @@ impl<E> Registry<E> {
 /// something that ends by itself, and a camera is.
 pub(in crate::engine) trait SharedCapture: Send + Sync {
     /// Lets this item's branch go, closing the capture with the last one.
-    fn detach(&self, key: &str, branch: BranchId);
+    fn detach(&self, key: &str, share: Share);
     /// Follows this item into or out of the Scene being shown.
-    fn set_showing(&self, key: &str, branch: BranchId, showing: bool);
+    fn set_showing(&self, key: &str, share: Share, showing: bool);
     /// What this item's branch alone did, for the Stats dock.
-    fn stats(&self, key: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats>;
-    /// Whether what is behind `key` has ended on its own — unplugged, or
-    /// taken by something else.
-    fn ended(&self, key: &str) -> bool;
+    fn stats(&self, key: &str, share: Share) -> Option<media_pp::stats::PipelineStats>;
+    /// Whether the capture behind this share has ended on its own —
+    /// unplugged, or taken by something else.
+    fn ended(&self, key: &str, share: Share) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::time::{Duration, Instant};
+
+    use media_pp::{
+        buffer::MediaBuffer,
+        elements::{AppSink, AppSource, AppSourceHandle, TeeBuilder},
+    };
+
+    use super::*;
+    use crate::engine::backend::pipeline_ended;
+
+    /// A capture that needs no device: pushed buffers into a `Tee`. The
+    /// handle is how a test ends it, the way an unplugged camera ends.
+    fn a_capture() -> (Shared<()>, AppSourceHandle) {
+        let (source, pusher) = AppSource::new("capture", 4);
+        let mut handle = None;
+        let pipeline = Pipeline::new("capture", source, |source, context| {
+            let (tee, tee_handle) = TeeBuilder::new("tee", context.clone()).build_dynamic()?;
+            let branch = context.branch().queue("capture", 2).to_branch(tee)?;
+            context.attach(source, 0, branch)?;
+            handle = Some(tee_handle);
+            Ok(())
+        })
+        .expect("wire the capture");
+        pipeline.run().expect("run the capture");
+        let tee = handle.expect("the wire closure ran");
+        (Shared::new(pipeline, tee, [16, 16], ()), pusher)
+    }
+
+    fn a_sink() -> impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError> {
+        |builder, _| Ok(builder.to(Box::new(AppSink::new("sink", |_: MediaBuffer| Ok(()))))?)
+    }
+
+    fn until(what: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if what() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    fn ended(registry: &Registry<()>, share: Share) -> Option<bool> {
+        registry.with_share("key", share, |capture| {
+            pipeline_ended(capture.pipeline()) && !capture.joinable()
+        })
+    }
+
+    /// A capture that ends while items still draw from it is not joined:
+    /// the next item opens a new one, the old items are still told theirs
+    /// ended, and letting them go leaves the new one alone — even though
+    /// its branches are numbered from the same start.
+    #[test]
+    fn an_item_after_its_capture_ended_opens_a_new_one() {
+        let registry = Registry::<()>::default();
+        let opened = AtomicUsize::new(0);
+        let pushers = Mutex::new(Vec::new());
+        let open = || {
+            opened.fetch_add(1, Ordering::SeqCst);
+            let (capture, pusher) = a_capture();
+            pushers.lock().unwrap().push(pusher);
+            Ok(capture)
+        };
+
+        let (first, _) = registry.attach("key", open, a_sink()).expect("open");
+        let (second, _) = registry.attach("key", open, a_sink()).expect("join");
+        assert_eq!(opened.load(Ordering::SeqCst), 1, "the second item joins");
+
+        pushers.lock().unwrap()[0]
+            .push(MediaBuffer::Eos)
+            .expect("end the capture");
+        assert!(
+            until(|| ended(&registry, first) == Some(true)),
+            "the capture ends"
+        );
+
+        let (third, _) = registry
+            .attach("key", open, a_sink())
+            .expect("a new item opens a new capture rather than failing");
+        assert_eq!(opened.load(Ordering::SeqCst), 2);
+        assert_eq!(ended(&registry, second), Some(true), "still told it ended");
+        assert_eq!(ended(&registry, third), Some(false));
+
+        registry.detach("key", first);
+        registry.detach("key", second);
+        assert_eq!(ended(&registry, first), None, "the ended capture is gone");
+        assert_eq!(
+            registry.with_share("key", third, |capture| capture.branches.len()),
+            Some(1),
+            "the new capture keeps its item"
+        );
+        registry.detach("key", third);
+        assert!(registry.lock().is_empty());
+    }
+
+    /// A capture opened for an item that then could not attach is closed
+    /// again, rather than left for every later item to find ended.
+    #[test]
+    fn a_capture_nobody_attached_to_is_not_kept() {
+        let registry = Registry::<()>::default();
+        let failed = registry.attach(
+            "key",
+            || Ok(a_capture().0),
+            |_, _| Err(BackendError::from("the rack would not build")),
+        );
+        assert!(failed.is_err());
+        assert!(registry.lock().is_empty());
+
+        let refused = registry.attach("key", || Err("not there".into()), a_sink());
+        assert!(refused.is_err());
+        assert!(registry.lock().is_empty());
+    }
 }

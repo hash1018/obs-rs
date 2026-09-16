@@ -26,14 +26,13 @@ use media_pp::elements::{
     MfCaptureOptions, MfCaptureSource, MfDevice, TeeBuilder, VideoLayer,
 };
 use media_pp::ffmpeg;
-use media_pp::graph::BranchId;
 use media_pp::pipeline::Pipeline;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
 use crate::engine::backend::pipeline_ended;
 use crate::engine::backend::{BackendError, RunningSource};
-use crate::engine::source::shared::{Registry, Shared, SharedCapture};
+use crate::engine::source::shared::{CaptureEnded, Registry, Share, Shared, SharedCapture};
 use crate::engine::source::{
     FilledRack, OpenOutcome, OpenSource, filled_rack, filters, input_name,
 };
@@ -57,25 +56,26 @@ pub(in crate::engine) struct CameraRegistry {
 }
 
 impl SharedCapture for CameraRegistry {
-    fn detach(&self, device: &str, branch: BranchId) {
-        self.open.detach(device, branch);
+    fn detach(&self, device: &str, share: Share) {
+        self.open.detach(device, share);
     }
 
-    fn set_showing(&self, device: &str, branch: BranchId, showing: bool) {
-        self.open.set_showing(device, branch, showing);
+    fn set_showing(&self, device: &str, share: Share, showing: bool) {
+        self.open.set_showing(device, share, showing);
     }
 
-    fn stats(&self, device: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats> {
-        self.open.stats(device, branch)
+    fn stats(&self, device: &str, share: Share) -> Option<media_pp::stats::PipelineStats> {
+        self.open.stats(device, share)
     }
 
     /// A camera is unplugged, or taken by a video call. Its pipeline ends,
     /// and every item drawing from it is put back to be opened again — the
-    /// first of them reopens the camera and the rest join it.
-    fn ended(&self, device: &str) -> bool {
+    /// first of them opens the camera anew and the rest join it.
+    fn ended(&self, device: &str, share: Share) -> bool {
         self.open
-            .with(device, |camera| pipeline_ended(camera.pipeline()))
-            .unwrap_or(false)
+            .with_share(device, share, |camera| pipeline_ended(camera.pipeline()))
+            // Gone from the registry is gone.
+            .unwrap_or(true)
     }
 }
 
@@ -128,11 +128,17 @@ pub(in crate::engine) fn open(
             Ok(builder.pipe(rack).to(sink)?)
         },
     );
-    let (branch, size) = match attached {
+    let (share, size) = match attached {
         Ok(attached) => attached,
         Err(error) => {
             return match unavailable {
                 Some(absent) => Ok(OpenOutcome::Absent(absent)),
+                // Opened, and gone again before this item could join: the
+                // same state as a camera unplugged while shown, looked for
+                // again the same way.
+                None if error.is::<CaptureEnded>() => Ok(OpenOutcome::Absent(
+                    "the camera stopped sending pictures".to_owned(),
+                )),
                 None => Err(error),
             };
         }
@@ -145,7 +151,7 @@ pub(in crate::engine) fn open(
         source: RunningSource::Shared {
             capture: Arc::clone(cameras) as Arc<dyn SharedCapture>,
             key: settings.device.clone(),
-            branch,
+            share,
         },
         layer,
         name,

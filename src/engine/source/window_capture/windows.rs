@@ -23,7 +23,6 @@ use media_pp::elements::{
     D3d11VideoCompositorHandle, D3d11VideoCompositorInput, TeeBuilder, VideoLayer,
     WgcCaptureOptions, WgcCaptureSource,
 };
-use media_pp::graph::BranchId;
 use media_pp::pipeline::Pipeline;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
@@ -31,7 +30,7 @@ use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 use crate::capture::WindowTarget;
 use crate::domain::{SourceSettings, WindowCaptureTarget};
 use crate::engine::backend::{BackendError, RunningSource, pipeline_ended};
-use crate::engine::source::shared::{Registry, Shared, SharedCapture};
+use crate::engine::source::shared::{Registry, Share, Shared, SharedCapture};
 use crate::engine::source::{
     FilledRack, OpenOutcome, OpenSource, filled_rack, filters, hinted_size, input_name,
 };
@@ -46,26 +45,27 @@ pub(in crate::engine) struct WindowRegistry {
 }
 
 impl SharedCapture for WindowRegistry {
-    fn detach(&self, window: &str, branch: BranchId) {
-        self.open.detach(window, branch);
+    fn detach(&self, window: &str, share: Share) {
+        self.open.detach(window, share);
     }
 
-    fn set_showing(&self, window: &str, branch: BranchId, showing: bool) {
-        self.open.set_showing(window, branch, showing);
+    fn set_showing(&self, window: &str, share: Share, showing: bool) {
+        self.open.set_showing(window, share, showing);
     }
 
-    fn stats(&self, window: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats> {
-        self.open.stats(window, branch)
+    fn stats(&self, window: &str, share: Share) -> Option<media_pp::stats::PipelineStats> {
+        self.open.stats(window, share)
     }
 
     /// A window is closed, and its capture ends with it. Every item showing
     /// it is then put back to be looked for again — see
     /// `status::notice_closed_windows` — and the first to find the window
     /// open again captures it for all of them.
-    fn ended(&self, window: &str) -> bool {
+    fn ended(&self, window: &str, share: Share) -> bool {
         self.open
-            .with(window, |capture| pipeline_ended(capture.pipeline()))
-            .unwrap_or(false)
+            .with_share(window, share, |capture| pipeline_ended(capture.pipeline()))
+            // Gone from the registry is gone.
+            .unwrap_or(true)
     }
 }
 
@@ -100,7 +100,7 @@ pub(in crate::engine) fn open(
     // whether two items are showing the same thing.
     let key = target.handle.to_string();
     let mut kept = None;
-    let (branch, _) = windows.open.attach(
+    let (share, _) = windows.open.attach(
         &key,
         || open_window(&target, device, fps),
         |builder, _| {
@@ -129,7 +129,7 @@ pub(in crate::engine) fn open(
         source: RunningSource::Shared {
             capture: Arc::clone(windows) as Arc<dyn SharedCapture>,
             key,
-            branch,
+            share,
         },
         layer,
         name,

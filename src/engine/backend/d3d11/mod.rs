@@ -38,11 +38,9 @@ use super::{BACKGROUND, BackendError};
 
 use crate::settings::RecordingEncoder;
 
-use media_pp::graph::BranchId;
-
 use crate::engine::preview::{PreviewRenderer, PreviewSurface, SharedTarget};
 use crate::engine::source::display_capture::{self, CaptureRegistry};
-use crate::engine::source::shared::SharedCapture;
+use crate::engine::source::shared::{Share, SharedCapture};
 use crate::engine::source::video_capture::CameraRegistry;
 use crate::engine::source::window_capture::WindowRegistry;
 
@@ -431,7 +429,7 @@ pub(in crate::engine) enum RunningSource {
     Shared {
         capture: Arc<dyn SharedCapture>,
         key: String,
-        branch: BranchId,
+        share: Share,
     },
 }
 
@@ -447,8 +445,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.stats(key, *branch),
+                share,
+            } => capture.stats(key, *share),
         }
     }
 
@@ -458,8 +456,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.set_showing(key, *branch, false),
+                share,
+            } => capture.set_showing(key, *share, false),
         }
     }
 
@@ -469,8 +467,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.set_showing(key, *branch, true),
+                share,
+            } => capture.set_showing(key, *share, true),
         }
     }
 
@@ -484,7 +482,11 @@ impl RunningSource {
             // Whether a shared capture ended is the registry's business, not
             // one item's: a display is not something that closes, and a
             // camera that is unplugged ends for everything drawing it.
-            Self::Shared { capture, key, .. } => capture.ended(key),
+            Self::Shared {
+                capture,
+                key,
+                share,
+            } => capture.ended(key, *share),
         }
     }
 
@@ -494,8 +496,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.detach(key, *branch),
+                share,
+            } => capture.detach(key, *share),
         }
     }
 }

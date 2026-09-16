@@ -27,9 +27,8 @@ use crate::engine::audio::MeterWake;
 use crate::settings::RecordingEncoder;
 use crate::snapshots::SceneItemSnapshot;
 
-use crate::engine::source::shared::SharedCapture;
+use crate::engine::source::shared::{Share, SharedCapture};
 use crate::engine::source::{self, OpenOutcome};
-use media_pp::graph::BranchId;
 
 use super::{BACKGROUND, BackendError};
 
@@ -408,7 +407,7 @@ pub(in crate::engine) enum RunningSource {
     Shared {
         capture: Arc<dyn SharedCapture>,
         key: String,
-        branch: BranchId,
+        share: Share,
     },
 }
 
@@ -421,8 +420,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.stats(key, *branch),
+                share,
+            } => capture.stats(key, *share),
         }
     }
 
@@ -432,8 +431,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.set_showing(key, *branch, false),
+                share,
+            } => capture.set_showing(key, *share, false),
         }
     }
 
@@ -443,8 +442,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.set_showing(key, *branch, true),
+                share,
+            } => capture.set_showing(key, *share, true),
         }
     }
 
@@ -456,7 +455,11 @@ impl RunningSource {
     pub(in crate::engine) fn ended(&self) -> bool {
         match self {
             Self::Owned(pipeline) => super::pipeline_ended(pipeline),
-            Self::Shared { capture, key, .. } => capture.ended(key),
+            Self::Shared {
+                capture,
+                key,
+                share,
+            } => capture.ended(key, *share),
         }
     }
 
@@ -466,8 +469,8 @@ impl RunningSource {
             Self::Shared {
                 capture,
                 key,
-                branch,
-            } => capture.detach(key, *branch),
+                share,
+            } => capture.detach(key, *share),
         }
     }
 }
