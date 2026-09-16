@@ -34,9 +34,6 @@ jobs:
       # `src/browser` for what it is and `README.md` for why a build here
       # wants CMake at all.
       CEF_PATH: C:\cef
-      # That build wants a generator, and the runner is not guaranteed to
-      # have Ninja on its PATH. Visual Studio is what it does have.
-      CMAKE_GENERATOR: Visual Studio 17 2022
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -55,6 +52,15 @@ jobs:
 
       - name: Set up FFmpeg
         uses: ./.github/actions/setup-ffmpeg
+
+      # `cef-dll-sys` builds CEF's C++ wrapper with CMake, and names Ninja as
+      # the generator in its own build script — so `CMAKE_GENERATOR` does not
+      # stand in for it and one has to be on PATH. Visual Studio ships a copy
+      # in a place nothing adds to PATH, so this installs one rather than
+      # guessing at that path.
+      - name: Set up Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
 
       # Downloaded crate sources only, not `target`: the build directory for
       # this dependency graph runs to several gigabytes of small files, and

@@ -22,9 +22,8 @@ jobs:
   windows:
     runs-on: windows-2025
     env:
-      # The same two the CI workflow sets, for the same reasons — see there.
+      # The same as the CI workflow, for the same reason — see there.
       CEF_PATH: C:\cef
-      CMAKE_GENERATOR: Visual Studio 17 2022
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -42,6 +41,11 @@ jobs:
       # vcpkg's default port plus openh264, and no GPL components.
       - name: Set up FFmpeg
         uses: ./.github/actions/setup-ffmpeg
+
+      # What builds CEF's C++ wrapper — see the CI workflow.
+      - name: Set up Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
 
       - name: Cache downloaded crates
         uses: actions/cache@v4

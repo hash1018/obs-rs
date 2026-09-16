@@ -192,10 +192,18 @@ On Linux, desktop capture also needs PipeWire development files.
 
 On Windows the default build also fetches the browser engine a Browser
 Source draws with — Chromium, through CEF — which is a few hundred megabytes
-downloaded once and built with CMake, so CMake and a generator it can drive
-have to be on the machine. Visual Studio's own Ninja is one; so is
-`CMAKE_GENERATOR="Visual Studio 17 2022"` in the environment. To skip all of
-it while working on something else:
+downloaded once, and builds CEF's C++ wrapper with CMake and **Ninja**. Ninja
+specifically: the `cef` crate names that generator itself, so `CMAKE_GENERATOR`
+in the environment does not stand in for it. Visual Studio ships one, and
+putting it on `PATH` for the build is enough:
+
+```powershell
+$env:PATH += ";C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
+cargo run --release
+```
+
+Or install Ninja properly — `winget install Ninja-build.Ninja` — and it is on
+`PATH` for every shell. To skip all of it while working on something else:
 
 ```bash
 cargo run --release --no-default-features
