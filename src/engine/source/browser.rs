@@ -48,10 +48,30 @@ fn settings(
     // A Source added and not yet pointed anywhere. Absent rather than an
     // error: it is the state every Browser Source starts in, and the Sources
     // dock is where the user is told to fill the address in.
-    if settings.url.trim().is_empty() {
+    let url = settings.url.trim();
+    if url.is_empty() {
         return Ok(Err("no address yet".to_owned()));
     }
+    if !is_address(url) {
+        return Ok(Err(format!(
+            "\"{url}\" is not an address — it needs a scheme, like https://"
+        )));
+    }
     Ok(Ok(settings))
+}
+
+/// Whether this is an address to hand a browser, rather than something it
+/// would go looking for.
+///
+/// A browser given `obs` or `hello` does what a browser does with what you
+/// type in its bar: it searches for it, and a Chromium asked for its search
+/// page has no picture to hand over off-screen — it puts a window on the
+/// screen instead, over whatever is being recorded. So a Source says it is
+/// not pointed anywhere rather than letting that happen, and a typo is a
+/// sentence in the Sources dock instead of a browser window nobody asked
+/// for.
+fn is_address(url: &str) -> bool {
+    url.contains("://") || url.starts_with("data:")
 }
 
 /// The page's size as the pipeline takes it: whole, even pixels.
@@ -194,5 +214,34 @@ pub(in crate::engine) fn open(
             "there is no browser engine on this platform yet".to_owned(),
         )),
         Err(absent) => Ok(OpenOutcome::Absent(absent)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_address;
+
+    /// What separates an address from a search term, which is what a browser
+    /// makes of anything else — and a Chromium asked for its search page puts
+    /// a window on the screen, over whatever is being recorded.
+    #[test]
+    fn an_address_is_one_with_a_scheme() {
+        for address in [
+            "https://example.com",
+            "http://192.168.0.2:8080/overlay?x=1",
+            "file:///C:/pages/alert.html",
+            "data:text/html,<b>hi</b>",
+        ] {
+            assert!(is_address(address), "{address} is an address");
+        }
+        for not in [
+            "hello",
+            "example.com",
+            "obs rs",
+            "/pages/alert.html",
+            r"C:p",
+        ] {
+            assert!(!is_address(not), "{not} is not an address");
+        }
     }
 }

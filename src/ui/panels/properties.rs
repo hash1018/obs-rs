@@ -335,58 +335,85 @@ fn show_browser(
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let mut committed: Option<SourceCommand> = None;
+    // What is in the fields while they are being used, which is not what the
+    // project holds until one is let go. Kept in egui's own memory, the way
+    // the scrub bar keeps the position being dragged: the project is the
+    // only other place it could live, and writing it there per keystroke is
+    // a browser started and killed once a character.
+    //
+    // Without it every keystroke is drawn once and replaced by the stored
+    // address on the next frame, which reads as a field that will not take
+    // typing at all.
+    let key = egui::Id::new(("browser-settings", item));
+    let held: Option<crate::domain::BrowserSourceSettings> = ui.data(|data| data.get_temp(key));
+    let mut edited = held.unwrap_or_else(|| stored.clone());
+    let mut finished = false;
 
     ui.label(i18n.text(TextKey::PropertiesUrl));
-    let mut url = stored.url.clone();
     let field = ui.add(
-        egui::TextEdit::singleline(&mut url)
+        egui::TextEdit::singleline(&mut edited.url)
             .desired_width(f32::INFINITY)
             .hint_text(i18n.text(TextKey::PropertiesUrlHint)),
     );
     // On letting go rather than per keystroke: a half-typed address is a page
-    // that will not load, and reopening the browser for each character of one
-    // is a browser started and killed a dozen times.
-    if field.lost_focus() && url != stored.url {
-        committed = Some(SourceCommand::SetBrowserUrl(item, url));
-    }
+    // that will not load.
+    finished |= field.lost_focus();
     ui.end_row();
 
     ui.label(i18n.text(TextKey::PropertiesPageSize));
-    let mut size = stored.size;
     // Let go, as the Transform fields above are — a drag through a hundred
     // widths would be a hundred browsers otherwise.
-    let released = ui
+    finished |= ui
         .horizontal(|ui| {
             let mut released = false;
-            for side in &mut size {
+            for side in &mut edited.size {
                 let field = ui.add(egui::DragValue::new(side).range(16..=7680).speed(8));
                 released |= field.drag_stopped() || field.lost_focus();
             }
             released
         })
         .inner;
-    if released && size != stored.size {
-        committed = Some(SourceCommand::SetBrowserSize(item, size));
-    }
     ui.end_row();
 
     ui.label(i18n.text(TextKey::PropertiesFrameRate));
-    let mut fps = stored.fps;
     let field = ui.add(
-        egui::DragValue::new(&mut fps)
+        egui::DragValue::new(&mut edited.fps)
             .range(1..=crate::domain::MAX_BROWSER_FPS)
             .suffix(" fps"),
     );
-    if (field.drag_stopped() || field.lost_focus()) && fps != stored.fps {
-        committed = Some(SourceCommand::SetBrowserFps(item, fps));
-    }
+    finished |= field.drag_stopped() || field.lost_focus();
     ui.end_row();
 
-    if let Some(command) = committed {
-        actions.push(UiAction::Project(ProjectCommand::Source(command)));
-        actions.push(UiAction::ReopenSource(item));
+    if !finished {
+        if edited != *stored {
+            ui.data_mut(|data| data.insert_temp(key, edited));
+        }
+        return;
     }
+
+    // Let go: what differs from the project is an edit, and each one is a new
+    // browser — so the Source is reopened once, however many fields were
+    // touched between taking hold of the first and letting go of the last.
+    ui.data_mut(|data| data.remove_temp::<crate::domain::BrowserSourceSettings>(key));
+    let mut commands = Vec::new();
+    if edited.url != stored.url {
+        commands.push(SourceCommand::SetBrowserUrl(item, edited.url.clone()));
+    }
+    if edited.size != stored.size {
+        commands.push(SourceCommand::SetBrowserSize(item, edited.size));
+    }
+    if edited.fps != stored.fps {
+        commands.push(SourceCommand::SetBrowserFps(item, edited.fps));
+    }
+    if commands.is_empty() {
+        return;
+    }
+    actions.extend(
+        commands
+            .into_iter()
+            .map(|command| UiAction::Project(ProjectCommand::Source(command))),
+    );
+    actions.push(UiAction::ReopenSource(item));
 }
 
 /// Where the file has reached, and the two things that can be done about it.
