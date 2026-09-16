@@ -840,6 +840,11 @@ impl ObsApp {
                     engine.reopen_source(item_id);
                 }
             }
+            UiAction::RefreshPage(item_id) => {
+                if let Some(engine) = &self.engine {
+                    engine.refresh_page(item_id);
+                }
+            }
             UiAction::StartRecording => {
                 if let Some(engine) = &self.engine {
                     engine.start_recording();

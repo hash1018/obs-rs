@@ -63,7 +63,10 @@ bottom.](docs/screenshot.png)
   source around. A page nothing is showing stops drawing but stays where it
   was, so it comes back as it was; **Shut down when hidden** gives that up
   and closes the browser instead, for a heavy page in a Scene you are rarely
-  on.
+  on. **Refresh** loads the page again there and then, ignoring whatever was
+  cached for it — what an overlay you have just edited on disk needs — and
+  **Refresh when shown** does that every time the source comes back into
+  view.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an

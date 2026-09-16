@@ -165,7 +165,8 @@ impl SourceStore {
                 browser_source_settings.gain_db AS browser_gain_db,
                 browser_source_settings.muted AS browser_muted,
                 browser_source_settings.monitored AS browser_monitored,
-                browser_source_settings.shut_down_when_hidden AS browser_shut_down
+                browser_source_settings.shut_down_when_hidden AS browser_shut_down,
+                browser_source_settings.refresh_when_shown AS browser_refresh
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -286,6 +287,7 @@ impl SourceStore {
                         muted: row.get("browser_muted")?,
                         monitored: row.get("browser_monitored")?,
                         shut_down_when_hidden: row.get("browser_shut_down")?,
+                        refresh_when_shown: row.get("browser_refresh")?,
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -629,6 +631,15 @@ impl SourceStore {
             "shut_down_when_hidden",
             shut_down,
         )
+    }
+
+    /// Whether coming back into view loads the page again.
+    pub(crate) fn set_browser_refresh_when_shown(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        refresh: bool,
+    ) -> PersistenceResult<()> {
+        set_browser_column(transaction, scene_item_id, "refresh_when_shown", refresh)
     }
 
     /// The rate the page is redrawn at, at most.
@@ -1861,7 +1872,8 @@ mod tests {
                 SourceStore::set_browser_url(transaction, item_id, "https://example.com/overlay")?;
                 SourceStore::set_browser_size(transaction, item_id, [1920, 1080])?;
                 SourceStore::set_browser_fps(transaction, item_id, 60)?;
-                SourceStore::set_browser_shut_down_when_hidden(transaction, item_id, true)
+                SourceStore::set_browser_shut_down_when_hidden(transaction, item_id, true)?;
+                SourceStore::set_browser_refresh_when_shown(transaction, item_id, true)
             })
             .unwrap();
 
@@ -1872,6 +1884,7 @@ mod tests {
                 size: [1920, 1080],
                 fps: 60,
                 shut_down_when_hidden: true,
+                refresh_when_shown: true,
                 ..Default::default()
             })
         );

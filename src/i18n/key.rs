@@ -169,6 +169,8 @@ text_keys! {
     PropertiesPageSize            => "properties-page-size";
     PropertiesFrameRate           => "properties-frame-rate";
     PropertiesPageShutdown        => "properties-page-shutdown";
+    PropertiesPageRefreshWhenShown => "properties-page-refresh-when-shown";
+    PropertiesPageRefresh         => "properties-page-refresh";
     PropertiesTransport           => "properties-transport";
     PropertiesReconnect           => "properties-reconnect";
     PropertiesReconnectOff        => "properties-reconnect-off";

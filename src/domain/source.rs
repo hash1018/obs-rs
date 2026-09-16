@@ -444,6 +444,14 @@ pub struct BrowserSourceSettings {
     /// asked for a second time. Worth turning on for a heavy page in a Scene
     /// that is rarely shown, which is the case it exists for.
     pub shut_down_when_hidden: bool,
+    /// Whether the page is loaded again each time the Source comes back into
+    /// view.
+    ///
+    /// Off to begin with. For a page that is only right when it has just
+    /// been fetched — a scoreboard, a queue — where a Scene is switched to
+    /// in order to look at it; anything else it would only make flash
+    /// through being blank.
+    pub refresh_when_shown: bool,
 }
 
 impl Default for BrowserSourceSettings {
@@ -456,6 +464,7 @@ impl Default for BrowserSourceSettings {
             muted: false,
             monitored: false,
             shut_down_when_hidden: false,
+            refresh_when_shown: false,
         }
     }
 }

@@ -117,6 +117,9 @@ pub enum UiAction {
     /// the portal's window picker on screen, which is why nothing does it
     /// without being asked.
     ReopenSource(SceneItemId),
+    /// Load a Browser Source's page again, ignoring what was cached for it.
+    /// Not a reopen: the same browser fetches its address a second time.
+    RefreshPage(SceneItemId),
     /// Show the Settings dialog, seeded from what is currently set.
     OpenSettings,
     /// The same, on the Hotkeys page.

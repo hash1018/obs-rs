@@ -205,6 +205,9 @@ fn handle_source_command(
         SourceCommand::SetBrowserShutDownWhenHidden(item_id, shut_down) => {
             SourceStore::set_browser_shut_down_when_hidden(transaction, item_id, shut_down)
         }
+        SourceCommand::SetBrowserRefreshWhenShown(item_id, refresh) => {
+            SourceStore::set_browser_refresh_when_shown(transaction, item_id, refresh)
+        }
         SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
         SourceCommand::SetTextFont(item_id, font) => {
             SourceStore::set_text_font(transaction, item_id, font.as_deref())

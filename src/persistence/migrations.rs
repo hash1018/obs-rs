@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 29;
+const SCHEMA_VERSION: i64 = 30;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -600,6 +600,17 @@ fn migrate(
                 CHECK (shut_down_when_hidden IN (0, 1));
 
             PRAGMA user_version = 29;",
+        )?;
+    }
+    if step(30) {
+        // Whether coming back into view loads the page again. Off for every
+        // row there is, which is what they have been doing.
+        transaction.execute_batch(
+            "ALTER TABLE browser_source_settings
+                ADD COLUMN refresh_when_shown INTEGER NOT NULL DEFAULT 0
+                CHECK (refresh_when_shown IN (0, 1));
+
+            PRAGMA user_version = 30;",
         )?;
     }
     transaction.commit()?;

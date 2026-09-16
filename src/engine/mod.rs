@@ -93,6 +93,8 @@ enum EngineCommand {
     /// Something done to a Browser Source's page — see
     /// `EngineManager::send_page_input`.
     PageInput(SceneItemId, crate::browser::PageInput),
+    /// Load this item's page again — see `EngineManager::refresh_page`.
+    RefreshPage(SceneItemId),
     /// One Source has finished opening, however it came out. Sent by the
     /// opener thread rather than by the UI — see [`SourceOpener`].
     Opened(Box<Opened>),
@@ -872,6 +874,15 @@ impl EngineManager {
     /// closed is an event nobody applies.
     pub fn send_page_input(&self, item: SceneItemId, input: crate::browser::PageInput) {
         let _ = self.commands.send(EngineCommand::PageInput(item, input));
+    }
+
+    /// Loads a Browser Source's page again, ignoring what was cached.
+    ///
+    /// Not a reopen: the Source, its pipeline and its mixer channel stay as
+    /// they are and the same browser fetches its address a second time. What
+    /// the button in the Properties dock does.
+    pub fn refresh_page(&self, item: SceneItemId) {
+        let _ = self.commands.send(EngineCommand::RefreshPage(item));
     }
 }
 
@@ -1678,6 +1689,14 @@ fn apply_command(
             }
             false
         }
+        EngineCommand::RefreshPage(item_id) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id)
+                && let Some(page) = &source.page
+            {
+                page.refresh();
+            }
+            false
+        }
         EngineCommand::Drawing(item_id, strokes) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
                 push_content(source, PushedContent::Drawing(strokes));
@@ -2426,6 +2445,7 @@ fn reconcile(
                 item.map(|item| &item.settings)
             {
                 page.set_shut_down_when_hidden(settings.shut_down_when_hidden);
+                page.set_refresh_when_shown(settings.refresh_when_shown);
             }
             page.set_shown(running && item.is_some_and(|item| item.visible));
         }

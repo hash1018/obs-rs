@@ -96,6 +96,8 @@ pub(in crate::engine) struct OpenPage {
     /// Whether being hidden closes the browser rather than pausing its
     /// drawing.
     shut_down_when_hidden: bool,
+    /// Whether being shown again loads the page a second time.
+    refresh_when_shown: bool,
     /// Whether a failure to open the page again has already been said. The
     /// browser engine stopping would otherwise be a line every frame.
     complained: bool,
@@ -109,6 +111,7 @@ impl OpenPage {
             name,
             shown: true,
             shut_down_when_hidden: false,
+            refresh_when_shown: false,
             complained: false,
         }
     }
@@ -124,9 +127,37 @@ impl OpenPage {
     /// A page that is not kept is closed, and opened again when this turns
     /// back on — see [`Self::set_shut_down_when_hidden`].
     pub(in crate::engine) fn set_shown(&mut self, shown: bool) {
-        if shown != self.shown {
-            self.shown = shown;
-            self.apply();
+        if shown == self.shown {
+            return;
+        }
+        self.shown = shown;
+        // A page that was shut down is about to be opened, which loads it
+        // from its address anyway — so this is only for one that was kept.
+        let kept = self.page.is_some();
+        self.apply();
+        if shown && kept && self.refresh_when_shown {
+            self.refresh();
+        }
+    }
+
+    /// Whether coming back into view loads the page again.
+    ///
+    /// For a page that is only right when it has just been fetched — a
+    /// scoreboard, a queue, anything a Scene is switched to in order to look
+    /// at. Off by default: a page that was already correct is one that
+    /// flashes through being blank for no reason.
+    pub(in crate::engine) fn set_refresh_when_shown(&mut self, refresh: bool) {
+        self.refresh_when_shown = refresh;
+    }
+
+    /// Loads the page again now, ignoring what was cached for it.
+    ///
+    /// Nothing for a page that has been shut down: there is no browser to
+    /// tell, and the one opened when the Source is shown again fetches the
+    /// address itself.
+    pub(in crate::engine) fn refresh(&self) {
+        if let Some(page) = &self.page {
+            page.reload();
         }
     }
 
@@ -448,6 +479,7 @@ pub(in crate::engine) fn open(
     // Told here as well as in the engine loop: a Source whose item is hidden
     // is closed on the next pass rather than kept open until something moves.
     page.set_shut_down_when_hidden(settings.shut_down_when_hidden);
+    page.set_refresh_when_shown(settings.refresh_when_shown);
 
     Ok(OpenOutcome::Open(OpenSource {
         // Named for the file it was written for; what a page shares with one

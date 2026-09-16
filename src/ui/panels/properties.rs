@@ -347,9 +347,10 @@ fn show_browser(
     let key = egui::Id::new(("browser-settings", item));
     let held: Option<crate::domain::BrowserSourceSettings> = ui.data(|data| data.get_temp(key));
     let mut edited = held.unwrap_or_else(|| stored.clone());
-    // Not one of the three below: the checkbox at the end writes straight
-    // through, so what the buffer holds for it is never the question.
+    // Not one of the three below: the switches at the end write straight
+    // through, so what the buffer holds for them is never the question.
     edited.shut_down_when_hidden = stored.shut_down_when_hidden;
+    edited.refresh_when_shown = stored.refresh_when_shown;
     let mut finished = false;
 
     ui.label(i18n.text(TextKey::PropertiesUrl));
@@ -387,15 +388,35 @@ fn show_browser(
     finished |= field.drag_stopped() || field.lost_focus();
     ui.end_row();
 
-    // Written the moment it is clicked, and it reopens nothing: a checkbox
-    // has no gesture to wait out, and the running Source is told through the
-    // page it is already holding.
+    // Written the moment they are clicked, and they reopen nothing: a
+    // checkbox has no gesture to wait out, and the running Source is told
+    // through the page it is already holding.
     ui.label(i18n.text(TextKey::PropertiesPageShutdown));
     let mut shut_down = stored.shut_down_when_hidden;
     if ui.checkbox(&mut shut_down, "").changed() {
         actions.push(UiAction::Project(ProjectCommand::Source(
             SourceCommand::SetBrowserShutDownWhenHidden(item, shut_down),
         )));
+    }
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesPageRefreshWhenShown));
+    let mut refresh_when_shown = stored.refresh_when_shown;
+    if ui.checkbox(&mut refresh_when_shown, "").changed() {
+        actions.push(UiAction::Project(ProjectCommand::Source(
+            SourceCommand::SetBrowserRefreshWhenShown(item, refresh_when_shown),
+        )));
+    }
+    ui.end_row();
+
+    // Nothing to write: this asks the page to fetch its address again, which
+    // is a thing done rather than a thing set.
+    ui.label("");
+    if ui
+        .button(i18n.text(TextKey::PropertiesPageRefresh))
+        .clicked()
+    {
+        actions.push(UiAction::RefreshPage(item));
     }
     ui.end_row();
 

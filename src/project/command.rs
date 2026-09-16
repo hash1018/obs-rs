@@ -208,6 +208,9 @@ pub enum SourceCommand {
     /// running Source is told, and acts on it the next time it is hidden or
     /// shown.
     SetBrowserShutDownWhenHidden(SceneItemId, bool),
+    /// Whether coming back into view loads the page again. Told to the
+    /// running Source the same way, and acted on the next time it is shown.
+    SetBrowserRefreshWhenShown(SceneItemId, bool),
     /// The font file to draw with, or `None` for this application's own.
     SetTextFont(SceneItemId, Option<std::path::PathBuf>),
     SetTextFontSize(SceneItemId, f32),

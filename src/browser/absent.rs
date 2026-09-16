@@ -34,6 +34,11 @@ impl Page {
     pub fn send(&self, _input: PageInput) {
         match *self {}
     }
+
+    /// Unreachable: there is no page here to load again.
+    pub fn reload(&self) {
+        match *self {}
+    }
 }
 
 /// Always the reason there is no page, which a Browser Source then shows as

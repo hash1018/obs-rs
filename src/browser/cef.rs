@@ -411,6 +411,18 @@ impl Page {
         }
     }
 
+    /// Loads the page again, ignoring anything cached for it.
+    ///
+    /// What a Source needs when the page behind it has changed and the
+    /// browser has no way of knowing: an overlay edited on disk, a widget
+    /// whose script was replaced. Nothing here is torn down — it is the same
+    /// browser, told to fetch its address again.
+    pub fn reload(&self) {
+        if let Some(commands) = COMMANDS.get() {
+            let _ = commands.send(Command::Reload(self.id));
+        }
+    }
+
     /// Does something to the page — a click, a wheel, a key.
     ///
     /// Queued for the runtime thread rather than done here, because every
@@ -497,6 +509,9 @@ enum Command {
     /// Whether the page is being shown, which decides whether it is drawn
     /// at all — see [`Page::set_shown`].
     Shown(PageId, bool),
+    /// The page again, from its address rather than from what it has in
+    /// hand — see [`Page::reload`].
+    Reload(PageId),
     /// Something done to the page — see [`Page::send`].
     Input(PageId, PageInput),
     Close(PageId),
@@ -766,6 +781,14 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
                 && let Some(host) = browser.host()
             {
                 host.was_hidden(i32::from(!shown));
+            }
+        }
+        Command::Reload(id) => {
+            if let Some(browser) = open.get(&id) {
+                // Ignoring the cache, which is what makes this worth a
+                // button: a page reloaded from its cache is the overlay you
+                // just edited showing you yesterday's copy of itself.
+                browser.reload_ignore_cache();
             }
         }
         Command::Input(id, input) => {
