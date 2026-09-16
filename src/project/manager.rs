@@ -189,6 +189,19 @@ fn handle_source_command(
             SourceStore::add_text(transaction, scene_id)?;
             Ok(())
         }
+        SourceCommand::AddBrowser(scene_id) => {
+            SourceStore::add_browser(transaction, scene_id)?;
+            Ok(())
+        }
+        SourceCommand::SetBrowserUrl(item_id, url) => {
+            SourceStore::set_browser_url(transaction, item_id, &url)
+        }
+        SourceCommand::SetBrowserSize(item_id, size) => {
+            SourceStore::set_browser_size(transaction, item_id, size)
+        }
+        SourceCommand::SetBrowserFps(item_id, fps) => {
+            SourceStore::set_browser_fps(transaction, item_id, fps)
+        }
         SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
         SourceCommand::SetTextFont(item_id, font) => {
             SourceStore::set_text_font(transaction, item_id, font.as_deref())

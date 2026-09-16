@@ -165,6 +165,9 @@ text_keys! {
     PropertiesCameraMode          => "properties-camera-mode";
     PropertiesCameraModeAutomatic => "properties-camera-mode-automatic";
     PropertiesUrl                 => "properties-url";
+    PropertiesUrlHint             => "properties-url-hint";
+    PropertiesPageSize            => "properties-page-size";
+    PropertiesFrameRate           => "properties-frame-rate";
     PropertiesTransport           => "properties-transport";
     PropertiesReconnect           => "properties-reconnect";
     PropertiesReconnectOff        => "properties-reconnect-off";
@@ -352,6 +355,7 @@ text_keys! {
     SourceKindRtsp                => "source-kind-rtsp";
     SourceKindVideoCapture        => "source-kind-video-capture";
     SourceKindImage               => "source-kind-image";
+    SourceKindBrowser             => "source-kind-browser";
     ActionAdd                     => "action-add";
     ActionCancel                  => "action-cancel";
     ActionBack                    => "action-back";

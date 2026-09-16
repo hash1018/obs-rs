@@ -49,6 +49,11 @@ bottom.](docs/screenshot.png)
   back and tried again on its own, at an interval you choose, or left alone
   entirely if you turn that off. TCP or UDP, because no one transport gets
   through every network.
+- **Browser.** A web page as a source, on Windows: an overlay, an alert box,
+  a chat window. It is rendered off-screen by Chromium and handed over as a
+  GPU texture, so the page reaches the compositor without a copy through
+  system memory — and its transparency is real transparency, not a black
+  rectangle. Address, size and frame rate are set in the Properties dock.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an
@@ -209,8 +214,9 @@ you try it:
 
 - **No streaming.** There is no RTMP output, so nothing goes to Twitch or
   YouTube yet. Recording is the whole of it.
-- **Eight source kinds.** Display Capture, Window Capture, Video Capture,
-  Media File, Network Stream, Image, Drawing and Color.
+- **Ten source kinds.** Display Capture, Window Capture, Video Capture,
+  Media File, Network Stream, Image, Drawing, Color, Text and Browser
+  (Windows only, so far).
 - **No filters or transitions.** Switching Scenes is a cut.
 
 ## Contributing

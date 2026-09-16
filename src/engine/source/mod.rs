@@ -10,6 +10,7 @@
 //! [`display_capture`](super) is the exception this does not cover yet: it is
 //! two genuinely unlike implementations and keeps its own directory.
 
+pub(in crate::engine) mod browser;
 pub(in crate::engine) mod color;
 pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
@@ -247,6 +248,14 @@ pub(in crate::engine) struct OpenSource {
     pub(in crate::engine) pushed: Option<PushedSurface>,
     /// Set for a media file Source — see [`MediaFile`].
     pub(in crate::engine) media_file: Option<MediaFile>,
+    /// The page a Browser Source is showing, and `None` for every other
+    /// kind.
+    ///
+    /// Never read, and not dead: what it does it does on the way out. A
+    /// page closes its browser when it is dropped, so this is what keeps
+    /// one rendering only for as long as the Source that asked for it.
+    #[allow(dead_code)]
+    pub(in crate::engine) page: Option<crate::browser::Page>,
     /// The Source's filters as they are running, in chain order, each with
     /// the handle that reaches it.
     ///

@@ -25,7 +25,12 @@ use super::toolbar::{self, ToolIcon};
 const SOURCE_ROW_HEIGHT: f32 = 28.0;
 const ICON_WIDTH: f32 = 22.0;
 const LIST_ROW_HEIGHT: f32 = 26.0;
-const SOURCE_KIND_LIST_HEIGHT: f32 = 199.0;
+/// The Add Source list, sized by what is in it.
+///
+/// Derived rather than a number, because it was a number: one row per kind
+/// and nine of them, until a tenth arrived and the list drew its last two on
+/// top of each other.
+const SOURCE_KIND_LIST_HEIGHT: f32 = SourceKind::ALL.len() as f32 * LIST_ROW_HEIGHT;
 
 /// What the file picker offers before "all files".
 ///
@@ -732,6 +737,7 @@ fn source_kind_key(kind: SourceKind) -> TextKey {
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
         SourceKind::Text => TextKey::SourceKindText,
+        SourceKind::Browser => TextKey::SourceKindBrowser,
     }
 }
 
@@ -872,6 +878,17 @@ fn show_add_dialog(
                 if let Some(scene_id) = snapshot.scene_id {
                     actions.push(UiAction::Project(ProjectCommand::Source(
                         SourceCommand::AddText(scene_id),
+                    )));
+                    state.select_new_item = true;
+                }
+            }
+            // Added before it has an address, and pointed somewhere from the
+            // Properties dock — which is where its size and rate are too, so
+            // a dialog here would only ask the first of three questions.
+            SourceKind::Browser => {
+                if let Some(scene_id) = snapshot.scene_id {
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::AddBrowser(scene_id),
                     )));
                     state.select_new_item = true;
                 }

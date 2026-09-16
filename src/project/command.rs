@@ -51,6 +51,7 @@ pub enum SourceCommand {
     AddColor(SceneId),
     AddDrawing(SceneId),
     AddText(SceneId),
+    AddBrowser(SceneId),
     AddDisplayCapture {
         scene_id: SceneId,
         settings: DisplayCaptureSettings,
@@ -193,6 +194,15 @@ pub enum SourceCommand {
     /// each one meanwhile through `UiAction::DragSourceText`, which is the
     /// same two-part split a Color Source's picker makes.
     SetText(SceneItemId, String),
+    /// Where a Browser Source's page comes from. Recorded when the field is
+    /// let go, as a Text Source's own is, and the Source is reopened after
+    /// it: a page is loaded once, when the browser is created.
+    SetBrowserUrl(SceneItemId, String),
+    /// The size the page is rendered at, which it is told rather than asked
+    /// — so this too reopens the Source.
+    SetBrowserSize(SceneItemId, [u32; 2]),
+    /// The rate the page is redrawn at, at most.
+    SetBrowserFps(SceneItemId, u32),
     /// The font file to draw with, or `None` for this application's own.
     SetTextFont(SceneItemId, Option<std::path::PathBuf>),
     SetTextFontSize(SceneItemId, f32),

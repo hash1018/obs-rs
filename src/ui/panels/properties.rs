@@ -317,6 +317,75 @@ fn show_settings(
             i18n.text(TextKey::PropertiesFile).as_ref(),
             &settings.path.display().to_string(),
         ),
+        SourceSettings::Browser(settings) => show_browser(ui, item.id, settings, i18n, actions),
+    }
+}
+
+/// A Browser Source's three settings, all of which reopen it.
+///
+/// A page is loaded once, when the browser is created, and told its size and
+/// its rate at the same moment. So every one of these is a new browser rather
+/// than something to apply to the running one — which is why each is
+/// committed when the control is let go, not while it is being dragged or
+/// typed into.
+fn show_browser(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: &crate::domain::BrowserSourceSettings,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let mut committed: Option<SourceCommand> = None;
+
+    ui.label(i18n.text(TextKey::PropertiesUrl));
+    let mut url = stored.url.clone();
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut url)
+            .desired_width(f32::INFINITY)
+            .hint_text(i18n.text(TextKey::PropertiesUrlHint)),
+    );
+    // On letting go rather than per keystroke: a half-typed address is a page
+    // that will not load, and reopening the browser for each character of one
+    // is a browser started and killed a dozen times.
+    if field.lost_focus() && url != stored.url {
+        committed = Some(SourceCommand::SetBrowserUrl(item, url));
+    }
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesPageSize));
+    let mut size = stored.size;
+    // Let go, as the Transform fields above are — a drag through a hundred
+    // widths would be a hundred browsers otherwise.
+    let released = ui
+        .horizontal(|ui| {
+            let mut released = false;
+            for side in &mut size {
+                let field = ui.add(egui::DragValue::new(side).range(16..=7680).speed(8));
+                released |= field.drag_stopped() || field.lost_focus();
+            }
+            released
+        })
+        .inner;
+    if released && size != stored.size {
+        committed = Some(SourceCommand::SetBrowserSize(item, size));
+    }
+    ui.end_row();
+
+    ui.label(i18n.text(TextKey::PropertiesFrameRate));
+    let mut fps = stored.fps;
+    let field = ui.add(
+        egui::DragValue::new(&mut fps)
+            .range(1..=crate::domain::MAX_BROWSER_FPS)
+            .suffix(" fps"),
+    );
+    if (field.drag_stopped() || field.lost_focus()) && fps != stored.fps {
+        committed = Some(SourceCommand::SetBrowserFps(item, fps));
+    }
+    ui.end_row();
+
+    if let Some(command) = committed {
+        actions.push(UiAction::Project(ProjectCommand::Source(command)));
+        actions.push(UiAction::ReopenSource(item));
     }
 }
 
@@ -1183,6 +1252,7 @@ fn kind_key(kind: SourceKind) -> TextKey {
         SourceKind::Color => TextKey::SourceKindColor,
         SourceKind::Drawing => TextKey::SourceKindDrawing,
         SourceKind::Text => TextKey::SourceKindText,
+        SourceKind::Browser => TextKey::SourceKindBrowser,
     }
 }
 

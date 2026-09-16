@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 26;
+const SCHEMA_VERSION: i64 = 27;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -548,6 +548,28 @@ fn migrate(
             );
 
             PRAGMA user_version = 26;",
+        )?;
+    }
+    if step(27) {
+        // A web page as a Source. Its size is its own rather than something
+        // a device answers with, so the columns are `NOT NULL` where a
+        // capture's are a nullable hint — and they are what the page is told
+        // to render at, which is why changing one reopens the Source.
+        //
+        // The address is not checked here. An empty one is a Source that has
+        // not been pointed anywhere yet, which is what a new one is, and
+        // whether the rest is a URL a browser will accept is the browser's
+        // answer to give rather than a constraint's.
+        transaction.execute_batch(
+            "CREATE TABLE browser_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                url       TEXT NOT NULL,
+                width     INTEGER NOT NULL CHECK (width > 0),
+                height    INTEGER NOT NULL CHECK (height > 0),
+                fps       INTEGER NOT NULL CHECK (fps BETWEEN 1 AND 60)
+            );
+
+            PRAGMA user_version = 27;",
         )?;
     }
     transaction.commit()?;

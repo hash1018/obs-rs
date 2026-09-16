@@ -328,6 +328,9 @@ impl Backend {
                 source::text::open(&self.device, context, &self.compositor, item, layer)
                     .map(OpenOutcome::Open)
             }
+            SourceKind::Browser => {
+                source::browser::open(&self.device, context, &self.compositor, item, layer)
+            }
         }
     }
 }

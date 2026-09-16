@@ -129,6 +129,7 @@ fn opened(
     pusher.push(decoded.frame.clone())?;
     Ok(OpenSource {
         media_file: None,
+        page: None,
         // Its size is its own rather than something a device answered
         // with, so there is nothing to correct.
         negotiated_size: None,

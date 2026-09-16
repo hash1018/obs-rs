@@ -312,6 +312,7 @@ pub(in crate::engine) fn open(
 
     Ok(OpenSource {
         media_file: None,
+        page: None,
         source: RunningSource::Shared {
             captures: Arc::clone(captures),
             monitor: monitor.clone(),

@@ -10,6 +10,26 @@ pub fn helper_process() -> Option<i32> {
     None
 }
 
+/// What a page would hand over, so the callback a Source writes has the same
+/// shape wherever it is compiled.
+pub struct Painted {
+    pub handle: isize,
+    pub size: [u32; 2],
+}
+
+/// What a page would do with each picture it drew.
+pub type OnPaint = Box<dyn Fn(Painted) + Send + Sync>;
+
+/// The page that cannot exist here. Uninhabited, so the `Option<Page>` every
+/// open Source carries is always `None` and costs nothing.
+pub enum Page {}
+
+/// Always the reason there is no page, which a Browser Source then shows as
+/// why it is dark.
+pub fn open_page(_url: &str, _size: [u32; 2], _fps: u32, _paint: OnPaint) -> Result<Page, String> {
+    Err("this build has no browser engine".to_owned())
+}
+
 /// The browser engine that is not here.
 pub struct Runtime;
 

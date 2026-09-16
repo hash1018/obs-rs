@@ -2435,6 +2435,11 @@ fn layer_for(
     if let SourceSettings::Color(settings) = &item.settings {
         layer.opacity = f32::from(settings.rgba[3]) / 255.0;
     }
+    // A browser composites its page before handing it over, so what arrives
+    // is colour already multiplied by its alpha. Blending it as though it
+    // were not applies that alpha twice, and a half-transparent overlay comes
+    // out dark — see `media_pp::elements::VideoLayer::premultiplied_alpha`.
+    layer.premultiplied_alpha = matches!(item.settings, SourceSettings::Browser(_));
     layer
 }
 

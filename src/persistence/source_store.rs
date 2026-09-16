@@ -4,12 +4,13 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{
-    AudioFilterOwner, ClockFormat, ColorSourceSettings, Crop, DEFAULT_FONT_SIZE,
-    DisplayCaptureSettings, DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings,
-    MAX_GAIN_DB, MIN_GAIN_DB, MediaFileSettings, RtspSourceSettings, RtspTransport, SceneCanvas,
-    SceneId, SceneItem, SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke,
-    TextAlignment, TextMode, TextSourceSettings, TextTimer, TimerFormat, Transform,
-    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
+    AudioFilterOwner, BrowserSourceSettings, ClockFormat, ColorSourceSettings, Crop,
+    DEFAULT_BROWSER_FPS, DEFAULT_BROWSER_SIZE, DEFAULT_FONT_SIZE, DisplayCaptureSettings,
+    DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB,
+    MediaFileSettings, RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem,
+    SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke, TextAlignment, TextMode,
+    TextSourceSettings, TextTimer, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
+    WindowCaptureSettings, WindowCaptureTarget,
 };
 
 use super::{AudioFilterStore, FilterStore, PersistenceResult};
@@ -156,7 +157,11 @@ impl SourceStore {
                 text_source_settings.clock_format AS text_clock_format,
                 text_source_settings.timer_format AS text_timer_format,
                 text_source_settings.timer_running_since AS text_timer_running_since,
-                text_source_settings.timer_accumulated_us AS text_timer_accumulated_us
+                text_source_settings.timer_accumulated_us AS text_timer_accumulated_us,
+                browser_source_settings.url AS browser_url,
+                browser_source_settings.width AS browser_width,
+                browser_source_settings.height AS browser_height,
+                browser_source_settings.fps AS browser_fps
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -177,6 +182,8 @@ impl SourceStore {
                 ON video_capture_settings.source_id = sources.id
              LEFT JOIN text_source_settings
                 ON text_source_settings.source_id = sources.id
+             LEFT JOIN browser_source_settings
+                ON browser_source_settings.source_id = sources.id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -266,6 +273,11 @@ impl SourceStore {
                                 row.get::<_, i64>("text_timer_accumulated_us")?.max(0) as u64,
                             ),
                         },
+                    }),
+                    SourceKind::Browser => SourceSettings::Browser(BrowserSourceSettings {
+                        url: row.get("browser_url")?,
+                        size: [row.get("browser_width")?, row.get("browser_height")?],
+                        fps: row.get::<_, i64>("browser_fps")? as u32,
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -540,6 +552,75 @@ impl SourceStore {
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, size)
+    }
+
+    /// A new Browser Source, pointed nowhere yet.
+    ///
+    /// No address, because there is no address it could be given that the
+    /// user asked for — see [`BrowserSourceSettings::url`]. It is added at
+    /// the page's own size and placed in the Scene at that size, the way a
+    /// Text Source is placed at its box's.
+    pub(crate) fn add_browser(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+    ) -> PersistenceResult<SceneItemId> {
+        let name = unique_source_name(transaction, "Browser")?;
+        let source_id = create(transaction, &name, SourceKind::Browser)?;
+        let [width, height] = DEFAULT_BROWSER_SIZE;
+        transaction.execute(
+            "INSERT INTO browser_source_settings (source_id, url, width, height, fps)
+             VALUES (?1, '', ?2, ?3, ?4)",
+            params![source_id.0, width, height, DEFAULT_BROWSER_FPS],
+        )?;
+        add_to_scene(
+            transaction,
+            scene_id,
+            source_id,
+            SceneCanvas {
+                width: width as f32,
+                height: height as f32,
+            },
+        )
+    }
+
+    /// Where a Browser Source's page comes from.
+    pub(crate) fn set_browser_url(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        url: &str,
+    ) -> PersistenceResult<()> {
+        set_browser_column(transaction, scene_item_id, "url", url)
+    }
+
+    /// The size the page is rendered at. Two columns in one call because
+    /// they are one value: a page is laid out for a width *and* a height, and
+    /// storing half of a new size would render a layout neither was for.
+    pub(crate) fn set_browser_size(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        size: [u32; 2],
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE browser_source_settings
+                SET width = ?1, height = ?2
+              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?3)",
+            params![size[0].max(1), size[1].max(1), scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// The rate the page is redrawn at, at most.
+    pub(crate) fn set_browser_fps(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        fps: u32,
+    ) -> PersistenceResult<()> {
+        set_browser_column(
+            transaction,
+            scene_item_id,
+            "fps",
+            fps.clamp(1, crate::domain::MAX_BROWSER_FPS),
+        )
     }
 
     /// What a Text Source says.
@@ -1452,7 +1533,11 @@ fn set_negotiated_size(
         SourceKind::VideoCapture => "video_capture_settings",
         SourceKind::MediaFile => "media_file_settings",
         SourceKind::Rtsp => "rtsp_source_settings",
-        SourceKind::Image | SourceKind::Color | SourceKind::Drawing | SourceKind::Text => {
+        SourceKind::Image
+        | SourceKind::Color
+        | SourceKind::Drawing
+        | SourceKind::Text
+        | SourceKind::Browser => {
             return Ok(());
         }
     };
@@ -1521,6 +1606,23 @@ fn set_sound_column<T: rusqlite::ToSql>(
 /// gets, and the name beside it is what anyone reading the error needs.
 fn unrecognized_name(column: &'static str) -> rusqlite::Error {
     rusqlite::Error::InvalidColumnType(0, column.into(), rusqlite::types::Type::Text)
+}
+
+fn set_browser_column<T: rusqlite::ToSql>(
+    transaction: &Transaction<'_>,
+    scene_item_id: SceneItemId,
+    column: &'static str,
+    value: T,
+) -> PersistenceResult<()> {
+    transaction.execute(
+        &format!(
+            "UPDATE browser_source_settings
+             SET {column} = ?1
+             WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)"
+        ),
+        params![value, scene_item_id.0],
+    )?;
+    Ok(())
 }
 
 fn set_text_column<T: rusqlite::ToSql>(
@@ -1701,6 +1803,62 @@ mod tests {
             settings_of(&database, scene_id),
             SourceSettings::VideoCapture(settings)
         );
+    }
+
+    /// A Browser Source is added pointed nowhere, and each of its three
+    /// settings has to survive being written and read back — a page shown at
+    /// yesterday's size or rate is a different page.
+    #[test]
+    fn a_browser_source_is_added_blank_and_keeps_what_it_is_told() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| SourceStore::add_browser(transaction, scene_id))
+            .unwrap();
+
+        assert_eq!(
+            settings_of(&database, scene_id),
+            SourceSettings::Browser(crate::domain::BrowserSourceSettings::default()),
+            "a new Browser Source has no address and the default size and rate"
+        );
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_browser_url(transaction, item_id, "https://example.com/overlay")?;
+                SourceStore::set_browser_size(transaction, item_id, [1920, 1080])?;
+                SourceStore::set_browser_fps(transaction, item_id, 60)
+            })
+            .unwrap();
+
+        assert_eq!(
+            settings_of(&database, scene_id),
+            SourceSettings::Browser(crate::domain::BrowserSourceSettings {
+                url: "https://example.com/overlay".to_owned(),
+                size: [1920, 1080],
+                fps: 60,
+            })
+        );
+    }
+
+    /// A rate the engine will not take is clamped on the way in rather than
+    /// refused by the column, which would fail the whole transaction — and a
+    /// project that cannot be written is worse than a page at 60.
+    #[test]
+    fn a_browser_rate_past_what_the_engine_takes_is_brought_back_into_range() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| SourceStore::add_browser(transaction, scene_id))
+            .unwrap();
+
+        database
+            .transaction(|transaction| SourceStore::set_browser_fps(transaction, item_id, 240))
+            .unwrap();
+
+        let SourceSettings::Browser(stored) = settings_of(&database, scene_id) else {
+            panic!("the stored source is a browser");
+        };
+        assert_eq!(stored.fps, crate::domain::MAX_BROWSER_FPS);
     }
 
     /// "Whichever the camera offers first" is a choice rather than a missing

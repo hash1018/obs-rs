@@ -21,6 +21,9 @@ stored_by_name! {
         /// A line of text drawn by this application rather than captured from
         /// anywhere — a caption, a name plate, a clock.
         Text => "text",
+        /// A web page, rendered off-screen by a browser engine this
+        /// application hosts — an overlay, an alert box, a chat window.
+        Browser => "browser",
     }
 }
 
@@ -385,6 +388,54 @@ pub struct ImageSourceSettings {
     pub size_hint: Option<[u32; 2]>,
 }
 
+/// The size a Browser Source is added at.
+///
+/// 720p: large enough that an overlay designed for a 1080p Canvas is drawn
+/// at close to the size it will be shown at, and small enough that a page
+/// nobody has sized yet is not rendering four times the pixels it needs.
+pub const DEFAULT_BROWSER_SIZE: [u32; 2] = [1280, 720];
+
+/// How often a Browser Source is redrawn, in frames per second.
+///
+/// What OBS starts a browser at, and what a page of moving text or a chat
+/// widget needs. It is a ceiling rather than a rate: a page that is not
+/// changing paints nothing at all, and the compositor goes on showing the
+/// picture it already has.
+pub const DEFAULT_BROWSER_FPS: u32 = 30;
+
+/// The highest rate a browser engine will accept.
+pub const MAX_BROWSER_FPS: u32 = 60;
+
+/// A web page shown as a Source.
+///
+/// Its size is its own, like a Color Source's and unlike a camera's: nothing
+/// negotiates it, the page is *told* it. That is also what makes it worth
+/// editing — a page laid out for 1920×1080 and drawn at 1280×720 is not the
+/// same picture scaled, it is a different layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserSourceSettings {
+    /// Where the page comes from, exactly as it was typed.
+    ///
+    /// Empty until the user says — a Browser Source is added before it has
+    /// an address, and an empty one is a Source that says it has nothing to
+    /// show rather than one that fetches something nobody asked for.
+    pub url: String,
+    /// The size the page is rendered at, in its own pixels.
+    pub size: [u32; 2],
+    /// The rate the page is redrawn at, at most. See [`DEFAULT_BROWSER_FPS`].
+    pub fps: u32,
+}
+
+impl Default for BrowserSourceSettings {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            size: DEFAULT_BROWSER_SIZE,
+            fps: DEFAULT_BROWSER_FPS,
+        }
+    }
+}
+
 /// How the video is carried once an RTSP session is negotiated.
 ///
 /// The same two `media_pp::elements::RtspTransport` offers, mirrored here so
@@ -522,6 +573,7 @@ pub enum SourceSettings {
     MediaFile(MediaFileSettings),
     Image(ImageSourceSettings),
     Text(TextSourceSettings),
+    Browser(BrowserSourceSettings),
 }
 
 impl SourceSettings {
@@ -548,7 +600,7 @@ impl SourceSettings {
             Self::MediaFile(settings) => settings.size_hint,
             Self::Rtsp(settings) => settings.size_hint,
             Self::Image(settings) => settings.size_hint,
-            Self::Color(_) | Self::Drawing(_) | Self::Text(_) => None,
+            Self::Color(_) | Self::Drawing(_) | Self::Text(_) | Self::Browser(_) => None,
         }
     }
 
@@ -557,6 +609,9 @@ impl SourceSettings {
             Self::Color(settings) => settings.size,
             Self::Drawing(settings) => settings.size,
             Self::Text(settings) => settings.size,
+            // Told to the page rather than negotiated with it, so this is the
+            // size, not a hint at one — see [`BrowserSourceSettings`].
+            Self::Browser(settings) => [settings.size[0] as f32, settings.size[1] as f32],
             Self::DisplayCapture(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {

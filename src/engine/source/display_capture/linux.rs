@@ -115,6 +115,7 @@ pub(in crate::engine) fn open(
     Ok((
         OpenSource {
             media_file: None,
+            page: None,
             negotiated_size: Some([format.width, format.height]),
             source: RunningSource(pipeline),
             layer,

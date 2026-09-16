@@ -327,6 +327,7 @@ pub(in crate::engine) fn open(
         running: true,
         pushed: None,
         negotiated_size: size,
+        page: None,
         media_file: Some(MediaFile {
             looping: None,
             volume,
@@ -418,6 +419,7 @@ pub(in crate::engine) fn open(
         running: true,
         pushed: None,
         negotiated_size: size,
+        page: None,
         media_file: Some(MediaFile {
             looping: None,
             volume,

@@ -346,6 +346,7 @@ fn opened(
     pusher.push(drawn.frame.clone())?;
     Ok(OpenSource {
         media_file: None,
+        page: None,
         // Its box is its own rather than something a device answered with,
         // so there is nothing to correct.
         negotiated_size: None,
