@@ -81,6 +81,9 @@ enum Head {
     /// Frames pushed in as they are made — a page's audio, which arrives
     /// decoded and in real time. Nothing to decode, and nothing to pace
     /// against: it is already arriving at the rate it was played at.
+    // Built by `build_pushed`, which is where a page's sound is, so nothing
+    // makes one of these on a platform with no browser engine.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Frames,
 }
 

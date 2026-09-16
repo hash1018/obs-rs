@@ -104,6 +104,8 @@ pub(in crate::engine) struct OpenPage {
 }
 
 impl OpenPage {
+    // Called where a page is opened, which is Windows alone so far.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     fn new(page: crate::browser::Page, options: crate::browser::PageOptions, name: String) -> Self {
         Self {
             page: Some(page),
@@ -306,6 +308,9 @@ fn channel_layout(channels: usize) -> media_pp::ffmpeg::ChannelLayout {
 /// recording, a stream — and an odd dimension has no whole chroma pixel to
 /// carry. Rounding here means the page is *told* the size that will be
 /// drawn, rather than laid out for one size and scaled to another.
+///
+/// Read where a page is opened, which is Windows alone so far.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn page_size(settings: &crate::domain::BrowserSourceSettings) -> [u32; 2] {
     [settings.size[0].max(2) & !1, settings.size[1].max(2) & !1]
 }

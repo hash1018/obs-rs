@@ -12,6 +12,12 @@
 //! it holds beside the pipeline: the display's rate handle, so the
 //! compositor's own rate can change without the duplication being reopened.
 //! That is `E` here, and nothing in this module reads it.
+//!
+//! Windows only in effect, so far: the CUDA backend opens a capture per
+//! SceneItem still, so nothing on Linux reaches any of this. Compiled there
+//! rather than cut out of the build, so it keeps type-checking on the
+//! platform that has yet to use it.
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};

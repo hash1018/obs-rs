@@ -5,6 +5,12 @@
 //! `main` still asks whether this process is a helper (it never is), and
 //! still asks for a runtime (there never is one).
 
+// Half of this is never read on a platform with no browser engine: the
+// callbacks a page would paint and sound through are types nothing here ever
+// calls. They exist so a Source is written once and compiled everywhere, which
+// is the whole point of this file.
+#![allow(dead_code)]
+
 /// Never a helper process: nothing here launches any.
 pub fn helper_process() -> Option<i32> {
     None
@@ -75,7 +81,6 @@ pub const AUDIO_CHANNELS: u16 = 2;
 
 /// What a page would be opened as. Nothing reads these here — there is no
 /// page to open — but the caller builds one the same way on every platform.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct PageOptions {
     pub url: String,
@@ -120,7 +125,6 @@ pub enum NamedKey {
 }
 
 /// Something done to a page, in the page's own pixels.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PageInput {
     Moved {
