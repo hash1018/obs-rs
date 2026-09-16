@@ -185,6 +185,17 @@ cargo run --release
 Beyond the Rust toolchain you need FFmpeg 8.0 or newer development headers.
 On Linux, desktop capture also needs PipeWire development files.
 
+On Windows the default build also fetches the browser engine a Browser
+Source draws with — Chromium, through CEF — which is a few hundred megabytes
+downloaded once and built with CMake, so CMake and a generator it can drive
+have to be on the machine. Visual Studio's own Ninja is one; so is
+`CMAKE_GENERATOR="Visual Studio 17 2022"` in the environment. To skip all of
+it while working on something else:
+
+```bash
+cargo run --release --no-default-features
+```
+
 **Linux needs an NVIDIA GPU.** Not for a faster path — for the only one. The
 Linux backend composites on CUDA and there is no fallback, so obs-rs will not
 start on an AMD or Intel machine. The driver alone is enough; no CUDA toolkit,

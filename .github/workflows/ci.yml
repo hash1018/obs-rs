@@ -28,6 +28,15 @@ jobs:
   # so.
   windows:
     runs-on: windows-2025
+    env:
+      # Where `cef-dll-sys` looks for Chromium's binary distribution before
+      # downloading it, and so what the cache step below fills — see
+      # `src/browser` for what it is and `README.md` for why a build here
+      # wants CMake at all.
+      CEF_PATH: C:\cef
+      # That build wants a generator, and the runner is not guaranteed to
+      # have Ninja on its PATH. Visual Studio is what it does have.
+      CMAKE_GENERATOR: Visual Studio 17 2022
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -61,6 +70,17 @@ jobs:
             ~/.cargo/git/db
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
+
+      # A few hundred megabytes that change only when the pinned `cef`
+      # version does, which is what `Cargo.lock` records. A miss costs a
+      # download, never a wrong build: the build script checks the archive it
+      # finds there and fetches a fresh one if it does not match.
+      - name: Cache the browser engine
+        uses: actions/cache@v4
+        with:
+          path: C:\cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
 
       - name: Check formatting
         run: cargo fmt --all -- --check

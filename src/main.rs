@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod browser;
 mod capture;
 mod clock;
 mod domain;
@@ -33,6 +34,16 @@ use eframe::egui;
 use app::ObsApp;
 
 fn main() -> eframe::Result {
+    // Before everything, including the two "first of all"s below: the browser
+    // engine's render, GPU and utility processes are this same executable
+    // started again, and reach this same `main`. One that claimed the
+    // single-instance lock or opened the log would be a second obs-rs — so
+    // this asks whether that is what this process is, and if it is, runs its
+    // whole job and leaves. See `browser`.
+    if let Some(code) = browser::helper_process() {
+        std::process::exit(code);
+    }
+
     // First of all, and before this process has a second thread: reading the
     // machine's time zone is only sound while it has one — see `clock`.
     let local_time = clock::capture_local_offset();
@@ -59,6 +70,13 @@ fn main() -> eframe::Result {
     let _log = log::start(&paths::logs_dir());
     let _media_pp_log = start_media_pp_log();
     tracing::info!("obs-rs {} starting", env!("CARGO_PKG_VERSION"));
+
+    // Held for the whole run, and dropped after the window is gone: CEF is
+    // initialized once per process and shut down on its own thread, so this
+    // is the process's browser engine rather than something a Source opens.
+    // `None` where a build or a machine has none, which a Browser Source
+    // then says it cannot open — see `browser`.
+    let _browser = browser::Runtime::start();
     // Found out before there was anywhere to say so — see above.
     if !local_time {
         tracing::warn!("could not read this machine's time zone; clocks will show UTC");

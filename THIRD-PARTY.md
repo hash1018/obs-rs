@@ -52,6 +52,25 @@ it bundles, under `licenses/`, rather than a copy committed here — the terms
 that apply are the ones distributed with those exact binaries, and a
 hand-maintained second copy could fall out of step with them.
 
+## The browser engine
+
+The Windows archive carries Chromium, through the Chromium Embedded
+Framework: `libcef.dll` and the data it reads — the resource and locale
+packs, the ICU table, the V8 snapshot, and the graphics libraries it falls
+back through. A Browser Source is what it is for, and the executable imports
+`libcef.dll` directly, so the archive does not start without it.
+
+CEF itself is BSD-3-Clause and Chromium is BSD-3-Clause with a long list of
+its own third-party components under their own permissive terms. The binary
+distribution states all of it in `CREDITS.html`, which the archive carries as
+`licenses/chromium-credits.html` rather than being summarised here — the same
+reasoning as vcpkg's copyright files above.
+
+Built from source, this comes from the [`cef`](https://crates.io/crates/cef)
+crate, whose build script downloads the matching CEF binary distribution. A
+build with `--no-default-features` has no browser engine and carries none of
+this.
+
 ## The Visual C++ runtime
 
 The Windows archive carries `vcruntime140.dll`, `msvcp140.dll` and the rest of

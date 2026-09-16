@@ -32,6 +32,19 @@ pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }
 
+/// Where the browser engine keeps a page's cookies, storage and cache.
+///
+/// Under this user's data with everything else rather than beside the
+/// executable, which is where Chromium would otherwise put a profile — an
+/// installed application cannot write there, and two users of one machine
+/// would share one set of logins.
+///
+/// Only where there is a browser engine to ask — see `browser`.
+#[cfg(all(target_os = "windows", feature = "browser"))]
+pub fn browser_cache_dir() -> PathBuf {
+    data_dir().join("browser")
+}
+
 /// Shows `directory` to the user in whatever file manager this platform has.
 ///
 /// The one action in a module of locations, and here because a location is

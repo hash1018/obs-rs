@@ -21,6 +21,10 @@ env:
 jobs:
   windows:
     runs-on: windows-2025
+    env:
+      # The same two the CI workflow sets, for the same reasons — see there.
+      CEF_PATH: C:\cef
+      CMAKE_GENERATOR: Visual Studio 17 2022
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -49,6 +53,13 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      - name: Cache the browser engine
+        uses: actions/cache@v4
+        with:
+          path: C:\cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
+
       - name: Build
         shell: pwsh
         run: cargo build --release --locked
@@ -70,6 +81,19 @@ jobs:
           Copy-Item target/release/obs-rs.exe $stage
           Copy-Item "$env:FFMPEG_DIR/bin/*.dll" $stage
           Copy-Item LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY.md, README.md $stage
+
+          # The browser engine. `libcef.dll` is linked, not loaded on demand,
+          # so an archive without it does not start at all — and the rest is
+          # what Chromium reads at run time: its resource and locale packs,
+          # the ICU data, the V8 snapshot, and the graphics libraries it
+          # falls back through. The build put them beside the executable
+          # already, so this copies from there rather than repeating the
+          # list; `CREDITS.html` is the distribution's own licence file.
+          Copy-Item target/release/*.dll, target/release/*.pak $stage
+          Copy-Item target/release/icudtl.dat, target/release/v8_context_snapshot.bin $stage
+          Copy-Item target/release/vk_swiftshader_icd.json $stage
+          Copy-Item target/release/CREDITS.html "$stage/licenses/chromium-credits.html"
+          Copy-Item target/release/locales $stage -Recurse
 
           # Both the executable and the vcpkg FFmpeg build link the dynamic
           # Visual C++ runtime, and a stock Windows does not have it — an
@@ -102,6 +126,12 @@ jobs:
           # The one file whose absence is invisible until somebody without the
           # redistributable installed tries to start it.
           if (-not (Test-Path "$stage/vcruntime140.dll")) { throw "no Visual C++ runtime in the archive" }
+          # Without these the executable does not reach `main`: `libcef.dll`
+          # is an import, and Chromium reads the rest before it will start a
+          # browser at all.
+          if (-not (Test-Path "$stage/libcef.dll")) { throw "no browser engine in the archive" }
+          if (-not (Test-Path "$stage/icudtl.dat")) { throw "no browser engine data in the archive" }
+          if (-not (Get-ChildItem "$stage/locales/*.pak")) { throw "no browser engine locales in the archive" }
 
       - name: Pack
         shell: pwsh
