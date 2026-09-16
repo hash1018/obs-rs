@@ -26,4 +26,9 @@
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
 mod platform;
 
+/// Every window one backend is capturing, which is a Windows arrangement:
+/// the portal hands out a stream per request, so there is nothing for two
+/// items to have to share.
+#[cfg(target_os = "windows")]
+pub(in crate::engine) use platform::WindowRegistry;
 pub(in crate::engine) use platform::open;

@@ -44,6 +44,7 @@ use crate::engine::preview::{PreviewRenderer, PreviewSurface, SharedTarget};
 use crate::engine::source::display_capture::{self, CaptureRegistry};
 use crate::engine::source::shared::SharedCapture;
 use crate::engine::source::video_capture::CameraRegistry;
+use crate::engine::source::window_capture::WindowRegistry;
 
 /// The compositor's layer control already offers exactly what a backend must.
 pub(in crate::engine) type Layer = D3d11VideoLayerHandle;
@@ -53,6 +54,8 @@ pub(in crate::engine) struct Backend {
     /// The cameras this backend has open, shared the same way — see
     /// [`CameraRegistry`].
     pub(in crate::engine) cameras: Arc<CameraRegistry>,
+    /// And the windows, likewise — see [`WindowRegistry`].
+    pub(in crate::engine) windows: Arc<WindowRegistry>,
     pub(in crate::engine) device: ID3D11Device,
     /// The one shared immediate context, kept because the encoder a recording
     /// builds has to be on it like everything else here.
@@ -185,6 +188,7 @@ impl Backend {
         Ok(Self {
             captures: Arc::new(CaptureRegistry::default()),
             cameras: Arc::new(CameraRegistry::default()),
+            windows: Arc::new(WindowRegistry::default()),
             device,
             context: context.clone(),
             size,
@@ -294,6 +298,7 @@ impl Backend {
                 &self.device,
                 context,
                 &self.compositor,
+                &self.windows,
                 item,
                 layer,
                 fps,

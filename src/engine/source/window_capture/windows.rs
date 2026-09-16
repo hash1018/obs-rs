@@ -3,29 +3,78 @@
 //! Opened on the backend's own device rather than one of its own, which is
 //! what keeps the frame on the GPU all the way to the compositor — the same
 //! reason every other element here shares it.
+//!
+//! # One window, however many items show it
+//!
+//! Two items showing the same window used to capture it twice. Nothing
+//! refuses that — unlike a display, and unlike a camera, which falls apart
+//! when it is asked twice — so this is the plain saving: one capture session
+//! and one stream of textures where there were two, for a window that is
+//! being shown large in one place and small in another.
+//!
+//! The capture is keyed by the window it resolved to rather than by what was
+//! stored, so two Sources that name the same window by different titles
+//! share it, and a window that is closed and opened again is a new capture
+//! — which it has to be, since the old one ended with the window.
+
+use std::sync::{Arc, Mutex};
 
 use media_pp::elements::{
-    D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer, WgcCaptureOptions,
-    WgcCaptureSource,
+    D3d11VideoCompositorHandle, D3d11VideoCompositorInput, TeeBuilder, VideoLayer,
+    WgcCaptureOptions, WgcCaptureSource,
 };
+use media_pp::graph::BranchId;
 use media_pp::pipeline::Pipeline;
-use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::capture::WindowTarget;
 use crate::domain::{SourceSettings, WindowCaptureTarget};
-use crate::engine::backend::{BackendError, RunningSource};
+use crate::engine::backend::{BackendError, RunningSource, pipeline_ended};
+use crate::engine::source::shared::{Registry, Shared, SharedCapture};
 use crate::engine::source::{
     FilledRack, OpenOutcome, OpenSource, filled_rack, filters, hinted_size, input_name,
 };
 use crate::snapshots::SceneItemSnapshot;
+
+/// Every window this backend is capturing, by the `HWND` each one is of.
+///
+/// The machinery is [`Registry`]'s — see [`crate::engine::source::shared`].
+#[derive(Default)]
+pub(in crate::engine) struct WindowRegistry {
+    open: Registry<()>,
+}
+
+impl SharedCapture for WindowRegistry {
+    fn detach(&self, window: &str, branch: BranchId) {
+        self.open.detach(window, branch);
+    }
+
+    fn set_showing(&self, window: &str, branch: BranchId, showing: bool) {
+        self.open.set_showing(window, branch, showing);
+    }
+
+    fn stats(&self, window: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats> {
+        self.open.stats(window, branch)
+    }
+
+    /// A window is closed, and its capture ends with it. Every item showing
+    /// it is then put back to be looked for again — see
+    /// `status::notice_closed_windows` — and the first to find the window
+    /// open again captures it for all of them.
+    fn ended(&self, window: &str) -> bool {
+        self.open
+            .with(window, |capture| pipeline_ended(capture.pipeline()))
+            .unwrap_or(false)
+    }
+}
 
 /// `Absent` when the window is not on screen — see this module's parent.
 pub(in crate::engine) fn open(
     device: &ID3D11Device,
     context: Arc<Mutex<ID3D11DeviceContext>>,
     handle: &D3d11VideoCompositorHandle,
+    windows: &Arc<WindowRegistry>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
@@ -43,47 +92,45 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let source = WgcCaptureSource::open_with_device(
-        name.clone(),
-        HWND(target.handle as *mut std::ffi::c_void),
-        WgcCaptureOptions {
-            fps,
-            // The pointer belongs to whoever is using the window, and a
-            // recording of it is usually about what the window shows rather
-            // than where its user's mouse was.
-            include_cursor: false,
-        },
-        device,
-    )?;
-
-    // BGRA already, so nothing is bridged and the size is never read: a
-    // window is whatever size it is from one frame to the next, and a D3D11
-    // filter takes each at the size it arrives. The stored hint is what the
-    // rack is told, for want of anything better and with nothing relying on
-    // it.
-    let FilledRack { rack, filters } = filled_rack(
-        &name,
-        device,
-        context,
-        filters::ChainFormat::Bgra,
-        hinted_size(item),
-        item,
-    )?;
-
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
+
+    // The window it resolved to, not what was stored: that is what decides
+    // whether two items are showing the same thing.
+    let key = target.handle.to_string();
+    let mut kept = None;
+    let (branch, _) = windows.open.attach(
+        &key,
+        || open_window(&target, device, fps),
+        |builder, _| {
+            // BGRA already, so nothing is bridged and the capture's size is
+            // never read: a window is whatever size it is from one frame to
+            // the next, and a D3D11 filter takes each at the size it
+            // arrives. The item's own stored hint is what its rack is told,
+            // for want of anything better and with nothing relying on it.
+            let FilledRack { rack, filters } = filled_rack(
+                &name,
+                device,
+                context,
+                filters::ChainFormat::Bgra,
+                hinted_size(item),
+                item,
+            )?;
+            kept = Some(filters);
+            Ok(builder.pipe(rack).to(sink)?)
+        },
+    )?;
+    let filters = kept.ok_or("the capture answered without finishing the branch")?;
 
     Ok(OpenOutcome::Open(OpenSource {
         media_file: None,
         page: None,
-        source: RunningSource::Owned(pipeline),
+        source: RunningSource::Shared {
+            capture: Arc::clone(windows) as Arc<dyn SharedCapture>,
+            key,
+            branch,
+        },
         layer,
         name,
         refreshed_token: None,
@@ -99,6 +146,45 @@ pub(in crate::engine) fn open(
         running: true,
         pushed: None,
     }))
+}
+
+/// Starts capturing one window into a `Tee` nothing is attached to yet.
+fn open_window(
+    target: &WindowTarget,
+    device: &ID3D11Device,
+    fps: u32,
+) -> Result<Shared<()>, BackendError> {
+    // The window's own name rather than any item's: the capture outlives
+    // each of them, and this is what the log and the Stats dock show it as.
+    let name = format!("window-{}", target.handle);
+    let source = WgcCaptureSource::open_with_device(
+        name.clone(),
+        HWND(target.handle as *mut std::ffi::c_void),
+        WgcCaptureOptions {
+            fps,
+            // The pointer belongs to whoever is using the window, and a
+            // recording of it is usually about what the window shows rather
+            // than where its user's mouse was.
+            include_cursor: false,
+        },
+        device,
+    )?;
+
+    let mut handle = None;
+    let pipeline = Pipeline::new(name.clone(), source, |source, context| {
+        let (tee, tee_handle) =
+            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
+        context.attach(source, 0, tee)?;
+        handle = Some(tee_handle);
+        Ok(())
+    })?;
+    let tee = handle.expect("the wire closure always produces the TeeHandle");
+    pipeline.run()?;
+
+    // Windows Graphics Capture settles the size itself and reports none, so
+    // there is no size to record: every branch builds its rack from its own
+    // item's hint instead, and nothing reads this one.
+    Ok(Shared::new(pipeline, tee, [0, 0], ()))
 }
 
 /// The window on screen that best matches what was stored.
