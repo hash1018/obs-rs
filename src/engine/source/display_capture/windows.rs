@@ -11,13 +11,10 @@
 //! They share one capture instead. Each display gets a pipeline whose `Tee`
 //! grows a branch per item, and the capture lives as long as any branch does.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use media_pp::{
-    elements::{
-        CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder, TeeHandle,
-    },
+    elements::{CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder},
     ffmpeg,
     graph::BranchId,
     pipeline::{ChainBuilder, DetachedBranch, Pipeline},
@@ -30,79 +27,25 @@ use media_pp::elements::{D3d11VideoCompositorHandle, D3d11VideoCompositorInput, 
 
 use crate::domain::{DisplayCaptureTarget, SourceSettings};
 use crate::engine::backend::{BackendError, RunningSource};
+use crate::engine::source::shared::{Registry, Shared, SharedCapture};
 use crate::engine::source::{FilledRack, OpenSource, filled_rack, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
-/// One display's capture, and what is currently drawing from it.
-pub(in crate::engine) struct SharedCapture {
-    pipeline: Arc<Pipeline>,
-    tee: TeeHandle,
-    /// Taken before the source was moved into its `Pipeline`, which is the
-    /// only chance to. It is what lets the compositor's rate change without
-    /// this capture being closed and reopened underneath it.
-    frame_rate: FrameRateHandle,
-    /// What the duplication actually opened at. Kept here rather than read
-    /// per item because the capture is shared: every item drawing this
-    /// display is drawing the same picture, so they all correct their stored
-    /// hint against one answer.
-    size: [u32; 2],
-    /// The branches whose SceneItem is in the Scene being shown. The capture
-    /// runs while there are any and pauses when there are none — the shared
-    /// form of "a Source whose item left the Scene stops running".
-    ///
-    /// Branches rather than a count, and compared against `running` rather
-    /// than acted on at the count's edges, because a count can be moved by
-    /// a path that forgets to tell the pipeline. `attach` did exactly that:
-    /// it counted a new item as showing without resuming a capture the other
-    /// Scene had paused, so a second Scene showing the same display stayed
-    /// black. Every change now goes through [`SharedCapture::show`].
-    showing: HashSet<BranchId>,
-    /// Whether the pipeline was last told to run. `showing` says whether it
-    /// should.
-    running: bool,
-}
-
-impl SharedCapture {
-    /// Counts `branch` into or out of the Scene being shown, and runs or
-    /// pauses the capture to match.
-    ///
-    /// Idempotent per branch, so hiding an item twice, or detaching one
-    /// already hidden, cannot take another item's share with it.
-    fn show(&mut self, branch: BranchId, showing: bool) {
-        if showing {
-            self.showing.insert(branch);
-        } else {
-            self.showing.remove(&branch);
-        }
-        let running = !self.showing.is_empty();
-        if running != self.running {
-            if running {
-                self.pipeline.resume();
-            } else {
-                self.pipeline.pause();
-            }
-            self.running = running;
-        }
-    }
-}
-
-/// The open captures, keyed by the display each duplicates.
+/// The open duplications, keyed by the display each one is of.
+///
+/// The machinery is [`Registry`]'s — a camera's captures are shared the same
+/// way. What is a display's own is how one is opened, and the rate handle it
+/// keeps: taken before the source was moved into its `Pipeline`, which is the
+/// only chance to, and what lets the compositor's rate change without the
+/// duplication being reopened underneath it.
 #[derive(Default)]
 pub(in crate::engine) struct CaptureRegistry {
-    open: Mutex<HashMap<String, SharedCapture>>,
+    open: Registry<FrameRateHandle>,
 }
 
 impl CaptureRegistry {
     /// Points one more compositor input at `monitor`, opening its capture if
-    /// this is the first item to ask.
-    ///
-    /// `finish` ends this item's branch, and is handed the capture's size:
-    /// what it puts between the capture and the compositor — a rack of
-    /// filters — is built for the picture that will arrive, which is known
-    /// only once the capture is open.
-    ///
-    /// The returned id names this item's branch and nothing else, so removing
-    /// it later cannot disturb another item sharing the same capture.
+    /// this is the first item to ask. See [`Registry::attach`].
     pub(in crate::engine) fn attach(
         &self,
         monitor: &str,
@@ -110,101 +53,45 @@ impl CaptureRegistry {
         fps: u32,
         finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
     ) -> Result<(BranchId, [u32; 2]), BackendError> {
-        let mut open = self.lock();
-        if !open.contains_key(monitor) {
-            let capture = open_capture(monitor, device, fps)?;
-            open.insert(monitor.to_owned(), capture);
-        }
-        let capture = open
-            .get_mut(monitor)
-            .expect("the capture was just inserted if it was missing");
-
-        // Every branch is attached at runtime, the first one included: a
-        // branch handed to `TeeBuilder` is fixed and has no id, and this one
-        // has to be removable when its item goes away.
-        let builder = capture
-            .tee
-            .branch()
-            .ok_or("the capture for this display has stopped")?;
-        let branch = finish(builder, capture.size)?;
-        let id = capture.tee.attach(branch)?;
-        // A new item is added to the Scene being shown, but the capture may
-        // have been paused by another Scene's item leaving it.
-        capture.show(id, true);
-        Ok((id, capture.size))
+        self.open
+            .attach(monitor, || open_capture(monitor, device, fps), finish)
     }
 
-    /// Removes one item's branch, and the capture itself once the last branch
-    /// is gone.
-    pub(in crate::engine) fn detach(&self, monitor: &str, branch: BranchId) {
-        let mut open = self.lock();
-        let Some(capture) = open.get_mut(monitor) else {
-            return;
-        };
-        if let Err(error) = capture.tee.detach(branch) {
-            tracing::warn!("could not detach a capture branch: {error}");
-        }
-        // An item removed while shown was never hidden first, and would
-        // otherwise keep the capture running for Scenes that are not.
-        capture.show(branch, false);
-        // Only once nothing draws from it: another SceneItem may still be
-        // showing this display.
-        if capture.tee.sink_count() == 0
-            && let Some(capture) = open.remove(monitor)
-        {
-            capture.pipeline.stop();
-        }
-    }
-
-    /// Follows one item into or out of the Scene being shown.
-    ///
-    /// The capture keeps running while any item shows it, so this only
-    /// reaches the pipeline at the transitions to and from none.
-    pub(in crate::engine) fn set_showing(&self, monitor: &str, branch: BranchId, showing: bool) {
-        let mut open = self.lock();
-        if let Some(capture) = open.get_mut(monitor) {
-            capture.show(branch, showing);
-        }
-    }
-
-    /// What one item's branch of a capture is doing, for the Stats dock.
-    ///
-    /// Only that branch's elements: the capture itself is every sharing
-    /// item's, and reported per item it would be counted once for each. The
-    /// branch ends in the item's own compositor input, which is the element
-    /// the dock reads a Source from anyway — whether frames are reaching
-    /// the Canvas, and when they stopped.
-    pub(in crate::engine) fn stats(
-        &self,
-        monitor: &str,
-        branch: BranchId,
-    ) -> Option<media_pp::stats::PipelineStats> {
-        // The pipeline is taken out of the lock before it is read: a reading
-        // takes the graph's own lock, and nothing about it needs this one.
-        let pipeline = Arc::clone(&self.lock().get(monitor)?.pipeline);
-        let mut stats = pipeline.stats();
-        stats
-            .elements
-            .retain(|element| element.branch == Some(branch));
-        Some(stats)
-    }
-
-    /// Tells every open capture to emit at `fps`.
+    /// Tells every open duplication to emit at `fps`.
     ///
     /// A handle call rather than a reopen: the compositor's rate is a setting,
     /// and closing and reopening a display duplication to follow it would put
     /// a gap in the Preview each time one was applied.
     pub(in crate::engine) fn set_frame_rate(&self, fps: u32) {
         let rate = ffmpeg::Rational::new(fps as i32, 1);
-        for capture in self.lock().values() {
-            capture.frame_rate.set(rate);
-        }
+        self.open.each(|capture| {
+            capture.extra.set(rate);
+        });
+    }
+}
+
+impl SharedCapture for CaptureRegistry {
+    /// Removes one item's branch, and the duplication itself once the last
+    /// branch is gone.
+    fn detach(&self, monitor: &str, branch: BranchId) {
+        self.open.detach(monitor, branch);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SharedCapture>> {
-        self.open
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// Follows one item into or out of the Scene being shown.
+    fn set_showing(&self, monitor: &str, branch: BranchId, showing: bool) {
+        self.open.set_showing(monitor, branch, showing);
+    }
+
+    /// What one item's branch of a duplication is doing, for the Stats dock.
+    fn stats(&self, monitor: &str, branch: BranchId) -> Option<media_pp::stats::PipelineStats> {
+        self.open.stats(monitor, branch)
+    }
+
+    /// A display is not something that ends: it is there for as long as it is
+    /// plugged in, and a layout change is a reopen the item asks for rather
+    /// than a capture stopping underneath it.
+    fn ended(&self, _monitor: &str) -> bool {
+        false
     }
 }
 
@@ -213,7 +100,7 @@ fn open_capture(
     monitor: &str,
     device: &ID3D11Device,
     fps: u32,
-) -> Result<SharedCapture, BackendError> {
+) -> Result<Shared<FrameRateHandle>, BackendError> {
     let output_index = resolve_output_index(monitor)?;
     let name = format!("display-{output_index}");
     // GPU capture: the desktop lands in D3D11 textures on this backend's own
@@ -252,16 +139,12 @@ fn open_capture(
     let tee = handle.expect("the wire closure always produces the TeeHandle");
     pipeline.run()?;
 
-    Ok(SharedCapture {
+    Ok(Shared::new(
         pipeline,
         tee,
+        [format.width, format.height],
         frame_rate,
-        size: [format.width, format.height],
-        // Filled by whoever attaches the first branch, which finds the
-        // pipeline already running and so has nothing to tell it.
-        showing: HashSet::new(),
-        running: true,
-    })
+    ))
 }
 
 /// Points one SceneItem at a display's capture, opening it if this is the
@@ -314,8 +197,8 @@ pub(in crate::engine) fn open(
         media_file: None,
         page: None,
         source: RunningSource::Shared {
-            captures: Arc::clone(captures),
-            monitor: monitor.clone(),
+            capture: Arc::clone(captures) as Arc<dyn SharedCapture>,
+            key: monitor.clone(),
             branch,
         },
         layer,

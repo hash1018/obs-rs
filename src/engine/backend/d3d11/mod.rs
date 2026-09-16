@@ -42,12 +42,17 @@ use media_pp::graph::BranchId;
 
 use crate::engine::preview::{PreviewRenderer, PreviewSurface, SharedTarget};
 use crate::engine::source::display_capture::{self, CaptureRegistry};
+use crate::engine::source::shared::SharedCapture;
+use crate::engine::source::video_capture::CameraRegistry;
 
 /// The compositor's layer control already offers exactly what a backend must.
 pub(in crate::engine) type Layer = D3d11VideoLayerHandle;
 
 pub(in crate::engine) struct Backend {
     pub(in crate::engine) captures: Arc<CaptureRegistry>,
+    /// The cameras this backend has open, shared the same way — see
+    /// [`CameraRegistry`].
+    pub(in crate::engine) cameras: Arc<CameraRegistry>,
     pub(in crate::engine) device: ID3D11Device,
     /// The one shared immediate context, kept because the encoder a recording
     /// builds has to be on it like everything else here.
@@ -179,6 +184,7 @@ impl Backend {
         let tee = tee.expect("Pipeline::new runs the builder before returning");
         Ok(Self {
             captures: Arc::new(CaptureRegistry::default()),
+            cameras: Arc::new(CameraRegistry::default()),
             device,
             context: context.clone(),
             size,
@@ -310,9 +316,14 @@ impl Backend {
                 item,
                 layer,
             ),
-            SourceKind::VideoCapture => {
-                source::video_capture::open(&self.device, context, &self.compositor, item, layer)
-            }
+            SourceKind::VideoCapture => source::video_capture::open(
+                &self.device,
+                context,
+                &self.compositor,
+                &self.cameras,
+                item,
+                layer,
+            ),
             SourceKind::Image => {
                 source::image::open(&self.device, context, &self.compositor, item, layer)
             }
@@ -403,10 +414,12 @@ pub(in crate::engine) fn create_device()
 pub(in crate::engine) enum RunningSource {
     /// A pipeline this item alone owns, such as a Color Source's pusher.
     Owned(Arc<Pipeline>),
-    /// One branch of a display capture other items may also be drawing from.
+    /// One branch of a capture other items may also be drawing from — a
+    /// display's duplication, a camera. `key` is what that capture is
+    /// registered under: the display's name, the camera's device link.
     Shared {
-        captures: Arc<CaptureRegistry>,
-        monitor: String,
+        capture: Arc<dyn SharedCapture>,
+        key: String,
         branch: BranchId,
     },
 }
@@ -421,10 +434,10 @@ impl RunningSource {
         match self {
             Self::Owned(pipeline) => Some(pipeline.stats()),
             Self::Shared {
-                captures,
-                monitor,
+                capture,
+                key,
                 branch,
-            } => captures.stats(monitor, *branch),
+            } => capture.stats(key, *branch),
         }
     }
 
@@ -432,10 +445,10 @@ impl RunningSource {
         match self {
             Self::Owned(pipeline) => pipeline.pause(),
             Self::Shared {
-                captures,
-                monitor,
+                capture,
+                key,
                 branch,
-            } => captures.set_showing(monitor, *branch, false),
+            } => capture.set_showing(key, *branch, false),
         }
     }
 
@@ -443,10 +456,10 @@ impl RunningSource {
         match self {
             Self::Owned(pipeline) => pipeline.resume(),
             Self::Shared {
-                captures,
-                monitor,
+                capture,
+                key,
                 branch,
-            } => captures.set_showing(monitor, *branch, true),
+            } => capture.set_showing(key, *branch, true),
         }
     }
 
@@ -457,10 +470,10 @@ impl RunningSource {
     pub(in crate::engine) fn ended(&self) -> bool {
         match self {
             Self::Owned(pipeline) => super::pipeline_ended(pipeline),
-            // A display is not something that closes, and the capture behind
-            // one is shared: whether it ended is the registry's business, not
-            // one item's.
-            Self::Shared { .. } => false,
+            // Whether a shared capture ended is the registry's business, not
+            // one item's: a display is not something that closes, and a
+            // camera that is unplugged ends for everything drawing it.
+            Self::Shared { capture, key, .. } => capture.ended(key),
         }
     }
 
@@ -468,10 +481,10 @@ impl RunningSource {
         match self {
             Self::Owned(pipeline) => pipeline.stop(),
             Self::Shared {
-                captures,
-                monitor,
+                capture,
+                key,
                 branch,
-            } => captures.detach(monitor, *branch),
+            } => capture.detach(key, *branch),
         }
     }
 }

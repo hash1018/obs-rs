@@ -1117,6 +1117,12 @@ impl SourceStore {
     /// rectangle a 1280x720 one had. Going back to automatic keeps whatever
     /// is stored — the camera's own first mode is what was measured when it
     /// was added, which is exactly what automatic asks for again.
+    ///
+    /// Written to every Source of that camera, not only the one selected: a
+    /// device has one mode however many Sources draw from it — they share a
+    /// single capture — so storing it per Source would leave each Properties
+    /// dock claiming something different from what is on the Canvas. Which
+    /// one you set it from does not matter for the same reason.
     pub(crate) fn set_video_capture_mode(
         transaction: &Transaction<'_>,
         scene_item_id: SceneItemId,
@@ -1130,8 +1136,9 @@ impl SourceStore {
                     mode_rate_denominator = ?5,
                     width = COALESCE(?2, width),
                     height = COALESCE(?3, height)
-              WHERE source_id = (
-                SELECT source_id FROM scene_items WHERE id = ?1
+              WHERE device = (
+                SELECT device FROM video_capture_settings
+                 WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?1)
               )",
             params![
                 scene_item_id.0,
@@ -1923,6 +1930,79 @@ mod tests {
         assert_eq!(
             stored.mode, None,
             "going back to automatic must clear the whole mode, not part of it"
+        );
+    }
+
+    /// A camera's mode is the camera's: setting it from one Source writes it
+    /// to every Source of that device, and leaves another camera alone.
+    ///
+    /// They share one capture, so a mode stored per Source would leave one
+    /// Properties dock describing a picture the other item is not showing.
+    #[test]
+    fn a_camera_mode_reaches_every_source_of_that_camera() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let camera = |device: &str| VideoCaptureSettings {
+            device: device.to_owned(),
+            device_name: "A Camera".to_owned(),
+            mode: None,
+            size_hint: None,
+        };
+        let (first, _second, other) = database
+            .transaction(|transaction| {
+                let first =
+                    SourceStore::add_video_capture(transaction, scene_id, &camera("cam-a"))?;
+                let second =
+                    SourceStore::add_video_capture(transaction, scene_id, &camera("cam-a"))?;
+                let other =
+                    SourceStore::add_video_capture(transaction, scene_id, &camera("cam-b"))?;
+                Ok((first, second, other))
+            })
+            .unwrap();
+
+        let chosen = VideoCaptureMode {
+            width: 640,
+            height: 480,
+            framerate_numerator: 30,
+            framerate_denominator: 1,
+        };
+        database
+            .transaction(|transaction| {
+                SourceStore::set_video_capture_mode(transaction, first, Some(chosen))
+            })
+            .unwrap();
+
+        let modes: Vec<Option<VideoCaptureMode>> =
+            SourceStore::list_for_scene(database.connection(), scene_id)
+                .unwrap()
+                .into_iter()
+                .map(|(item, source)| match source.settings {
+                    SourceSettings::VideoCapture(settings) => (item.id, settings.mode),
+                    _ => panic!("every source in this scene is a camera"),
+                })
+                .filter(|(id, _)| *id != other)
+                .map(|(_, mode)| mode)
+                .collect();
+        assert_eq!(
+            modes,
+            vec![Some(chosen), Some(chosen)],
+            "both Sources of that camera hold the mode it was set to"
+        );
+
+        let SourceSettings::VideoCapture(untouched) =
+            SourceStore::list_for_scene(database.connection(), scene_id)
+                .unwrap()
+                .into_iter()
+                .find(|(item, _)| item.id == other)
+                .expect("the other camera is still in the Scene")
+                .1
+                .settings
+        else {
+            panic!("the other source is a video capture");
+        };
+        assert_eq!(
+            untouched.mode, None,
+            "a different camera keeps whatever it had"
         );
     }
 

@@ -1615,36 +1615,46 @@ fn apply_command(
             true
         }
         EngineCommand::ReopenSource(item_id) => {
-            let Some(index) = scene.items.iter().position(|item| item.id == item_id) else {
+            if scene.items.iter().all(|item| item.id != item_id) {
                 return false;
-            };
-            // Stopped first where something is still open: asking again for a
-            // Source that is running would leave the old one behind, holding
-            // its layer and its capture.
-            if let Some(SourceState::Open(source)) = open.get(&item_id) {
-                source.source.stop();
-                engine.backend.remove_source(&source.name);
             }
-            // Left for the next pass rather than opened here, because what
-            // asks for a reopen is almost always a settings change and the
-            // write behind it has not reached this thread yet — it arrives as
-            // the `Scene` snapshot after this command, so opening now would
-            // reopen at exactly the settings the user just replaced. Marking
-            // it missing hands the open to `reconcile`, which runs on that
-            // snapshot; already due, so `retry_missing` still picks it up on
-            // its next tick where nothing was changed and no snapshot
-            // follows — the Sources dock's reconnect button.
-            let item = &scene.items[index];
-            let due = Instant::now()
-                .checked_sub(retry_after(item))
-                .unwrap_or_else(Instant::now);
-            open.insert(
-                item_id,
-                SourceState::Missing {
-                    since: due,
-                    reason: None,
-                },
-            );
+            // Every item drawing the same camera, not only the one asked for:
+            // they share one capture, and it runs at the settings whichever
+            // item opened it first asked for. Reopening one alone would
+            // rejoin the capture the others are holding open — at the mode
+            // that is being replaced.
+            for item_id in with_the_same_camera(scene, item_id) {
+                // Stopped first where something is still open: asking again
+                // for a Source that is running would leave the old one
+                // behind, holding its layer and its capture.
+                if let Some(SourceState::Open(source)) = open.get(&item_id) {
+                    source.source.stop();
+                    engine.backend.remove_source(&source.name);
+                }
+                // Left for the next pass rather than opened here, because
+                // what asks for a reopen is almost always a settings change
+                // and the write behind it has not reached this thread yet —
+                // it arrives as the `Scene` snapshot after this command, so
+                // opening now would reopen at exactly the settings the user
+                // just replaced. Marking it missing hands the open to
+                // `reconcile`, which runs on that snapshot; already due, so
+                // `retry_missing` still picks it up on its next tick where
+                // nothing was changed and no snapshot follows — the Sources
+                // dock's reconnect button.
+                let Some(item) = scene.items.iter().find(|item| item.id == item_id) else {
+                    continue;
+                };
+                let due = Instant::now()
+                    .checked_sub(retry_after(item))
+                    .unwrap_or_else(Instant::now);
+                open.insert(
+                    item_id,
+                    SourceState::Missing {
+                        since: due,
+                        reason: None,
+                    },
+                );
+            }
             true
         }
         EngineCommand::Drawing(item_id, strokes) => {
@@ -2499,6 +2509,39 @@ impl FrameRate {
         self.frames = 0;
         Some(measured)
     }
+}
+
+/// The item asked for, and every other item in the Scene showing the same
+/// camera.
+///
+/// One camera is one capture with a branch per item — see
+/// `source::video_capture` — and it runs at whatever the item that opened it
+/// asked for. So a reopen is the capture's, not one item's: leaving the
+/// others attached would hold it open at settings the user has just replaced.
+///
+/// Every other kind answers with the item alone, including a Display Capture,
+/// whose duplication *is* shared but has nothing per item to reopen it for.
+fn with_the_same_camera(scene: &SourcesSnapshot, item_id: SceneItemId) -> Vec<SceneItemId> {
+    let camera = scene
+        .items
+        .iter()
+        .find(|item| item.id == item_id)
+        .and_then(|item| match &item.settings {
+            SourceSettings::VideoCapture(settings) => Some(settings.device.as_str()),
+            _ => None,
+        });
+    let Some(camera) = camera else {
+        return vec![item_id];
+    };
+    scene
+        .items
+        .iter()
+        .filter(|item| match &item.settings {
+            SourceSettings::VideoCapture(settings) => settings.device == camera,
+            _ => false,
+        })
+        .map(|item| item.id)
+        .collect()
 }
 
 #[cfg(test)]
