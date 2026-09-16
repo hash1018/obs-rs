@@ -183,6 +183,7 @@ source-image-filter = Image files
 source-ended = Ended
 audio-kind-media-file = Media file
 audio-kind-stream = Stream
+audio-kind-browser = Page
 source-kind-image = Image
 source-kind-browser = Browser
 action-add = Add

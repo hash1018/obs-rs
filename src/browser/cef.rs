@@ -10,7 +10,7 @@ use std::{
     ptr,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
     thread::{self, JoinHandle},
@@ -70,10 +70,43 @@ pub fn helper_process() -> Option<i32> {
     // binds this build to the version of libcef.dll actually loaded.
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
-    let code = execute_process(Some(args.as_main_args()), None, ptr::null_mut());
+    // The same switches in a child as in the browser process: this is that
+    // child's own chance to be told them — see `PageApp`.
+    let mut app = PageApp::new();
+    let code = execute_process(Some(args.as_main_args()), Some(&mut app), ptr::null_mut());
     // Negative means "not a child process"; anything else is this child's
     // whole life, already lived by the call above.
     (code >= 0).then_some(code)
+}
+
+// What this application is, as far as Chromium is concerned. One thing only:
+// the switches its processes start with.
+//
+// A page in a Source has nobody to click it, and Chromium will not let a page
+// play sound — or an autoplaying video start — until someone has. That rule
+// is for a browser somebody is browsing with; here it would mean a Source
+// that is silent until a click that can never happen. OBS turns it off for
+// the same reason.
+//
+// Appended for every process type, including the renderers this is called
+// again for as they are launched: the policy is enforced where the page runs.
+wrap_app! {
+    struct PageApp;
+
+    impl App {
+        fn on_before_command_line_processing(
+            &self,
+            _process_type: Option<&CefString>,
+            command_line: Option<&mut CommandLine>,
+        ) {
+            if let Some(command_line) = command_line {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("autoplay-policy")),
+                    Some(&CefString::from("no-user-gesture-required")),
+                );
+            }
+        }
+    }
 }
 
 /// The browser engine, running.
@@ -178,6 +211,34 @@ pub struct Painted {
 /// closed while it runs.
 pub type OnPaint = Box<dyn Fn(Painted) + Send + Sync>;
 
+/// What a page hands over when it has made a sound: one slice of samples per
+/// channel, all the same length, at [`AUDIO_RATE`].
+///
+/// The slices are the browser's own buffer and are borrowed for the call —
+/// what takes them has to copy what it keeps.
+pub struct Heard<'a> {
+    pub planes: &'a [&'a [f32]],
+}
+
+/// What a page does with each block of sound it makes. Called on the audio
+/// thread CEF runs its own capture on, not the runtime thread.
+pub type OnAudio = Box<dyn Fn(Heard<'_>) + Send + Sync>;
+
+/// The rate a page's sound is taken at, and the channel count with it.
+///
+/// Asked for rather than discovered: CEF resamples and mixes a page's own
+/// output into whatever an application asks its audio handler for, and a
+/// Source has to know the shape of its sound when it is built — before the
+/// page has played anything at all. 48 kHz stereo is what the mixer works
+/// in and what a page will be making anyway.
+pub const AUDIO_RATE: u32 = 48_000;
+pub const AUDIO_CHANNELS: u16 = 2;
+
+/// How many frames a page hands over at a time. A tenth of the mixer's own
+/// idea of a block, so a page's sound arrives in pieces small enough to be
+/// early rather than late.
+const AUDIO_FRAMES_PER_BUFFER: i32 = 480;
+
 /// An open page, by the id the runtime thread knows it as.
 ///
 /// Dropping it closes the browser. There is nothing else to it from this
@@ -214,27 +275,35 @@ impl Drop for Page {
     }
 }
 
-/// Opens a page, off-screen, at `size` and at most `fps` frames a second.
+/// What a page is opened as.
+pub struct PageOptions {
+    /// Where the page comes from.
+    pub url: String,
+    /// The size it is told to render at.
+    pub size: [u32; 2],
+    /// The rate it is redrawn at, at most.
+    pub fps: u32,
+    pub paint: OnPaint,
+    /// What its sound goes to, or `None` to leave the page's audio to
+    /// Chromium — which plays it on this machine's own output, where
+    /// nothing here can record it.
+    pub audio: Option<OnAudio>,
+}
+
+/// Opens a page, off-screen, at the size and rate it is given.
 ///
 /// The URL is loaded after this returns — a page that does not exist or will
 /// not answer is not an error here, it is a page that never paints. What
 /// fails here is the engine not running, or CEF refusing to create a browser
 /// at all.
-pub fn open_page(url: &str, size: [u32; 2], fps: u32, paint: OnPaint) -> Result<Page, String> {
+pub fn open_page(options: PageOptions) -> Result<Page, String> {
     let commands = COMMANDS
         .get()
         .ok_or("there is no browser engine running in this process")?;
     let id = PageId(NEXT_PAGE.fetch_add(1, Ordering::Relaxed));
     let (reply, answered) = mpsc::channel();
     commands
-        .send(Command::Open {
-            id,
-            url: url.to_owned(),
-            size,
-            fps,
-            paint,
-            reply,
-        })
+        .send(Command::Open { id, options, reply })
         .map_err(|_| "the browser engine has stopped".to_owned())?;
     match answered.recv_timeout(OPEN_TIMEOUT) {
         Ok(Ok(())) => Ok(Page { id }),
@@ -260,10 +329,7 @@ static COMMANDS: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 enum Command {
     Open {
         id: PageId,
-        url: String,
-        size: [u32; 2],
-        fps: u32,
-        paint: OnPaint,
+        options: PageOptions,
         reply: mpsc::Sender<Result<(), String>>,
     },
     /// Whether the page is being shown, which decides whether it is drawn
@@ -330,14 +396,95 @@ wrap_render_handler! {
     }
 }
 
+// The page's own sound. Implementing this at all is what takes a page's audio
+// away from Chromium, which would otherwise play it on this machine's output
+// where nothing here could record it — so a page whose sound is not wanted is
+// given a client with no audio handler rather than a handler that discards.
+//
+// `audio_parameters` is what makes the format knowable before the page has
+// played anything: CEF mixes and resamples the page's own output into what is
+// asked for here.
+wrap_audio_handler! {
+    struct PageAudioHandler {
+        heard: Arc<OnAudio>,
+        channels: Arc<AtomicUsize>,
+    }
+
+    impl AudioHandler {
+        fn audio_parameters(
+            &self,
+            _browser: Option<&mut Browser>,
+            params: Option<&mut AudioParameters>,
+        ) -> ::std::os::raw::c_int {
+            let Some(params) = params else { return 0 };
+            params.channel_layout = ChannelLayout::LAYOUT_STEREO;
+            params.sample_rate = AUDIO_RATE as i32;
+            params.frames_per_buffer = AUDIO_FRAMES_PER_BUFFER;
+            1
+        }
+
+        fn on_audio_stream_started(
+            &self,
+            _browser: Option<&mut Browser>,
+            _params: Option<&AudioParameters>,
+            channels: ::std::os::raw::c_int,
+        ) {
+            // What the packets below actually carry, which is the count to
+            // read them by — the layout was a request.
+            self.channels.store(channels.max(0) as usize, Ordering::Release);
+        }
+
+        fn on_audio_stream_packet(
+            &self,
+            _browser: Option<&mut Browser>,
+            data: *mut *const f32,
+            frames: ::std::os::raw::c_int,
+            _pts: i64,
+        ) {
+            let channels = self.channels.load(Ordering::Acquire);
+            if data.is_null() || frames <= 0 || channels == 0 {
+                return;
+            }
+            // SAFETY: CEF hands over one pointer per channel it reported
+            // when the stream started, each to `frames` samples, and both
+            // stay live for the length of this call.
+            let planes: Vec<&[f32]> = unsafe {
+                std::slice::from_raw_parts(data, channels)
+                    .iter()
+                    .map(|plane| std::slice::from_raw_parts(*plane, frames as usize))
+                    .collect()
+            };
+            (self.heard)(Heard { planes: &planes });
+        }
+
+        fn on_audio_stream_error(
+            &self,
+            _browser: Option<&mut Browser>,
+            message: Option<&CefString>,
+        ) {
+            tracing::warn!(
+                "a page's sound could not be taken: {}",
+                message.map(CefString::to_string).unwrap_or_default()
+            );
+        }
+    }
+}
+
+// `audio` is `None` for a page whose sound is left to Chromium — see
+// `PageOptions::audio`. As above, the macro takes no doc comments.
 wrap_client! {
     struct PageClient {
         render: RenderHandler,
+        audio: Option<AudioHandler>,
     }
 
     impl Client {
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render.clone())
+        }
+
+        fn audio_handler(&self) -> Option<AudioHandler> {
+            self.audio.clone()
         }
     }
 }
@@ -345,19 +492,20 @@ wrap_client! {
 /// Runs one command on the runtime thread, which is CEF's own.
 fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
     match command {
-        Command::Open {
-            id,
-            url,
-            size,
-            fps,
-            paint,
-            reply,
-        } => {
-            let mut client = PageClient::new(PageRenderHandler::new(
+        Command::Open { id, options, reply } => {
+            let PageOptions {
+                url,
                 size,
-                Arc::new(paint),
-                Arc::new(AtomicBool::new(false)),
-            ));
+                fps,
+                paint,
+                audio,
+            } = options;
+            let mut client = PageClient::new(
+                PageRenderHandler::new(size, Arc::new(paint), Arc::new(AtomicBool::new(false))),
+                audio.map(|heard| {
+                    PageAudioHandler::new(Arc::new(heard), Arc::new(AtomicUsize::new(0)))
+                }),
+            );
             let window = WindowInfo {
                 windowless_rendering_enabled: 1,
                 // The whole reason a page can be a Source at all: its
@@ -457,10 +605,11 @@ fn run(stop: &AtomicBool, ready: &mpsc::Sender<bool>, commands: &mpsc::Receiver<
         ..Default::default()
     };
 
+    let mut app = PageApp::new();
     if initialize(
         Some(args.as_main_args()),
         Some(&settings),
-        None,
+        Some(&mut app),
         ptr::null_mut(),
     ) != 1
     {

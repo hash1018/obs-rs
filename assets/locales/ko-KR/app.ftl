@@ -183,6 +183,7 @@ source-image-filter = 이미지 파일
 source-ended = 재생 완료
 audio-kind-media-file = 미디어 파일
 audio-kind-stream = 스트림
+audio-kind-browser = 페이지
 source-kind-image = 이미지
 source-kind-browser = 브라우저
 action-add = 추가

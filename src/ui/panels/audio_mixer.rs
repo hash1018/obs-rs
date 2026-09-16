@@ -129,6 +129,18 @@ fn channels<'a>(
                 false,
                 TextKey::AudioKindStream,
             ),
+            // A page always has a channel: nothing can ask one whether it
+            // will ever play anything, so the alternative is a fader that
+            // appears halfway through a video and is not there to be set up
+            // in advance.
+            crate::domain::SourceSettings::Browser(settings) => (
+                true,
+                settings.gain_db,
+                settings.muted,
+                settings.monitored,
+                false,
+                TextKey::AudioKindBrowser,
+            ),
             _ => return None,
         };
         // Three ways to have no column, and they are all the same statement:

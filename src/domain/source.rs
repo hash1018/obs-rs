@@ -412,7 +412,7 @@ pub const MAX_BROWSER_FPS: u32 = 60;
 /// negotiates it, the page is *told* it. That is also what makes it worth
 /// editing — a page laid out for 1920×1080 and drawn at 1280×720 is not the
 /// same picture scaled, it is a different layout.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BrowserSourceSettings {
     /// Where the page comes from, exactly as it was typed.
     ///
@@ -424,6 +424,18 @@ pub struct BrowserSourceSettings {
     pub size: [u32; 2],
     /// The rate the page is redrawn at, at most. See [`DEFAULT_BROWSER_FPS`].
     pub fps: u32,
+    /// This page's own fader, in decibels.
+    ///
+    /// A page has sound whether or not it ever makes any — there is no
+    /// asking it in advance, the way a file's container can be read — so
+    /// every Browser Source has a channel in the mixer and these three
+    /// settings, as a media file and a stream do.
+    pub gain_db: f32,
+    pub muted: bool,
+    /// Whether it is also in the monitor mix. Off to begin with: taking a
+    /// page's sound away from the machine's own output and putting it back
+    /// on unasked is a page talking into somebody's speakers.
+    pub monitored: bool,
 }
 
 impl Default for BrowserSourceSettings {
@@ -432,6 +444,9 @@ impl Default for BrowserSourceSettings {
             url: String::new(),
             size: DEFAULT_BROWSER_SIZE,
             fps: DEFAULT_BROWSER_FPS,
+            gain_db: 0.0,
+            muted: false,
+            monitored: false,
         }
     }
 }

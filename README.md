@@ -54,6 +54,9 @@ bottom.](docs/screenshot.png)
   GPU texture, so the page reaches the compositor without a copy through
   system memory — and its transparency is real transparency, not a black
   rectangle. Address, size and frame rate are set in the Properties dock.
+  Whatever the page plays gets a channel in the audio mixer, like a media
+  file's sound: it is recorded, and heard as well if you switch monitoring
+  on.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an

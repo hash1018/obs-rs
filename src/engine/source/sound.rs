@@ -69,6 +69,31 @@ pub(in crate::engine) struct Track {
     pub(in crate::engine) time_base: ffmpeg::Rational,
 }
 
+/// What a Source hands its sound over as, and so what has to happen to it
+/// before the fader.
+enum Head {
+    /// Encoded packets on one of the Source's pads — a file's or a stream's.
+    /// They are decoded, held, and paced against the timeline they carry.
+    ///
+    /// Boxed because a decoder is most of what a `Sound` weighs and the
+    /// other arm carries nothing at all.
+    Packets(Box<Packets>),
+    /// Frames pushed in as they are made — a page's audio, which arrives
+    /// decoded and in real time. Nothing to decode, and nothing to pace
+    /// against: it is already arriving at the rate it was played at.
+    Frames,
+}
+
+/// What decoding a Source's own packets takes.
+struct Packets {
+    index: usize,
+    time_base: ffmpeg::Rational,
+    decoder: SwDecoder,
+    /// Set for a live sender, whose timeline can restart under it — see
+    /// [`Sound::with_discontinuity_limit`].
+    discontinuity_limit: Option<Duration>,
+}
+
 /// The branch, built before the pipeline is.
 ///
 /// Everything here can fail for an ordinary reason — a codec this FFmpeg was
@@ -76,9 +101,7 @@ pub(in crate::engine) struct Track {
 /// be reported rather than unwrapped inside the builder closure, on a thread
 /// with nowhere to report from.
 pub(in crate::engine) struct Sound {
-    index: usize,
-    time_base: ffmpeg::Rational,
-    decoder: SwDecoder,
+    head: Head,
     /// Where the Source's audio filters go, and the way back to it.
     rack: Rack,
     filters: AudioFilterRack,
@@ -91,9 +114,6 @@ pub(in crate::engine) struct Sound {
     mix: Box<dyn Sink>,
     /// The `AppSink` that measures the level.
     meter: Box<dyn Sink>,
-    /// Set for a live sender, whose timeline can restart under it — see
-    /// [`Sound::with_discontinuity_limit`].
-    discontinuity_limit: Option<Duration>,
 }
 
 impl Sound {
@@ -104,8 +124,12 @@ impl Sound {
     /// The picture's own `Pacer` has to be given the same limit. A jump that
     /// re-anchored one branch and not the other would leave the sound
     /// playing against an origin the picture no longer shares.
+    ///
+    /// A no-op on pushed frames, which have no `Pacer` to tell.
     pub(in crate::engine) fn with_discontinuity_limit(mut self, limit: Duration) -> Self {
-        self.discontinuity_limit = Some(limit);
+        if let Head::Packets(packets) = &mut self.head {
+            packets.discontinuity_limit = Some(limit);
+        }
         self
     }
 }
@@ -257,8 +281,86 @@ pub(in crate::engine) fn build(
         declared_format(&track.params),
         track.time_base,
     );
-    let decoder = SwDecoder::new(format!("{name}-audio-decoder"), track.params)?;
+    let head = Head::Packets(Box::new(Packets {
+        index: track.index,
+        time_base: track.time_base,
+        decoder: SwDecoder::new(format!("{name}-audio-decoder"), track.params)?,
+        discontinuity_limit: None,
+    }));
+    tail(
+        name,
+        head,
+        rack,
+        filters,
+        mixer,
+        gain_db,
+        muted,
+        audio_filters,
+        meters,
+        meter_wake,
+    )
+    .map(Some)
+}
 
+/// The same for a Source that pushes frames rather than packets — see
+/// [`Head::Frames`]. `format` is what it will push, which such a Source
+/// settles for itself rather than reading off a stream.
+///
+/// `None` only for a machine whose mixer never started: a page is not asked
+/// whether it will ever make a sound, and one that does not simply pushes
+/// nothing.
+#[cfg(target_os = "windows")]
+pub(in crate::engine) fn build_pushed(
+    name: &str,
+    format: AudioFormat,
+    mixer: Option<&MixerHandle>,
+    settings: SoundSettings<'_>,
+    meters: &Arc<MediaMeters>,
+    meter_wake: &MeterWake,
+) -> Result<Option<Sound>, BackendError> {
+    let SoundSettings {
+        gain_db,
+        muted,
+        filters: audio_filters,
+    } = settings;
+    let Some(mixer) = mixer else {
+        return Ok(None);
+    };
+    let (rack, filters) = filters::rack(
+        &mixer_name(name),
+        format,
+        ffmpeg::Rational::new(1, format.sample_rate as i32),
+    );
+    tail(
+        name,
+        Head::Frames,
+        rack,
+        filters,
+        mixer,
+        gain_db,
+        muted,
+        audio_filters,
+        meters,
+        meter_wake,
+    )
+    .map(Some)
+}
+
+/// Everything below the head, which is the same whatever the head is: the
+/// fader, the meter, and the mixer input this Source is summed into.
+#[allow(clippy::too_many_arguments)]
+fn tail(
+    name: &str,
+    head: Head,
+    rack: Rack,
+    filters: AudioFilterRack,
+    mixer: &MixerHandle,
+    gain_db: f32,
+    muted: bool,
+    audio_filters: &[AudioFilter],
+    meters: &Arc<MediaMeters>,
+    meter_wake: &MeterWake,
+) -> Result<Sound, BackendError> {
     // The fader lives in this pipeline rather than the audio thread's,
     // because this sound belongs to this Source rather than to a device
     // everything shares.
@@ -280,10 +382,8 @@ pub(in crate::engine) fn build(
     let mix = mixer
         .add_source(mixer_name(name))
         .ok_or("the audio mixer is gone")?;
-    Ok(Some(Sound {
-        index: track.index,
-        time_base: track.time_base,
-        decoder,
+    Ok(Sound {
+        head,
         rack,
         filters,
         initial_filters: audio_filters.to_vec(),
@@ -291,8 +391,7 @@ pub(in crate::engine) fn build(
         volume,
         mix,
         meter: Box::new(meter),
-        discontinuity_limit: None,
-    }))
+    })
 }
 
 /// Attaches it to whichever pad the source announced this stream on.
@@ -315,18 +414,38 @@ pub(in crate::engine) fn attach<S: SourceElement>(
         .branch(meter)
         .branch(mix)
         .build_dynamic()?;
-    let faded = context
-        .branch()
-        .pipe(sound.decoder)
-        .queue("audio", QUEUE_DEPTH)
-        .pipe(match sound.discontinuity_limit {
-            Some(limit) => Pacer::with_discontinuity_limit("audio-pacer", sound.time_base, limit)?,
-            None => Pacer::new("audio-pacer", sound.time_base)?,
-        })
+    // Where the two heads differ, and the only place they do: packets are
+    // decoded, held and paced; frames are already what the fader takes, and
+    // already arriving at the rate they were made at.
+    let (index, head) = match sound.head {
+        Head::Packets(packets) => {
+            let Packets {
+                index,
+                time_base,
+                decoder,
+                discontinuity_limit,
+            } = *packets;
+            (
+                index,
+                context
+                    .branch()
+                    .pipe(decoder)
+                    .queue("audio", QUEUE_DEPTH)
+                    .pipe(match discontinuity_limit {
+                        Some(limit) => {
+                            Pacer::with_discontinuity_limit("audio-pacer", time_base, limit)?
+                        }
+                        None => Pacer::new("audio-pacer", time_base)?,
+                    }),
+            )
+        }
+        Head::Frames => (0, context.branch()),
+    };
+    let faded = head
         .pipe(sound.rack)
         .pipe(sound.fader)
         .to_branch(tee_branch)?;
-    context.attach(source, sound.index, faded)?;
+    context.attach(source, index, faded)?;
     let mut routing = SoundRouting {
         tee,
         name: name.to_owned(),

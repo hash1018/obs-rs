@@ -334,6 +334,7 @@ text_keys! {
     SourceEnded                   => "source-ended";
     AudioKindMediaFile            => "audio-kind-media-file";
     AudioKindStream               => "audio-kind-stream";
+    AudioKindBrowser              => "audio-kind-browser";
     DrawingToolSelect             => "drawing-tool-select";
     DrawingToolPen                => "drawing-tool-pen";
     DrawingToolHighlighter        => "drawing-tool-highlighter";

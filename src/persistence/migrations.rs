@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 27;
+const SCHEMA_VERSION: i64 = 28;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -570,6 +570,24 @@ fn migrate(
             );
 
             PRAGMA user_version = 27;",
+        )?;
+    }
+    if step(28) {
+        // A page's own sound, as a media file's and a stream's already are:
+        // a fader, a mute, and whether it is in the monitor mix. Every
+        // Browser Source gets a channel whether or not its page ever plays
+        // anything — nothing can ask a page in advance — so these are not
+        // nullable and every row there already is takes the same defaults a
+        // new one would.
+        transaction.execute_batch(
+            "ALTER TABLE browser_source_settings
+                ADD COLUMN gain_db REAL NOT NULL DEFAULT 0;
+            ALTER TABLE browser_source_settings
+                ADD COLUMN muted INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1));
+            ALTER TABLE browser_source_settings
+                ADD COLUMN monitored INTEGER NOT NULL DEFAULT 0 CHECK (monitored IN (0, 1));
+
+            PRAGMA user_version = 28;",
         )?;
     }
     transaction.commit()?;

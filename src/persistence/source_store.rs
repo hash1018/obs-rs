@@ -161,7 +161,10 @@ impl SourceStore {
                 browser_source_settings.url AS browser_url,
                 browser_source_settings.width AS browser_width,
                 browser_source_settings.height AS browser_height,
-                browser_source_settings.fps AS browser_fps
+                browser_source_settings.fps AS browser_fps,
+                browser_source_settings.gain_db AS browser_gain_db,
+                browser_source_settings.muted AS browser_muted,
+                browser_source_settings.monitored AS browser_monitored
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -278,6 +281,9 @@ impl SourceStore {
                         url: row.get("browser_url")?,
                         size: [row.get("browser_width")?, row.get("browser_height")?],
                         fps: row.get::<_, i64>("browser_fps")? as u32,
+                        gain_db: row.get("browser_gain_db")?,
+                        muted: row.get("browser_muted")?,
+                        monitored: row.get("browser_monitored")?,
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -1579,9 +1585,9 @@ fn set_media_column<T: rusqlite::ToSql>(
     Ok(())
 }
 
-/// A column both kinds with sound of their own store under the same name —
-/// the fader, the mute, the monitor — on whichever of the two this item's
-/// Source is. Both updates run and one of them matches no row, which is
+/// A column every kind with sound of its own stores under the same name —
+/// the fader, the mute, the monitor — on whichever of them this item's
+/// Source is. Every update runs and all but one match no row, which is
 /// cheaper to say than asking first which kind it is.
 ///
 /// The column name is a literal from the callers above, as for
@@ -1592,7 +1598,11 @@ fn set_sound_column<T: rusqlite::ToSql>(
     column: &'static str,
     value: T,
 ) -> PersistenceResult<()> {
-    for table in ["media_file_settings", "rtsp_source_settings"] {
+    for table in [
+        "media_file_settings",
+        "rtsp_source_settings",
+        "browser_source_settings",
+    ] {
         transaction.execute(
             &format!(
                 "UPDATE {table}
@@ -1843,6 +1853,7 @@ mod tests {
                 url: "https://example.com/overlay".to_owned(),
                 size: [1920, 1080],
                 fps: 60,
+                ..Default::default()
             })
         );
     }

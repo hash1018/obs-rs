@@ -368,12 +368,14 @@ pub(in crate::engine) fn refresh_media_file(
         return;
     };
 
-    // What the Audio Mixer column sets, which a file and a stream both have.
+    // What the Audio Mixer column sets, which every kind carrying its own
+    // sound has — a file, a stream, a page.
     let (gain_db, mute, monitored) = match &item.settings {
         SourceSettings::MediaFile(settings) => {
             (settings.gain_db, settings.muted, settings.monitored)
         }
         SourceSettings::Rtsp(settings) => (settings.gain_db, settings.muted, settings.monitored),
+        SourceSettings::Browser(settings) => (settings.gain_db, settings.muted, settings.monitored),
         _ => return,
     };
 

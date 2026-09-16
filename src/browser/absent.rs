@@ -33,7 +33,7 @@ impl Page {
 
 /// Always the reason there is no page, which a Browser Source then shows as
 /// why it is dark.
-pub fn open_page(_url: &str, _size: [u32; 2], _fps: u32, _paint: OnPaint) -> Result<Page, String> {
+pub fn open_page(_options: PageOptions) -> Result<Page, String> {
     Err("this build has no browser engine".to_owned())
 }
 
@@ -48,4 +48,28 @@ impl Runtime {
         tracing::debug!("this build has no browser engine");
         None
     }
+}
+
+/// What a page would hand over when it made a sound.
+pub struct Heard<'a> {
+    pub planes: &'a [&'a [f32]],
+}
+
+/// What a page would do with each block of sound it made.
+pub type OnAudio = Box<dyn Fn(Heard<'_>) + Send + Sync>;
+
+/// The shape a page's sound would be taken in — see the Windows
+/// implementation, which is what settles these.
+pub const AUDIO_RATE: u32 = 48_000;
+pub const AUDIO_CHANNELS: u16 = 2;
+
+/// What a page would be opened as. Nothing reads these here — there is no
+/// page to open — but the caller builds one the same way on every platform.
+#[allow(dead_code)]
+pub struct PageOptions {
+    pub url: String,
+    pub size: [u32; 2],
+    pub fps: u32,
+    pub paint: OnPaint,
+    pub audio: Option<OnAudio>,
 }

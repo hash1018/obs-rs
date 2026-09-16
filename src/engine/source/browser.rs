@@ -74,6 +74,67 @@ fn is_address(url: &str) -> bool {
     url.contains("://") || url.starts_with("data:")
 }
 
+/// Blocks of a page's sound held between the browser and the mixer.
+///
+/// CEF hands them over in hundredths of a second, so this is about a second:
+/// far more than the mixer will ever be behind by, and nothing next to a
+/// file's read-ahead. A block that will not fit is dropped rather than
+/// waited on — see where it is pushed.
+#[cfg(target_os = "windows")]
+const AUDIO_QUEUE_DEPTH: usize = 100;
+
+/// Where a page's sound has got to, in samples.
+///
+/// A page's own timestamps are wall-clock milliseconds and its stream stops
+/// and starts as it plays one thing after another; what the branch below
+/// wants is a timeline that only goes forwards, at the rate the samples
+/// arrive. So this counts them, which is also what the mixer does with what
+/// it is given.
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct SampleClock {
+    samples: i64,
+}
+
+#[cfg(target_os = "windows")]
+impl SampleClock {
+    /// One block of planar samples as a frame, stamped where it falls.
+    fn frame(&mut self, heard: &crate::browser::Heard<'_>) -> media_pp::buffer::MediaBuffer {
+        use media_pp::ffmpeg::format::{Sample, sample::Type};
+
+        let frames = heard.planes.first().map_or(0, |plane| plane.len());
+        let mut audio = media_pp::ffmpeg::frame::Audio::new(
+            Sample::F32(Type::Planar),
+            frames,
+            channel_layout(heard.planes.len()),
+        );
+        audio.set_rate(crate::browser::AUDIO_RATE);
+        audio.set_pts(Some(self.samples));
+        for (index, plane) in heard.planes.iter().enumerate() {
+            // Plane by plane and sample by sample rather than as bytes:
+            // `data_mut` reads `linesize[index]`, and planar audio sets only
+            // `linesize[0]` — every plane after the first came back empty,
+            // which is a panic inside a callback CEF cannot unwind through.
+            audio.plane_mut::<f32>(index).copy_from_slice(plane);
+        }
+        self.samples += frames as i64;
+        media_pp::buffer::MediaBuffer::Audio(Arc::new(audio))
+    }
+}
+
+/// What FFmpeg calls the layout a page handed over.
+#[cfg(target_os = "windows")]
+fn channel_layout(channels: usize) -> media_pp::ffmpeg::ChannelLayout {
+    match channels {
+        0 | 1 => media_pp::ffmpeg::ChannelLayout::MONO,
+        2 => media_pp::ffmpeg::ChannelLayout::STEREO,
+        // Whatever else a page was mixed into, by count alone: FFmpeg's
+        // default layout for that many channels is what every other Source
+        // here is described by.
+        other => media_pp::ffmpeg::ChannelLayout::default(other as i32),
+    }
+}
+
 /// The page's size as the pipeline takes it: whole, even pixels.
 ///
 /// Even because everything downstream of the compositor is NV12 — a
@@ -85,19 +146,22 @@ fn page_size(settings: &crate::domain::BrowserSourceSettings) -> [u32; 2] {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
     context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
+    mixer: Option<&media_pp::elements::MixerHandle>,
+    meter_wake: &crate::engine::audio::MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenOutcome, BackendError> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use media_pp::elements::{D3d11SharedTextureSource, D3d11VideoCompositorInput};
-    use media_pp::pipeline::Pipeline;
+    use media_pp::pipeline::PipelineBuilder;
 
-    use super::{FilledRack, OpenSource, filters, input_name};
+    use super::{FilledRack, MediaFile, MediaMeters, OpenSource, filters, input_name, sound};
 
     let settings = match settings(item)? {
         Ok(settings) => settings,
@@ -127,25 +191,70 @@ pub(in crate::engine) fn open(
         item,
     )?;
 
+    // Whatever the page plays, as a channel in the mixer. Built before it
+    // has played anything, and for a page that never does: CEF says nothing
+    // about a page's sound until it makes one, and a Source that grew a
+    // fader the moment a video started would be a mixer nobody could set up
+    // in advance. What it costs meanwhile is an idle channel at silence.
+    let meters = Arc::new(MediaMeters::default());
+    let (audio_source, heard_pusher) = media_pp::elements::AppSource::new(
+        format!("{name}-audio"),
+        // Blocks of a hundredth of a second: a second of them, which is far
+        // more than the mixer will ever be behind by and still nothing next
+        // to a file's read-ahead.
+        AUDIO_QUEUE_DEPTH,
+    );
+    let sound = sound::build_pushed(
+        &name,
+        media_pp::elements::AudioFormat::new(
+            media_pp::ffmpeg::format::Sample::F32(media_pp::ffmpeg::format::sample::Type::Planar),
+            crate::browser::AUDIO_RATE,
+            crate::browser::AUDIO_CHANNELS,
+        ),
+        mixer,
+        sound::SoundSettings {
+            gain_db: settings.gain_db,
+            muted: super::muted(settings.muted, item.visible),
+            filters: &item.audio_filters,
+        },
+        &meters,
+        meter_wake,
+    )?;
+    let volume = sound.as_ref().map(|sound| sound.volume.clone());
+
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
+    let sound_name = name.clone();
+    let mut routing = None;
+    // By `&mut` rather than by value, as a stream's is: the closure has to
+    // be `move` for what it consumes, and the routing has to come back out
+    // to the engine loop that decides which mixes this page is in.
+    let routing_out = &mut routing;
+    let mut builder =
+        PipelineBuilder::new(name.clone()).add_source(source, move |source, context| {
+            let branch = context.branch().pipe(rack).to(sink)?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })?;
+    if let Some(sound) = sound {
+        builder = builder.add_source(audio_source, move |source, context| {
+            *routing_out = Some(sound::attach(context, source, sound, &sound_name)?);
+            Ok(())
+        })?;
+    }
+    let pipeline = builder.build();
     pipeline.run()?;
 
     // Opened after the pipeline is running, so the first picture the page
     // paints has somewhere to go.
     let complained = AtomicBool::new(false);
     let complained_about = name.clone();
-    let page = crate::browser::open_page(
-        &settings.url,
+    let page = crate::browser::open_page(crate::browser::PageOptions {
+        url: settings.url.clone(),
         size,
-        settings.fps,
-        Box::new(move |painted| {
+        fps: settings.fps,
+        paint: Box::new(move |painted| {
             // The browser was told this size, so a different one means it
             // drew something else — a device change, a page that resized
             // itself. Refused rather than stretched, and said once: this
@@ -172,7 +281,26 @@ pub(in crate::engine) fn open(
                 tracing::warn!("\"{complained_about}\": {error}");
             }
         }),
-    );
+        // `None` where the mixer never started: with no audio handler the
+        // page's sound stays Chromium's, which plays it on this machine's
+        // own output — the only place left for it to go.
+        audio: routing.is_some().then(|| {
+            let clock = std::sync::Mutex::new(SampleClock::default());
+            let complained = AtomicBool::new(false);
+            let complained_about = name.clone();
+            Box::new(move |heard: crate::browser::Heard<'_>| {
+                let frame = clock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .frame(&heard);
+                if let Err(error) = heard_pusher.try_push(frame)
+                    && !complained.swap(true, Ordering::Relaxed)
+                {
+                    tracing::warn!("\"{complained_about}\": {error}");
+                }
+            }) as crate::browser::OnAudio
+        }),
+    });
     let page = match page {
         Ok(page) => page,
         // Whatever the browser engine could not do, the Sources dock says.
@@ -182,7 +310,16 @@ pub(in crate::engine) fn open(
     };
 
     Ok(OpenOutcome::Open(OpenSource {
-        media_file: None,
+        // Named for the file it was written for; what a page shares with one
+        // is that it carries its own sound — see [`MediaFile`].
+        media_file: Some(MediaFile {
+            // Nothing to loop: a page is not playing a timeline.
+            looping: None,
+            volume,
+            meters,
+            pipeline: Arc::clone(&pipeline),
+            sound: routing,
+        }),
         // Told to the page rather than negotiated with it, so there is
         // nothing to write back.
         negotiated_size: None,

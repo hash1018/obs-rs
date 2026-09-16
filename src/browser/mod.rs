@@ -37,4 +37,7 @@
 )]
 mod engine;
 
-pub use engine::{Page, Runtime, helper_process, open_page};
+pub use engine::{
+    AUDIO_CHANNELS, AUDIO_RATE, Heard, OnAudio, Page, PageOptions, Runtime, helper_process,
+    open_page,
+};
