@@ -195,6 +195,31 @@ impl Drop for Runtime {
     }
 }
 
+/// Runs what one of CEF's callbacks hands out to this application, and
+/// turns a panic in it into a line in the log.
+///
+/// A panic that reaches an `extern "C"` frame is not an unwind, it is an
+/// abort: the whole application goes, with nothing to read but a Windows
+/// fast-fail code. This is not hypothetical — a copy into an audio plane
+/// FFmpeg reported as empty took obs-rs down exactly that way while this
+/// was being written, and the next such mistake should cost a page's
+/// picture or a block of its sound instead.
+///
+/// `AssertUnwindSafe` because what these callbacks touch is a channel, an
+/// atomic and a device: state that a half-finished call leaves as valid as
+/// it found it.
+fn guarded(what: &str, body: impl FnOnce()) {
+    let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) else {
+        return;
+    };
+    let said = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message");
+    tracing::error!("a page's {what} was dropped: it panicked ({said})");
+}
+
 /// What a page hands over when it has drawn: the shared-texture handle the
 /// browser painted into, and the size of it.
 ///
@@ -388,9 +413,11 @@ wrap_render_handler! {
         ) {
             let Some(info) = info else { return };
             let coded = &info.extra.coded_size;
-            (self.paint)(Painted {
-                handle: info.shared_texture_handle as isize,
-                size: [coded.width.max(0) as u32, coded.height.max(0) as u32],
+            guarded("paint", || {
+                (self.paint)(Painted {
+                    handle: info.shared_texture_handle as isize,
+                    size: [coded.width.max(0) as u32, coded.height.max(0) as u32],
+                });
             });
         }
     }
@@ -454,7 +481,7 @@ wrap_audio_handler! {
                     .map(|plane| std::slice::from_raw_parts(*plane, frames as usize))
                     .collect()
             };
-            (self.heard)(Heard { planes: &planes });
+            guarded("audio", || (self.heard)(Heard { planes: &planes }));
         }
 
         fn on_audio_stream_error(

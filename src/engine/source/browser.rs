@@ -98,16 +98,34 @@ struct SampleClock {
 
 #[cfg(target_os = "windows")]
 impl SampleClock {
-    /// One block of planar samples as a frame, stamped where it falls.
-    fn frame(&mut self, heard: &crate::browser::Heard<'_>) -> media_pp::buffer::MediaBuffer {
+    /// One block of planar samples as a frame, stamped where it falls, or
+    /// `None` for a block there is nothing to make one of.
+    ///
+    /// The two refusals are what the copy below would otherwise panic on,
+    /// and a panic here is the browser engine's callback aborting the
+    /// application — see `browser::guarded`. Neither has been seen: CEF
+    /// hands over one equal-length plane per channel it announced.
+    fn frame(
+        &mut self,
+        heard: &crate::browser::Heard<'_>,
+    ) -> Option<media_pp::buffer::MediaBuffer> {
         use media_pp::ffmpeg::format::{Sample, sample::Type};
 
-        let frames = heard.planes.first().map_or(0, |plane| plane.len());
+        let frames = heard.planes.first()?.len();
+        if frames == 0 || heard.planes.iter().any(|plane| plane.len() != frames) {
+            return None;
+        }
         let mut audio = media_pp::ffmpeg::frame::Audio::new(
             Sample::F32(Type::Planar),
             frames,
             channel_layout(heard.planes.len()),
         );
+        // What FFmpeg actually allocated, which is what the copy below is
+        // allowed to write into: a frame it could not get a buffer for
+        // reports no planes at all.
+        if audio.planes() != heard.planes.len() {
+            return None;
+        }
         audio.set_rate(crate::browser::AUDIO_RATE);
         audio.set_pts(Some(self.samples));
         for (index, plane) in heard.planes.iter().enumerate() {
@@ -118,7 +136,7 @@ impl SampleClock {
             audio.plane_mut::<f32>(index).copy_from_slice(plane);
         }
         self.samples += frames as i64;
-        media_pp::buffer::MediaBuffer::Audio(Arc::new(audio))
+        Some(media_pp::buffer::MediaBuffer::Audio(Arc::new(audio)))
     }
 }
 
@@ -289,10 +307,13 @@ pub(in crate::engine) fn open(
             let complained = AtomicBool::new(false);
             let complained_about = name.clone();
             Box::new(move |heard: crate::browser::Heard<'_>| {
-                let frame = clock
+                let Some(frame) = clock
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .frame(&heard);
+                    .frame(&heard)
+                else {
+                    return;
+                };
                 if let Err(error) = heard_pusher.try_push(frame)
                     && !complained.swap(true, Ordering::Relaxed)
                 {
