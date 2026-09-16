@@ -497,12 +497,63 @@ wrap_audio_handler! {
     }
 }
 
+// What a page is allowed to do about windows, which is nothing.
+//
+// `window.open`, a link with `target="_blank"`, a script that decides it
+// wants a login box: each of those asks for a second browser, and CEF makes
+// that one a real window on the screen — over whatever is being recorded,
+// with no way to get it back off. A Source is a page drawn into a layer, so
+// the answer is no, and the log says which address asked.
+//
+// The second line of defence rather than the first: Chromium's own popup
+// blocker swallows a `window.open` that no user asked for before it ever
+// reaches here, which is why this is quiet in practice. Checked by turning
+// that blocker off for a run — the refusal then arrives here, once for the
+// page that kept asking, and still no window appears.
+wrap_life_span_handler! {
+    struct PageLifeSpanHandler {
+        complained: Arc<AtomicBool>,
+    }
+
+    impl LifeSpanHandler {
+        #[allow(clippy::too_many_arguments)]
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _popup_id: ::std::os::raw::c_int,
+            target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
+        ) -> ::std::os::raw::c_int {
+            // Once per page: one that asks in a loop would otherwise write
+            // the log full of the same line.
+            if !self.complained.swap(true, Ordering::Relaxed) {
+                tracing::info!(
+                    "a page asked to open {} in a window of its own; refused",
+                    target_url.map(CefString::to_string).unwrap_or_default()
+                );
+            }
+            // Cancelled.
+            1
+        }
+    }
+}
+
 // `audio` is `None` for a page whose sound is left to Chromium — see
 // `PageOptions::audio`. As above, the macro takes no doc comments.
 wrap_client! {
     struct PageClient {
         render: RenderHandler,
         audio: Option<AudioHandler>,
+        life_span: LifeSpanHandler,
     }
 
     impl Client {
@@ -512,6 +563,10 @@ wrap_client! {
 
         fn audio_handler(&self) -> Option<AudioHandler> {
             self.audio.clone()
+        }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life_span.clone())
         }
     }
 }
@@ -532,6 +587,7 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
                 audio.map(|heard| {
                     PageAudioHandler::new(Arc::new(heard), Arc::new(AtomicUsize::new(0)))
                 }),
+                PageLifeSpanHandler::new(Arc::new(AtomicBool::new(false))),
             );
             let window = WindowInfo {
                 windowless_rendering_enabled: 1,
