@@ -161,13 +161,23 @@ impl<E> Shared<E> {
 /// Several per key at times: the one new items join, last, and before it
 /// any that ended by themselves and still have items to be told.
 pub(in crate::engine) struct Registry<E> {
+    /// Held only for as long as it takes to read or change the map — never
+    /// while a capture opens or stops, which is where the time goes.
     open: Mutex<HashMap<String, Vec<Shared<E>>>>,
+    /// Held for the whole of an [`attach`](Self::attach), opening included.
+    ///
+    /// What keeps two attaches from opening one target twice, now that the
+    /// map is let go while a capture opens — a camera opened twice is the
+    /// failure this module exists for. Only attaching takes it, and only the
+    /// source opener attaches, so nothing the engine loop asks waits on it.
+    attaching: Mutex<()>,
 }
 
 impl<E> Default for Registry<E> {
     fn default() -> Self {
         Self {
             open: Mutex::new(HashMap::new()),
+            attaching: Mutex::new(()),
         }
     }
 }
@@ -183,41 +193,76 @@ impl<E> Registry<E> {
     ///
     /// The returned id names this item's branch and nothing else, so removing
     /// it later cannot disturb another item sharing the same capture.
+    ///
+    /// `open` runs with the map let go. It is the slow part — a camera took
+    /// 2.3 s here — and the engine loop reads this map once a second for
+    /// every item sharing a capture, so holding it across the open stopped
+    /// the engine for as long as the device took, which is the one thing
+    /// opening on a thread of its own is for. `finish` still runs with the
+    /// map held: it builds one item's branch, and a capture its last item let
+    /// go of meanwhile would be one it had attached to after it stopped.
     pub(in crate::engine) fn attach(
         &self,
         key: &str,
         open: impl FnOnce() -> Result<Shared<E>, BackendError>,
         finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
     ) -> Result<(Share, [u32; 2]), BackendError> {
-        let mut captures = self.lock();
-        let versions = captures.entry(key.to_owned()).or_default();
-        // A capture that has ended is left for its own items to leave, and a
-        // new one opened beside it.
-        let opened = !versions.last().is_some_and(Shared::joinable);
-        if opened {
-            match open() {
-                Ok(capture) => versions.push(capture),
-                Err(error) => {
+        let _attaching = self
+            .attaching
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut open = Some(open);
+        loop {
+            // A capture that has ended is left for its own items to leave, and
+            // a new one opened beside it.
+            let fresh = match open.take_if(|_| !self.joinable(key)) {
+                Some(open) => Some(open()?),
+                None => None,
+            };
+            let mut captures = self.lock();
+            let versions = captures.entry(key.to_owned()).or_default();
+            let opened = fresh.is_some();
+            match fresh {
+                Some(capture) => versions.push(capture),
+                // The one this was to join ended, or was let go by its last
+                // item, between the look above and now. Round again to open
+                // one — `open` is still unused, since it is only taken on the
+                // way to this arm's sibling.
+                None if !versions.last().is_some_and(Shared::joinable) => {
                     if versions.is_empty() {
                         captures.remove(key);
                     }
-                    return Err(error);
+                    continue;
+                }
+                None => {}
+            }
+            let capture = versions.last_mut().expect("pushed or looked at above");
+            let attached = Self::attach_to(capture, finish);
+            // One this just opened and could not attach to has nobody to close
+            // it later.
+            let mut abandoned = None;
+            if attached.is_err() && opened && capture.branches.is_empty() {
+                abandoned = versions.pop();
+                if versions.is_empty() {
+                    captures.remove(key);
                 }
             }
-        }
-        let versions = captures.get_mut(key).expect("filled above");
-        let capture = versions.last_mut().expect("filled above");
-        let attached = Self::attach_to(capture, finish);
-        // One this just opened and could not attach to has nobody to close
-        // it later.
-        if attached.is_err() && opened && capture.branches.is_empty() {
-            let capture = versions.pop().expect("the one just opened");
-            capture.pipeline.stop();
-            if versions.is_empty() {
-                captures.remove(key);
+            drop(captures);
+            // With the map let go, since stopping waits on the capture's own
+            // threads.
+            if let Some(capture) = abandoned {
+                capture.pipeline.stop();
             }
+            return attached;
         }
-        attached
+    }
+
+    /// Whether `key` has a capture a new item can join.
+    fn joinable(&self, key: &str) -> bool {
+        self.lock()
+            .get(key)
+            .and_then(|versions| versions.last())
+            .is_some_and(Shared::joinable)
     }
 
     fn attach_to(
@@ -279,10 +324,13 @@ impl<E> Registry<E> {
         // Only once nothing draws from it: another SceneItem may still be
         // showing this capture.
         if capture.branches.is_empty() {
-            versions.remove(at).pipeline.stop();
+            let closed = versions.remove(at);
             if versions.is_empty() {
                 captures.remove(key);
             }
+            // Stopped with the map let go — see `attach`.
+            drop(captures);
+            closed.pipeline.stop();
         }
     }
 
@@ -463,6 +511,75 @@ mod tests {
             "the new capture keeps its item"
         );
         registry.detach("key", third);
+        assert!(registry.lock().is_empty());
+    }
+
+    /// Opening a capture takes as long as its device does — seconds, for a
+    /// camera — and nothing asked of the registry meanwhile may wait on it.
+    /// The engine loop reads every shared item's share once a second, so a
+    /// read held up here is the whole engine held up, which is what opening
+    /// on a thread of its own exists to prevent.
+    #[test]
+    fn a_capture_being_opened_holds_up_nothing_else() {
+        use std::sync::mpsc;
+
+        let registry = Arc::new(Registry::<()>::default());
+        // Kept for the whole test: a capture whose handle is dropped ends,
+        // and one that ends before its item joins is refused — rightly, and
+        // one run in thirty.
+        let (capture, _other_pusher) = a_capture();
+        let (other, _) = registry
+            .attach("other", || Ok(capture), a_sink())
+            .expect("open the other capture");
+
+        let (opening_tx, opening_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let slow = std::thread::spawn({
+            let registry = Arc::clone(&registry);
+            let (capture, pusher) = a_capture();
+            move || {
+                registry
+                    .attach(
+                        "slow",
+                        move || {
+                            let _ = opening_tx.send(());
+                            let _ = release_rx.recv();
+                            Ok(capture)
+                        },
+                        a_sink(),
+                    )
+                    .map(|(share, _)| (share, pusher))
+                    .map_err(|error| error.to_string())
+            }
+        });
+        opening_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the slow open started");
+
+        // From a thread of its own and with a deadline: held up, the read
+        // would wait for the open, and the open waits for this test.
+        let (answer_tx, answer_rx) = mpsc::channel();
+        std::thread::spawn({
+            let registry = Arc::clone(&registry);
+            move || {
+                let answer = registry.with_share("other", other, |capture| capture.branches.len());
+                let _ = answer_tx.send(answer);
+            }
+        });
+        let answer = answer_rx.recv_timeout(Duration::from_secs(1));
+        release_tx.send(()).expect("release the slow open");
+        assert_eq!(
+            answer.ok(),
+            Some(Some(1)),
+            "another capture is read while one is still opening"
+        );
+
+        let (slow, _slow_pusher) = slow
+            .join()
+            .expect("the attaching thread")
+            .expect("the slow capture opens once released");
+        registry.detach("slow", slow);
+        registry.detach("other", other);
         assert!(registry.lock().is_empty());
     }
 
