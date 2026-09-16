@@ -130,15 +130,20 @@ pub(in crate::engine) fn open(
             // drew something else — a device change, a page that resized
             // itself. Refused rather than stretched, and said once: this
             // runs at the page's frame rate.
-            let wrong_size = painted.size != size;
-            let pushed = if wrong_size {
+            let pushed = if painted.size != size {
                 Err(format!(
                     "the page painted {}x{} where it was told {}x{}",
                     painted.size[0], painted.size[1], size[0], size[1]
                 ))
             } else {
+                // Dropped rather than waited on. This is the browser
+                // engine's own thread and every page shares it, so a Source
+                // that is not being drained — its Scene is not the one being
+                // shown, and its pipeline is paused — must cost this page a
+                // picture rather than costing every page its engine.
                 pusher
-                    .push(painted.handle, None)
+                    .try_push(painted.handle, None)
+                    .map(|_| ())
                     .map_err(|error| error.to_string())
             };
             if let Err(error) = pushed

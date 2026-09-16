@@ -187,6 +187,25 @@ pub struct Page {
     id: PageId,
 }
 
+impl Page {
+    /// Whether anything is looking at this page.
+    ///
+    /// A page told it is not shown stops painting — which is the whole
+    /// point: a Source whose Scene is not the one being shown has a paused
+    /// pipeline, and every picture drawn for it is a texture copied into a
+    /// queue nothing is emptying. Its own timers and scripts keep running,
+    /// so a clock is right again the moment it comes back rather than
+    /// resuming where it stopped.
+    ///
+    /// Shown again, the page repaints in full, so there is no stale picture
+    /// to arrive first.
+    pub fn set_shown(&self, shown: bool) {
+        if let Some(commands) = COMMANDS.get() {
+            let _ = commands.send(Command::Shown(self.id, shown));
+        }
+    }
+}
+
 impl Drop for Page {
     fn drop(&mut self) {
         if let Some(commands) = COMMANDS.get() {
@@ -247,6 +266,9 @@ enum Command {
         paint: OnPaint,
         reply: mpsc::Sender<Result<(), String>>,
     },
+    /// Whether the page is being shown, which decides whether it is drawn
+    /// at all — see [`Page::set_shown`].
+    Shown(PageId, bool),
     Close(PageId),
 }
 
@@ -369,6 +391,13 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
                     let _ =
                         reply.send(Err("the browser engine could not create a page".to_owned()));
                 }
+            }
+        }
+        Command::Shown(id, shown) => {
+            if let Some(browser) = open.get(&id)
+                && let Some(host) = browser.host()
+            {
+                host.was_hidden(i32::from(!shown));
             }
         }
         Command::Close(id) => {

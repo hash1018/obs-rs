@@ -2381,6 +2381,13 @@ fn reconcile(
             } else {
                 source.source.pause();
             }
+            // A Source that produces its own pictures has to be told, not
+            // merely stopped from being read: a paused pipeline consumes
+            // nothing, so a browser left drawing into one is copying a
+            // texture a second into a queue nobody is emptying.
+            if let Some(page) = &source.page {
+                page.set_shown(running);
+            }
             source.running = running;
         }
         if showing != source.showing {

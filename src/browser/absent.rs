@@ -24,6 +24,13 @@ pub type OnPaint = Box<dyn Fn(Painted) + Send + Sync>;
 /// open Source carries is always `None` and costs nothing.
 pub enum Page {}
 
+impl Page {
+    /// Unreachable: there is no page here to show or hide.
+    pub fn set_shown(&self, _shown: bool) {
+        match *self {}
+    }
+}
+
 /// Always the reason there is no page, which a Browser Source then shows as
 /// why it is dark.
 pub fn open_page(_url: &str, _size: [u32; 2], _fps: u32, _paint: OnPaint) -> Result<Page, String> {
