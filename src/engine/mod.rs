@@ -90,6 +90,9 @@ enum EngineCommand {
     /// Open this item's Source again, at the user's request — see
     /// `EngineManager::reopen_source`.
     ReopenSource(SceneItemId),
+    /// Something done to a Browser Source's page — see
+    /// `EngineManager::send_page_input`.
+    PageInput(SceneItemId, crate::browser::PageInput),
     /// One Source has finished opening, however it came out. Sent by the
     /// opener thread rather than by the UI — see [`SourceOpener`].
     Opened(Box<Opened>),
@@ -859,6 +862,16 @@ impl EngineManager {
     /// — so it waits here for someone to ask.
     pub fn reopen_source(&self, item: SceneItemId) {
         let _ = self.commands.send(EngineCommand::ReopenSource(item));
+    }
+
+    /// Hands one click, wheel or key to a Browser Source's page.
+    ///
+    /// Through the engine rather than straight to the page because the page
+    /// belongs to the Source, and whether that Source is open at all is the
+    /// engine loop's to know — a pointer over a layer whose page has just
+    /// closed is an event nobody applies.
+    pub fn send_page_input(&self, item: SceneItemId, input: crate::browser::PageInput) {
+        let _ = self.commands.send(EngineCommand::PageInput(item, input));
     }
 }
 
@@ -1656,6 +1669,14 @@ fn apply_command(
                 );
             }
             true
+        }
+        EngineCommand::PageInput(item_id, input) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id)
+                && let Some(page) = &source.page
+            {
+                page.send(input);
+            }
+            false
         }
         EngineCommand::Drawing(item_id, strokes) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {

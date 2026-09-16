@@ -55,6 +55,11 @@ pub enum UiAction {
     /// and outlives this pass, so it is run where the state to hold it is —
     /// see `ObsApp::open_font_picker`.
     PickTextFont(SceneItemId),
+    /// One click, wheel or key into a Browser Source's page, in the page's
+    /// own pixels — see `ui::preview::handle_page`. Goes to the engine and
+    /// not to the project: what a page is showing is not this application's
+    /// to record.
+    SendPageInput(SceneItemId, crate::browser::PageInput),
     /// One source's gain while the fader is still held. Goes to the audio
     /// graph and not to the project, for the same reason `DragSceneItem`
     /// does: what is heard has to follow the pointer, and the edit is

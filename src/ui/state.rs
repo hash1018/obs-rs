@@ -45,6 +45,13 @@ impl UiState {
         }
     }
 
+    /// Whether the Preview is handing a Browser Source the keyboard, which
+    /// is what keeps a hotkey from being spent on this window while someone
+    /// is typing into a page — see `shell::hotkeys::keyboard_taken`.
+    pub fn interacting_with_a_page(&self) -> bool {
+        self.editor.interacting.is_some()
+    }
+
     /// The dock arrangement as it stands, for the settings file.
     pub fn docks(&self) -> crate::ui::WorkspaceDocks {
         self.dock_layout.placement()

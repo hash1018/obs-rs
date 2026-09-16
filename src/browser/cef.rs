@@ -264,6 +264,126 @@ pub const AUDIO_CHANNELS: u16 = 2;
 /// early rather than late.
 const AUDIO_FRAMES_PER_BUFFER: i32 = 480;
 
+/// Which keys are held while something is sent to a page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Held {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+impl Held {
+    /// The bits CEF reads them as.
+    fn flags(self) -> u32 {
+        const SHIFT: u32 = 2;
+        const CONTROL: u32 = 4;
+        const ALT: u32 = 8;
+        u32::from(self.shift) * SHIFT + u32::from(self.ctrl) * CONTROL + u32::from(self.alt) * ALT
+    }
+}
+
+/// Which button a page is being pressed with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pressed {
+    Left,
+    Middle,
+    Right,
+}
+
+/// A key a page is told about by name rather than by the character it would
+/// type — what an editable field does something with beyond taking text.
+///
+/// Small on purpose: this is what a widget in a page needs to be usable, not
+/// a keyboard driver. Anything that produces a character arrives as
+/// [`PageInput::Typed`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedKey {
+    Backspace,
+    Delete,
+    Enter,
+    Tab,
+    Escape,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+impl NamedKey {
+    /// The Windows virtual-key code, which is what CEF's `windows_key_code`
+    /// is on every platform — Chromium's own `VKEY_*` values are these.
+    fn code(self) -> i32 {
+        match self {
+            Self::Backspace => 0x08,
+            Self::Tab => 0x09,
+            Self::Enter => 0x0D,
+            Self::Escape => 0x1B,
+            Self::PageUp => 0x21,
+            Self::PageDown => 0x22,
+            Self::End => 0x23,
+            Self::Home => 0x24,
+            Self::Left => 0x25,
+            Self::Up => 0x26,
+            Self::Right => 0x27,
+            Self::Down => 0x28,
+            Self::Delete => 0x2E,
+        }
+    }
+}
+
+/// Something done to a page, in the page's own pixels.
+///
+/// Positions are where the pointer is *on the page*, so whatever sends these
+/// has already undone the layer's placement on the Canvas — a page knows
+/// nothing about where it is being shown.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageInput {
+    Moved {
+        x: i32,
+        y: i32,
+        held: Held,
+    },
+    /// The pointer left the layer, so the page stops hovering whatever it
+    /// was: without this a button under where the pointer left stays lit.
+    Left,
+    Button {
+        x: i32,
+        y: i32,
+        button: Pressed,
+        down: bool,
+        /// 1 for a click, 2 for the second of a double click — what a page
+        /// selects a word with.
+        clicks: u32,
+        held: Held,
+    },
+    Wheel {
+        x: i32,
+        y: i32,
+        /// In the same units a wheel notch is: about 120 to a notch.
+        delta_x: i32,
+        delta_y: i32,
+        held: Held,
+    },
+    Key {
+        key: NamedKey,
+        down: bool,
+        held: Held,
+    },
+    /// One character, as the keyboard produced it — which is the layout's
+    /// answer rather than a key code, so it is the same in every language.
+    Typed {
+        character: char,
+        held: Held,
+    },
+    /// Whether the page believes it has the keyboard. A page told it has
+    /// lost focus stops blinking its caret and closes what it had open.
+    Focused(bool),
+}
+
 /// An open page, by the id the runtime thread knows it as.
 ///
 /// Dropping it closes the browser. There is nothing else to it from this
@@ -288,6 +408,17 @@ impl Page {
     pub fn set_shown(&self, shown: bool) {
         if let Some(commands) = COMMANDS.get() {
             let _ = commands.send(Command::Shown(self.id, shown));
+        }
+    }
+
+    /// Does something to the page — a click, a wheel, a key.
+    ///
+    /// Queued for the runtime thread rather than done here, because every
+    /// CEF call about a browser has to happen on the thread it was created
+    /// on. A page that has closed since is a command nobody applies.
+    pub fn send(&self, input: PageInput) {
+        if let Some(commands) = COMMANDS.get() {
+            let _ = commands.send(Command::Input(self.id, input));
         }
     }
 }
@@ -360,6 +491,8 @@ enum Command {
     /// Whether the page is being shown, which decides whether it is drawn
     /// at all — see [`Page::set_shown`].
     Shown(PageId, bool),
+    /// Something done to the page — see [`Page::send`].
+    Input(PageId, PageInput),
     Close(PageId),
 }
 
@@ -631,11 +764,117 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
                 host.was_hidden(i32::from(!shown));
             }
         }
+        Command::Input(id, input) => {
+            if let Some(browser) = open.get(&id)
+                && let Some(host) = browser.host()
+            {
+                send(&host, input);
+            }
+        }
         Command::Close(id) => {
             if let Some(browser) = open.remove(&id) {
                 close(&browser);
             }
         }
+    }
+}
+
+/// Hands one piece of input to the page behind `host`.
+///
+/// Every one of these is where the page believes the pointer is, so a click
+/// is sent as the position as well as the button: CEF keeps no cursor of its
+/// own for an off-screen browser.
+fn send(host: &BrowserHost, input: PageInput) {
+    let at = |x: i32, y: i32, held: Held| MouseEvent {
+        x,
+        y,
+        modifiers: held.flags(),
+    };
+    match input {
+        PageInput::Moved { x, y, held } => {
+            host.send_mouse_move_event(Some(&at(x, y, held)), 0);
+        }
+        PageInput::Left => {
+            // The position goes with it and is not read: `mouse_leave` is
+            // what the page acts on.
+            host.send_mouse_move_event(Some(&at(0, 0, Held::default())), 1);
+        }
+        PageInput::Button {
+            x,
+            y,
+            button,
+            down,
+            clicks,
+            held,
+        } => {
+            let button = match button {
+                Pressed::Left => MouseButtonType::LEFT,
+                Pressed::Middle => MouseButtonType::MIDDLE,
+                Pressed::Right => MouseButtonType::RIGHT,
+            };
+            host.send_mouse_click_event(
+                Some(&at(x, y, held)),
+                button,
+                i32::from(!down),
+                clicks.clamp(1, 3) as i32,
+            );
+        }
+        PageInput::Wheel {
+            x,
+            y,
+            delta_x,
+            delta_y,
+            held,
+        } => {
+            host.send_mouse_wheel_event(Some(&at(x, y, held)), delta_x, delta_y);
+        }
+        PageInput::Key { key, down, held } => {
+            // Two events for a press, as a keyboard sends: the raw one a
+            // page's `keydown` listener sees, then the one that acts on an
+            // editable field. A release is the one event.
+            let event = KeyEvent {
+                type_: match down {
+                    true => KeyEventType::RAWKEYDOWN,
+                    false => KeyEventType::KEYUP,
+                },
+                modifiers: held.flags(),
+                windows_key_code: key.code(),
+                native_key_code: 0,
+                is_system_key: 0,
+                character: 0,
+                unmodified_character: 0,
+                focus_on_editable_field: 0,
+                ..Default::default()
+            };
+            host.send_key_event(Some(&event));
+            if down {
+                host.send_key_event(Some(&KeyEvent {
+                    type_: KeyEventType::KEYDOWN,
+                    ..event
+                }));
+            }
+        }
+        PageInput::Typed { character, held } => {
+            // What the layout produced, not what was struck: a page taking
+            // text wants the character, and this is the one event that
+            // carries it.
+            let mut units = [0u16; 2];
+            let Some(unit) = character.encode_utf16(&mut units).first().copied() else {
+                return;
+            };
+            host.send_key_event(Some(&KeyEvent {
+                type_: KeyEventType::CHAR,
+                modifiers: held.flags(),
+                windows_key_code: unit as i32,
+                native_key_code: 0,
+                is_system_key: 0,
+                character: unit,
+                unmodified_character: unit,
+                focus_on_editable_field: 0,
+                ..Default::default()
+            }));
+        }
+        PageInput::Focused(focused) => host.set_focus(i32::from(focused)),
     }
 }
 

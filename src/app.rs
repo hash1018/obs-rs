@@ -770,6 +770,11 @@ impl ObsApp {
                     item.settings = crate::domain::SourceSettings::Text(settings);
                 }
             }
+            UiAction::SendPageInput(item_id, input) => {
+                if let Some(engine) = &self.engine {
+                    engine.send_page_input(item_id, input);
+                }
+            }
             UiAction::PickTextFont(item_id) => self.open_font_picker(item_id, ctx),
             UiAction::SeekMediaFile(item_id, target) => {
                 if let Some(engine) = &self.engine {

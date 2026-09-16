@@ -54,9 +54,17 @@ pub(in crate::ui) struct HotkeyState {
 /// Whether this window is taking typed input, for the global listener to
 /// stand down on — see this module's first rule. Only while it has focus: a
 /// text field left focused in a window behind a game is taking nothing.
+///
+/// A page being interacted with counts: while the Preview is handing it the
+/// keyboard, every key belongs to it, and a hotkey spent here is one that
+/// never reaches what was being typed into — see
+/// `SceneEditorState::interacting`.
 pub fn keyboard_taken(ctx: &egui::Context, state: &UiState) -> bool {
     let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
-    focused && (ctx.egui_wants_keyboard_input() || state.settings.capturing_hotkey())
+    focused
+        && (ctx.egui_wants_keyboard_input()
+            || state.settings.capturing_hotkey()
+            || state.interacting_with_a_page())
 }
 
 /// The window's own keyboard, for the tracker.
@@ -256,7 +264,9 @@ pub fn dispatch(
     // Text first: a field with focus owns the keyboard, whatever the chord.
     // The same goes for the settings page while it is waiting for a key to
     // bind — a chord spent here is one that never reaches what asked for it.
-    let typing = ctx.egui_wants_keyboard_input() || state.settings.capturing_hotkey();
+    let typing = ctx.egui_wants_keyboard_input()
+        || state.settings.capturing_hotkey()
+        || state.interacting_with_a_page();
 
     let heard: Vec<(Hotkey, Chord)> = bindings
         .bound()

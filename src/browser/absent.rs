@@ -29,6 +29,11 @@ impl Page {
     pub fn set_shown(&self, _shown: bool) {
         match *self {}
     }
+
+    /// Unreachable: there is no page here to do anything to.
+    pub fn send(&self, _input: PageInput) {
+        match *self {}
+    }
 }
 
 /// Always the reason there is no page, which a Browser Source then shows as
@@ -72,4 +77,75 @@ pub struct PageOptions {
     pub fps: u32,
     pub paint: OnPaint,
     pub audio: Option<OnAudio>,
+}
+
+/// Which keys are held while something is sent to a page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Held {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+/// Which button a page is being pressed with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pressed {
+    Left,
+    Middle,
+    Right,
+}
+
+/// A key a page is told about by name — see the Windows implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedKey {
+    Backspace,
+    Delete,
+    Enter,
+    Tab,
+    Escape,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+}
+
+/// Something done to a page, in the page's own pixels.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageInput {
+    Moved {
+        x: i32,
+        y: i32,
+        held: Held,
+    },
+    Left,
+    Button {
+        x: i32,
+        y: i32,
+        button: Pressed,
+        down: bool,
+        clicks: u32,
+        held: Held,
+    },
+    Wheel {
+        x: i32,
+        y: i32,
+        delta_x: i32,
+        delta_y: i32,
+        held: Held,
+    },
+    Key {
+        key: NamedKey,
+        down: bool,
+        held: Held,
+    },
+    Typed {
+        character: char,
+        held: Held,
+    },
+    Focused(bool),
 }

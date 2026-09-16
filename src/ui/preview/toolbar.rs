@@ -14,6 +14,8 @@ pub(super) const TOOLBAR_WIDTH: f32 = 210.0;
 /// What the pen's own controls need beside the zoom ones. Only claimed while
 /// a Drawing is selected — the toolbar is its resting width otherwise.
 pub(super) const PEN_TOOLBAR_WIDTH: f32 = 400.0;
+/// And what a page's one switch needs, which is only itself.
+pub(super) const PAGE_TOOLBAR_WIDTH: f32 = 90.0;
 pub(super) const TOOLBAR_GAP: f32 = 6.0;
 
 /// The palette a stroke's colour is chosen from.
@@ -311,4 +313,44 @@ pub(super) fn show(ui: &mut egui::Ui, state: &mut PreviewViewState, i18n: &Local
         .response
         .on_hover_text(i18n.text(TextKey::PreviewScaleOptions));
     });
+}
+
+/// A page's own half of the toolbar, shown only while a Browser Source is
+/// selected: the switch between moving the layer and using the page.
+///
+/// A mode, because the two gestures are the same gesture. Clicking a page is
+/// clicking where its layer is, and so is dragging the layer somewhere else
+/// — a Preview that guessed between them would be one that sometimes moved
+/// a chat widget when you meant to scroll it.
+pub(super) fn show_page(
+    ui: &mut egui::Ui,
+    editor: &mut super::super::editor::SceneEditorState,
+    item_id: SceneItemId,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.separator();
+    let interacting = editor.interacting == Some(item_id);
+    let label = i18n.text(TextKey::PreviewInteract);
+    if ui
+        .selectable_label(interacting, label.as_ref())
+        .on_hover_text(i18n.text(TextKey::PreviewInteractHint).as_ref())
+        .clicked()
+    {
+        editor.interacting = (!interacting).then_some(item_id);
+        // The page is told either way: one that believes it still has the
+        // keyboard goes on blinking a caret into the recording.
+        actions.push(UiAction::SendPageInput(
+            item_id,
+            crate::browser::PageInput::Focused(!interacting),
+        ));
+        if interacting {
+            // And that the pointer has gone, since the next thing it hears
+            // about may be a click somewhere else entirely.
+            actions.push(UiAction::SendPageInput(
+                item_id,
+                crate::browser::PageInput::Left,
+            ));
+        }
+    }
 }

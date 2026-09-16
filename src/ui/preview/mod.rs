@@ -53,14 +53,31 @@ pub(super) fn show(
                         _ => None,
                     })
             });
+            // The same for a page, which grows a control of its own: a
+            // Browser Source can be clicked into rather than moved, and one
+            // of the two has to be a mode — see `handle_page`.
+            let page = editor.selected_item_id().filter(|item_id| {
+                snapshot
+                    .items
+                    .iter()
+                    .find(|item| item.id == *item_id)
+                    .is_some_and(|item| matches!(item.settings, SourceSettings::Browser(_)))
+            });
             // Solid rather than egui's default floating bar. A floating one
             // allocates no space and is two pixels wide until it is hovered,
             // which is no answer at all to a button you cannot reach — the
             // whole point here is that the bar is visible enough to grab.
             let scroll_style = egui::style::ScrollStyle::solid();
+            // What the selected Source adds to the toolbar's resting width:
+            // a Drawing its pen, a page its one switch.
+            let extra = match (drawing.is_some(), page.is_some()) {
+                (true, _) => toolbar::PEN_TOOLBAR_WIDTH,
+                (_, true) => toolbar::PAGE_TOOLBAR_WIDTH,
+                _ => 0.0,
+            };
             let band = toolbar_band(
                 available_rect.width(),
-                drawing.is_some(),
+                extra,
                 scroll_style.allocated_width(),
             );
             let toolbar_height = band.height;
@@ -154,6 +171,9 @@ pub(super) fn show(
                     if let Some((item_id, strokes)) = drawing {
                         toolbar::show_pen(ui, &mut editor.pen, item_id, strokes, i18n, actions);
                     }
+                    if let Some(item_id) = page {
+                        toolbar::show_page(ui, editor, item_id, i18n, actions);
+                    }
                 });
         });
 }
@@ -182,12 +202,8 @@ struct ToolbarBand {
 /// `scrollbar` is what a bar costs in this style, asked of egui rather than
 /// assumed: its default bar floats and allocates nothing, so a band sized for
 /// that would have no room for the solid one this draws.
-fn toolbar_band(available: f32, has_pen: bool, scrollbar: f32) -> ToolbarBand {
-    let wanted = if has_pen {
-        toolbar::TOOLBAR_WIDTH + toolbar::PEN_TOOLBAR_WIDTH
-    } else {
-        toolbar::TOOLBAR_WIDTH
-    };
+fn toolbar_band(available: f32, extra: f32, scrollbar: f32) -> ToolbarBand {
+    let wanted = toolbar::TOOLBAR_WIDTH + extra;
     let width = wanted.min(available);
     let scrolls = width < wanted;
     ToolbarBand {
@@ -217,6 +233,18 @@ fn handle_pointer(
     if editor.pen.tool != Tool::Select
         && handle_drawing(ui, response, viewport, editor, snapshot, actions)
     {
+        return;
+    }
+
+    // And before the editor's own gestures: while a page is being interacted
+    // with, the pointer and the keyboard are the page's. Dragging the layer
+    // and clicking into it are the same gesture, so one of the two has to be
+    // a mode — see `SceneEditorState::interacting`.
+    if let Some(item) = editor
+        .interacting
+        .and_then(|id| snapshot.items.iter().find(|item| item.id == id))
+    {
+        handle_page(ui, response, viewport, editor, item, actions);
         return;
     }
 
@@ -351,6 +379,164 @@ fn handle_pointer(
         )));
         editor.clear_selection();
     }
+}
+
+/// The pointer and the keyboard while a page is being interacted with.
+///
+/// Everything here is in the page's own pixels, which is what the layer's
+/// placement is undone for: a page knows nothing about where on the Canvas
+/// it is being shown, how large it was drawn, or what was cropped off it.
+///
+/// Rotation is not undone, in step with the rest of the Preview's hit
+/// testing — a rotated layer is hit as the rectangle it occupies. Nothing
+/// here is right for one, and nothing else is either.
+fn handle_page(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    viewport: ViewportTransform,
+    editor: &SceneEditorState,
+    item: &SceneItemSnapshot,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::browser::{Held, PageInput, Pressed};
+
+    let rect = edited_canvas_rect(item, editor, viewport);
+    let crop = editor.effective_crop(item.id, item.crop);
+    let [source_width, source_height] = item.source_size;
+    // What is on screen is the part left after the crop, so a pointer half
+    // way across it is half way across *that*, not across the page.
+    let visible = egui::vec2(
+        (source_width - crop.left - crop.right).max(1.0),
+        (source_height - crop.top - crop.bottom).max(1.0),
+    );
+    let page_point = |pointer: egui::Pos2| -> (i32, i32) {
+        let across = ((pointer - rect.min) / rect.size().max(egui::Vec2::splat(1.0))).to_pos2();
+        (
+            (crop.left + across.x * visible.x).round() as i32,
+            (crop.top + across.y * visible.y).round() as i32,
+        )
+    };
+
+    let held = ui.input(|input| Held {
+        shift: input.modifiers.shift,
+        ctrl: input.modifiers.ctrl,
+        alt: input.modifiers.alt,
+    });
+    let mut send = |input: PageInput| actions.push(UiAction::SendPageInput(item.id, input));
+
+    // Where the pointer is, and whether it is over the layer at all: a page
+    // has to be told it left, or whatever was under the pointer stays lit.
+    let inside = ui
+        .input(|input| input.pointer.latest_pos())
+        .filter(|pointer| {
+            rect.contains(*pointer) && ui.ctx().layer_id_at(*pointer) == Some(response.layer_id)
+        });
+    let was_inside = egui::Id::new(("page-pointer-inside", item.id));
+    let previously = ui.data(|data| data.get_temp::<bool>(was_inside).unwrap_or(false));
+    ui.data_mut(|data| data.insert_temp(was_inside, inside.is_some()));
+    match inside {
+        Some(pointer) => {
+            let (x, y) = page_point(pointer);
+            send(PageInput::Moved { x, y, held });
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+
+            for (egui_button, page_button) in [
+                (egui::PointerButton::Primary, Pressed::Left),
+                (egui::PointerButton::Middle, Pressed::Middle),
+                (egui::PointerButton::Secondary, Pressed::Right),
+            ] {
+                let (pressed, released, double) = ui.input(|input| {
+                    (
+                        input.pointer.button_pressed(egui_button),
+                        input.pointer.button_released(egui_button),
+                        input.pointer.button_double_clicked(egui_button),
+                    )
+                });
+                for down in [pressed.then_some(true), released.then_some(false)]
+                    .into_iter()
+                    .flatten()
+                {
+                    send(PageInput::Button {
+                        x,
+                        y,
+                        button: page_button,
+                        down,
+                        clicks: if double { 2 } else { 1 },
+                        held,
+                    });
+                }
+            }
+
+            // A wheel notch is 120 to a page, and egui reports the points it
+            // would have scrolled by.
+            let wheel = ui.input(|input| input.smooth_scroll_delta);
+            if wheel != egui::Vec2::ZERO {
+                send(PageInput::Wheel {
+                    x,
+                    y,
+                    delta_x: wheel.x.round() as i32,
+                    delta_y: wheel.y.round() as i32,
+                    held,
+                });
+            }
+        }
+        None if previously => send(PageInput::Left),
+        None => {}
+    }
+
+    // The keyboard follows the mode rather than the pointer: text is typed
+    // into what was clicked into, wherever the pointer has wandered since.
+    let events = ui.input(|input| input.events.clone());
+    for event in &events {
+        match event {
+            egui::Event::Text(text) => {
+                for character in text.chars() {
+                    send(PageInput::Typed { character, held });
+                }
+            }
+            egui::Event::Key {
+                key,
+                pressed,
+                repeat,
+                ..
+            } => {
+                // A repeat is the same press again as far as a page is
+                // concerned, and CEF has no third state for it.
+                let _ = repeat;
+                if let Some(key) = named_key(*key) {
+                    send(PageInput::Key {
+                        key,
+                        down: *pressed,
+                        held,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The keys a page is told about by name. Everything else that produces a
+/// character arrives as text instead — see [`crate::browser::NamedKey`].
+fn named_key(key: egui::Key) -> Option<crate::browser::NamedKey> {
+    use crate::browser::NamedKey;
+
+    Some(match key {
+        egui::Key::Backspace => NamedKey::Backspace,
+        egui::Key::Delete => NamedKey::Delete,
+        egui::Key::Enter => NamedKey::Enter,
+        egui::Key::Tab => NamedKey::Tab,
+        egui::Key::Escape => NamedKey::Escape,
+        egui::Key::ArrowLeft => NamedKey::Left,
+        egui::Key::ArrowRight => NamedKey::Right,
+        egui::Key::ArrowUp => NamedKey::Up,
+        egui::Key::ArrowDown => NamedKey::Down,
+        egui::Key::Home => NamedKey::Home,
+        egui::Key::End => NamedKey::End,
+        egui::Key::PageUp => NamedKey::PageUp,
+        egui::Key::PageDown => NamedKey::PageDown,
+        _ => return None,
+    })
 }
 
 /// The pointer while a Drawing is being drawn on, rather than moved.
@@ -1639,7 +1825,7 @@ mod tests {
         let scrollbar = 10.0;
         let wanted = toolbar::TOOLBAR_WIDTH + toolbar::PEN_TOOLBAR_WIDTH;
 
-        let squeezed = toolbar_band(wanted - 200.0, true, scrollbar);
+        let squeezed = toolbar_band(wanted - 200.0, toolbar::PEN_TOOLBAR_WIDTH, scrollbar);
 
         assert_eq!(
             squeezed.width,
@@ -1660,7 +1846,7 @@ mod tests {
     /// drawn in is 26 pixels tall.
     #[test]
     fn a_toolbar_that_fits_keeps_its_width_and_grows_no_band() {
-        let roomy = toolbar_band(4000.0, true, 10.0);
+        let roomy = toolbar_band(4000.0, toolbar::PEN_TOOLBAR_WIDTH, 10.0);
 
         assert_eq!(roomy.width, roomy.wanted);
         assert!(!roomy.scrolls);
@@ -1670,7 +1856,7 @@ mod tests {
     /// Without a Drawing selected the pen half is not there to make room for.
     #[test]
     fn the_resting_toolbar_is_the_narrow_one() {
-        let resting = toolbar_band(4000.0, false, 10.0);
+        let resting = toolbar_band(4000.0, 0.0, 10.0);
 
         assert_eq!(resting.wanted, toolbar::TOOLBAR_WIDTH);
         assert!(!resting.scrolls);

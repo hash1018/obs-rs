@@ -363,6 +363,8 @@ text_keys! {
     PreviewNoFrame                => "preview-no-frame";
     PreviewScaleDecrease          => "preview-scale-decrease";
     PreviewScaleIncrease          => "preview-scale-increase";
+    PreviewInteract               => "preview-interact";
+    PreviewInteractHint           => "preview-interact-hint";
     PreviewScaleFit               => "preview-scale-fit";
     PreviewFitWorkspace           => "preview-fit-workspace";
     PreviewResetView              => "preview-reset-view";

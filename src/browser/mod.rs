@@ -38,6 +38,6 @@
 mod engine;
 
 pub use engine::{
-    AUDIO_CHANNELS, AUDIO_RATE, Heard, OnAudio, Page, PageOptions, Runtime, helper_process,
-    open_page,
+    AUDIO_CHANNELS, AUDIO_RATE, Heard, Held, NamedKey, OnAudio, Page, PageInput, PageOptions,
+    Pressed, Runtime, helper_process, open_page,
 };

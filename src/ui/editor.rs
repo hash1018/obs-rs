@@ -158,6 +158,15 @@ pub(super) struct SceneEditorState {
     pub crop_override: Option<(SceneItemId, Crop)>,
     pub drag: Option<TransformDrag>,
     pub pen: PenState,
+    /// The Browser Source the Preview is handing the pointer and the
+    /// keyboard to, instead of selecting and dragging with them.
+    ///
+    /// A mode rather than a setting: it belongs to this session and this
+    /// window, and a project reopened tomorrow should not still be clicking
+    /// into a page. Cleared when the selection or the Scene changes —
+    /// interacting with something no longer in front of you is how a click
+    /// lands where nobody was looking.
+    pub interacting: Option<SceneItemId>,
 }
 
 impl SceneEditorState {
@@ -205,6 +214,7 @@ impl SceneEditorState {
             self.transform_override = None;
             self.crop_override = None;
             self.drag = None;
+            self.interacting = None;
             // The tool belongs to the item it was chosen for. Carrying a pen
             // across to whatever is selected next would draw on something the
             // user was only pointing at.
@@ -218,6 +228,7 @@ impl SceneEditorState {
         self.selected_item_id = None;
         self.transform_override = None;
         self.drag = None;
+        self.interacting = None;
         self.pen.tool = Tool::Select;
         self.pen.stroke = None;
     }
