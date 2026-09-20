@@ -77,8 +77,8 @@ bottom.](docs/screenshot.png)
   right. Switching again part way through ends the switch that was running
   and starts the new one.
 - **A Scene inside a Scene.** Any Scene can be placed in another as a
-  source, on Windows: an overlay with your logo, a watermark and an alert
-  box, kept in one Scene and shown in every Scene that needs it. Editing it
+  source: an overlay with your logo, a watermark and an alert box, kept in
+  one Scene and shown in every Scene that needs it. Editing it
   once changes it everywhere. It arrives as one picture, so it is moved,
   scaled, cropped and filtered as one thing — and it is transparent where it
   draws nothing, so what is under it still shows. A Scene cannot be put
@@ -312,9 +312,7 @@ knowing before you try it:
   them.
 - **Eleven source kinds.** Display Capture, Window Capture, Video Capture,
   Media File, Network Stream, Image, Drawing, Color, Text, Browser and
-  Scene — the last of those on Windows only, since compositing one Scene for
-  another needs a background that keeps its transparency and the CUDA
-  compositor works in NV12.
+  Scene.
 - **No Studio Mode**, so there is no separate preview of what you are about
   to cut to.
 - **No groups.** A Scene can be placed inside another, which is how an
