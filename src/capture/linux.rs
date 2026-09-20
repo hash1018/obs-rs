@@ -449,6 +449,38 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
         .collect()
 }
 
+/// Every application currently playing something, as the mixer's own picker
+/// shows them — see [`crate::capture::audio_processes`].
+///
+/// The PipeWire counterpart of the Windows list, and drawn from the same
+/// place a capture is opened against: a program's playback stream. What
+/// stands for the executable is `application.process.binary` where the
+/// program publishes one, which everything speaking to PulseAudio's bridge
+/// does; a native PipeWire client that publishes none is listed under
+/// whatever it does call itself.
+pub fn audio_processes() -> Vec<crate::capture::AudioProcessTarget> {
+    let applications = match PipeWireAudioCaptureSource::list_applications() {
+        Ok(applications) => applications,
+        Err(error) => {
+            tracing::warn!("could not list the applications playing audio: {error}");
+            return Vec::new();
+        }
+    };
+    let own = std::process::id();
+    applications
+        .into_iter()
+        // Not this application. obs-rs plays through a node of its own
+        // whenever it is monitoring, and capturing that would be capturing
+        // what it is playing back — the audio twin of pointing a Window
+        // Capture at the Preview.
+        .filter(|application| application.pid != Some(own))
+        .map(|application| crate::capture::AudioProcessTarget {
+            id: application.node,
+            executable: application.executable,
+        })
+        .collect()
+}
+
 /// Watches for PipeWire nodes appearing or going, calling `on_change` each
 /// time the set is not what it was.
 ///

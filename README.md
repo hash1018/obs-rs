@@ -129,9 +129,8 @@ bottom.](docs/screenshot.png)
   and the chat program does not, or the other way round. It is remembered by
   the executable, so it finds the application again after a restart, and the
   channel stays where it is — with the fader and filters you set — while
-  that application is closed. Windows only so far; note that Desktop Audio
-  is carrying the same sound unless you mute it, which the picker says while
-  you are choosing.
+  that application is closed. Note that Desktop Audio is carrying the same
+  sound unless you mute it, which the picker says while you are choosing.
 - **Monitoring.** Hear a media file, a stream or a microphone while you work.
   It goes to an endpoint you choose in Settings, kept separate from the one
   Desktop Audio is captured from so that what you are listening to does not
@@ -340,9 +339,6 @@ knowing before you try it:
 - **No multiview**, so there is no grid of every Scene to switch from. The
   projector shows the Canvas, which is one Scene at a time.
 - **No virtual camera**, so nothing here appears as a webcam in a meeting.
-- **Application audio on Windows only.** PipeWire can capture one
-  application's stream too, and the Linux half is not written yet — the
-  mixer simply does not offer the channel there.
 
 ## Contributing
 

@@ -50,9 +50,9 @@ pub(super) fn device_available(
 ///
 /// The first, where an application runs as several — a browser with a
 /// process per tab, a game with a launcher beside it. They are ordered by
-/// process id, so this is the oldest of them, which for an application that
-/// starts one audio process is the one that has it.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+/// process id on Windows and by node on Linux, so this is the oldest of
+/// them, which for an application that starts one audio process is the one
+/// that has it.
 fn find<'a>(
     processes: &'a [AudioProcessTarget],
     executable: &str,
@@ -114,7 +114,7 @@ pub(super) fn open_capture(
     name: &str,
     kind: AudioSourceKind,
     device: Option<&str>,
-    _processes: &[AudioProcessTarget],
+    processes: &[AudioProcessTarget],
 ) -> Result<
     (
         media_pp::elements::PipeWireAudioCaptureSource,
@@ -130,12 +130,19 @@ pub(super) fn open_capture(
     let wanted = match kind {
         AudioSourceKind::Output => PipeWireAudioDeviceKind::Sink,
         AudioSourceKind::Input => PipeWireAudioDeviceKind::Source,
-        // PipeWire can capture one application's stream, and nothing here
-        // asks it to yet — the Windows half landed first. A channel of this
-        // kind lists nothing to pick on Linux, so this is what a project
-        // carried over from another machine meets.
+        // An application is opened against the node it is playing through
+        // rather than a device, and a node belongs to one run of it — so the
+        // stored executable is looked up in the list the caller just took.
+        // `device_available` asked the same question of the same list first,
+        // so in the ordinary case this finds what it found.
         AudioSourceKind::Application => {
-            return Err("capturing one application is not written for PipeWire yet".into());
+            let executable = device.ok_or("no application has been chosen for this channel")?;
+            let application = find(processes, executable)
+                .ok_or_else(|| format!("{executable} is not playing anything"))?;
+            return Ok(PipeWireAudioCaptureSource::open_application(
+                name,
+                application.id,
+            )?);
         }
     };
     let devices = PipeWireAudioCaptureSource::list_devices()?;

@@ -140,42 +140,49 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
 }
 
 /// One application whose sound can be captured on its own.
-///
-/// Windows only so far — see [`audio_processes`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioProcessTarget {
-    /// The process this is right now, which is what a capture is opened
-    /// against. Not what gets stored: a process id belongs to one run of an
-    /// application, and a channel is meant to find the same application
-    /// again tomorrow.
+    /// What a capture is opened against right now: the process on Windows,
+    /// the PipeWire node the application is playing through on Linux. Not
+    /// what gets stored — either belongs to one run of an application, and a
+    /// channel is meant to find the same application again tomorrow.
     pub id: u32,
-    /// The executable's file name — `chrome.exe`. What a channel stores, and
-    /// what it looks a live process up by when it opens.
+    /// The executable's file name — `chrome.exe`, `firefox`. What a channel
+    /// stores, and what it looks a live application up by when it opens.
     pub executable: String,
 }
 
 /// Whether this platform can capture one application at all — what decides
 /// whether the mixer offers a channel that does.
 ///
-/// Windows has process loopback; PipeWire can do the same and nothing here
-/// asks it to yet, so on Linux this is false and the dock stays as it was
-/// rather than offering a channel that could never open.
+/// Windows has process loopback, and PipeWire has the application's own
+/// playback stream to link a capture to. Anywhere else the dock stays as it
+/// was rather than offering a channel that could never open.
 pub const fn captures_applications() -> bool {
-    cfg!(target_os = "windows")
+    cfg!(target_os = "windows") || cfg!(target_os = "linux")
 }
 
 /// Every application this platform can capture the sound of on its own.
 ///
-/// Windows lists what holds an audio session, which is the applications that
-/// use the sound card rather than every process there is. Everywhere else
-/// this is empty and a channel of that kind can be made but not opened —
-/// the same shape every other half-written platform backend here has.
+/// Not a process list, on either platform that answers: Windows lists what
+/// holds an audio session and Linux what is playing through a node, which is
+/// the applications using the sound card rather than every program there is.
+/// A program that is running but silent is in neither, which is why a
+/// channel of this kind outlives what it names — see the mixer dock.
+///
+/// Everywhere else this is empty and a channel of that kind can be made but
+/// not opened — the same shape every other half-written platform backend
+/// here has.
 pub fn audio_processes() -> Vec<AudioProcessTarget> {
     #[cfg(target_os = "windows")]
     {
         windows::audio_processes()
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::audio_processes()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         Vec::new()
     }

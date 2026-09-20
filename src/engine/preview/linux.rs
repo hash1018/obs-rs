@@ -1047,6 +1047,9 @@ mod tests {
                 height,
                 frame_rate: ffmpeg::Rational::new(30, 1),
                 background: Color::new(255, 0, 0),
+                // Opaque, as the Canvas is: this composes a picture rather
+                // than something to lay over one.
+                background_alpha: 255,
             },
         )
         .expect("compositor");
