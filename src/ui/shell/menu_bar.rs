@@ -228,13 +228,13 @@ fn show_projector_menu(
                 monitor.name, monitor.rect.width, monitor.rect.height
             );
             if ui.selectable_label(open, label).clicked() {
-                state.projector = (!open).then(|| Projector::Screen {
+                state.show_projector((!open).then(|| Projector::Screen {
                     name: monitor.name.clone(),
                     x: monitor.rect.x,
                     y: monitor.rect.y,
                     width: monitor.rect.width,
                     height: monitor.rect.height,
-                });
+                }));
                 ui.close();
             }
         }
@@ -245,7 +245,7 @@ fn show_projector_menu(
         .selectable_label(windowed, i18n.text(TextKey::MenuProjectorWindow))
         .clicked()
     {
-        state.projector = (!windowed).then_some(Projector::Window);
+        state.show_projector((!windowed).then_some(Projector::Window));
         ui.close();
     }
 }

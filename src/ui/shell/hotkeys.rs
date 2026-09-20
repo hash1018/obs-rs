@@ -175,7 +175,9 @@ fn pressed_action(
             }
         }
         // The window's own, which never come through here — see `dispatch`.
-        Hotkey::Action(HotkeyAction::Fullscreen | HotkeyAction::OpenSettings) => {}
+        Hotkey::Action(
+            HotkeyAction::Fullscreen | HotkeyAction::ToggleProjector | HotkeyAction::OpenSettings,
+        ) => {}
         Hotkey::ToggleMute(id) => {
             // Against what the mute button shows now, as clicking it would
             // be; a channel the project no longer has is left alone.
@@ -313,6 +315,9 @@ pub fn dispatch(
     if bound(ctx, bindings, HotkeyAction::Fullscreen) {
         state.fullscreen = !state.fullscreen;
         actions.push(UiAction::SetFullscreen(state.fullscreen));
+    }
+    if bound(ctx, bindings, HotkeyAction::ToggleProjector) {
+        state.toggle_projector();
     }
     if bound(ctx, bindings, HotkeyAction::OpenSettings) {
         actions.push(UiAction::OpenSettings);

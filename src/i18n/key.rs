@@ -214,6 +214,7 @@ text_keys! {
     HotkeyToggleRecording         => "hotkey-toggle-recording";
     HotkeyTogglePause             => "hotkey-toggle-pause";
     HotkeyFullscreen              => "hotkey-fullscreen";
+    HotkeyToggleProjector         => "hotkey-toggle-projector";
     HotkeyOpenSettings            => "hotkey-open-settings";
     HotkeyToggleStreaming         => "hotkey-toggle-streaming";
     HotkeyScreenshot              => "hotkey-screenshot";

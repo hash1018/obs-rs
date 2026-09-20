@@ -224,12 +224,15 @@ pub enum HotkeyAction {
     /// Save what the replay buffer holds.
     SaveReplay,
     Fullscreen,
+    /// Puts the Canvas on another screen, or takes it away again — the
+    /// View menu's projector, from a key.
+    ToggleProjector,
     OpenSettings,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::ToggleRecording,
         Self::TogglePause,
         Self::ToggleStreaming,
@@ -238,6 +241,7 @@ impl HotkeyAction {
         Self::ToggleReplayBuffer,
         Self::SaveReplay,
         Self::Fullscreen,
+        Self::ToggleProjector,
         Self::OpenSettings,
     ];
 }
@@ -267,13 +271,18 @@ pub enum Hotkey {
 impl Hotkey {
     /// Whether this acts while another application has focus.
     ///
-    /// Everything but the two that are about this application's own window:
-    /// making it fullscreen or opening its Settings from inside a game would
-    /// be doing something to a window nobody is looking at.
+    /// Everything but the three that are about this application's own
+    /// windows: going fullscreen, putting the Canvas on another screen, or
+    /// opening Settings from inside a game would be doing something to a
+    /// window nobody is looking at.
     pub fn is_global(self) -> bool {
         !matches!(
             self,
-            Self::Action(HotkeyAction::Fullscreen | HotkeyAction::OpenSettings)
+            Self::Action(
+                HotkeyAction::Fullscreen
+                    | HotkeyAction::ToggleProjector
+                    | HotkeyAction::OpenSettings
+            )
         )
     }
 
@@ -344,6 +353,7 @@ pub struct HotkeySettings {
     pub toggle_replay_buffer: Binding,
     pub save_replay: Binding,
     pub fullscreen: Binding,
+    pub toggle_projector: Binding,
     pub open_settings: Binding,
     /// Only the channels, Scenes and items that have a key, so a file that
     /// binds none of them says nothing about them.
@@ -375,6 +385,10 @@ impl Default for HotkeySettings {
             toggle_replay_buffer: Binding(None),
             save_replay: Binding(None),
             fullscreen: Chord::plain(Key::F11).into(),
+            // Nothing: a projector is a second window, and a key that
+            // opened one by accident would be a window in front of whatever
+            // is on the other screen.
+            toggle_projector: Binding(None),
             open_settings: Chord::ctrl(Key::Comma).into(),
             channels: Vec::new(),
             scenes: Vec::new(),
@@ -395,6 +409,7 @@ impl HotkeySettings {
                 HotkeyAction::ToggleReplayBuffer => self.toggle_replay_buffer.0,
                 HotkeyAction::SaveReplay => self.save_replay.0,
                 HotkeyAction::Fullscreen => self.fullscreen.0,
+                HotkeyAction::ToggleProjector => self.toggle_projector.0,
                 HotkeyAction::OpenSettings => self.open_settings.0,
             },
             Hotkey::PushToTalk(id) => self.channel(id).and_then(|keys| keys.push_to_talk.0),
@@ -425,6 +440,7 @@ impl HotkeySettings {
                 HotkeyAction::ToggleReplayBuffer => self.toggle_replay_buffer = binding,
                 HotkeyAction::SaveReplay => self.save_replay = binding,
                 HotkeyAction::Fullscreen => self.fullscreen = binding,
+                HotkeyAction::ToggleProjector => self.toggle_projector = binding,
                 HotkeyAction::OpenSettings => self.open_settings = binding,
             },
             Hotkey::PushToTalk(id) => self.channel_mut(id).push_to_talk = binding,
@@ -682,6 +698,7 @@ mod tests {
         assert!(Hotkey::Scene(SceneId(1)).is_global());
         assert!(Hotkey::ToggleItem(SceneItemId(1)).is_global());
         assert!(!Hotkey::Action(HotkeyAction::Fullscreen).is_global());
+        assert!(!Hotkey::Action(HotkeyAction::ToggleProjector).is_global());
         assert!(!Hotkey::Action(HotkeyAction::OpenSettings).is_global());
         assert!(Hotkey::PushToMute(AudioSourceId(1)).is_held());
         assert!(!Hotkey::ToggleMute(AudioSourceId(1)).is_held());

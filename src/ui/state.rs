@@ -27,6 +27,10 @@ pub struct UiState {
     /// runs, where a window appearing on a second screen at launch would be
     /// a surprise.
     pub projector: Option<Projector>,
+    /// Where the last projector of this session was, for the key that opens
+    /// one without naming a screen — see [`UiState::toggle_projector`].
+    /// Kept when it is closed, which is the whole point of it.
+    projector_last: Option<Projector>,
     pub(super) scenes: ScenesPanelState,
     pub(super) editor: SceneEditorState,
     pub(super) sources: SourcesPanelState,
@@ -97,6 +101,58 @@ impl UiState {
         self.settings.open_with(settings);
     }
 
+    /// Puts the Canvas on `projector`, or takes away the one that is there.
+    ///
+    /// Where both the menu and the key go, so that either remembers for the
+    /// other which screen was last used. Closing remembers it too — that is
+    /// what a key with no screen to name reopens.
+    pub fn show_projector(&mut self, projector: Option<Projector>) {
+        if projector.is_some() {
+            self.projector_last = projector.clone();
+        }
+        self.projector = projector;
+    }
+
+    /// The key's own: closes an open projector, and otherwise opens one
+    /// where the last of this session was.
+    ///
+    /// By the screen's name rather than the rectangle it had, since a
+    /// display that has been unplugged and plugged back in, or moved in the
+    /// desktop's settings, is not where it was. What is left when that name
+    /// is gone — and on the first press of a session — is the first screen
+    /// the desktop lists, and a window where it lists none, which is the
+    /// menu's own second answer.
+    pub fn toggle_projector(&mut self) {
+        if self.projector.is_some() {
+            self.show_projector(None);
+            return;
+        }
+        if let Some(Projector::Window) = self.projector_last {
+            self.show_projector(Some(Projector::Window));
+            return;
+        }
+        let monitors = match crate::capture::source_picker() {
+            crate::capture::SourcePicker::Enumerated { monitors, .. } => monitors,
+            crate::capture::SourcePicker::SystemDialog => Vec::new(),
+        };
+        let wanted = match &self.projector_last {
+            Some(Projector::Screen { name, .. }) => Some(name.clone()),
+            _ => None,
+        };
+        let screen = monitors
+            .iter()
+            .find(|monitor| Some(&monitor.name) == wanted.as_ref())
+            .or_else(|| monitors.first())
+            .map(|monitor| Projector::Screen {
+                name: monitor.name.clone(),
+                x: monitor.rect.x,
+                y: monitor.rect.y,
+                width: monitor.rect.width,
+                height: monitor.rect.height,
+            });
+        self.show_projector(Some(screen.unwrap_or(Projector::Window)));
+    }
+
     /// The same, on the Hotkeys page — for whatever says a key is missing
     /// and should take the user to where one is set.
     pub fn open_hotkey_settings(&mut self, settings: &crate::settings::AppSettings) {
@@ -123,4 +179,29 @@ pub enum Projector {
     /// A window like any other, for a desktop that will not let an
     /// application choose a screen — and for a second view on this one.
     Window,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One key for both, as the menu's own entries are: it closes what is
+    /// open, and opens again where the last one was — a window stays a
+    /// window rather than turning into a screen.
+    #[test]
+    fn the_projector_key_closes_what_is_open_and_reopens_where_it_was() {
+        let mut state = UiState::default();
+        state.show_projector(Some(Projector::Window));
+        assert_eq!(state.projector, Some(Projector::Window));
+
+        state.toggle_projector();
+        assert_eq!(state.projector, None, "the same key closes it");
+
+        state.toggle_projector();
+        assert_eq!(
+            state.projector,
+            Some(Projector::Window),
+            "and opens the one it remembers"
+        );
+    }
 }

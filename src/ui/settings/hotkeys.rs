@@ -254,6 +254,7 @@ pub(crate) fn label(
                 HotkeyAction::ToggleReplayBuffer => TextKey::HotkeyToggleReplay,
                 HotkeyAction::SaveReplay => TextKey::HotkeySaveReplay,
                 HotkeyAction::Fullscreen => TextKey::HotkeyFullscreen,
+                HotkeyAction::ToggleProjector => TextKey::HotkeyToggleProjector,
                 HotkeyAction::OpenSettings => TextKey::HotkeyOpenSettings,
             })
             .into_owned(),

@@ -91,7 +91,8 @@ bottom.](docs/screenshot.png)
 - **Projector.** The Canvas on another screen, from `View → Projector`:
   a window with nothing in it but what is being composited — no selection
   outlines, no toolbar, no docks. Pick a display and it fills it, or take it
-  as an ordinary window; Escape closes it. It costs one more draw of a
+  as an ordinary window; Escape closes it, and so does the key you bound,
+  which reopens it on the screen it was last on. It costs one more draw of a
   picture that exists either way, so it is a second view rather than a
   second output: nothing is encoded, and the recording does not know it is
   there.
@@ -209,8 +210,9 @@ seconds it is holding, and that it cannot save anything in its first second.
 Keys: `Ctrl+R` starts and stops recording, `Ctrl+P` pauses and resumes one,
 `Ctrl+1` … `Ctrl+9` switch to that Scene, `F11` goes fullscreen, and `Ctrl+,`
 opens Settings. Starting and stopping a broadcast, running the replay buffer
-and saving from it, and the two screenshots have keys of their own, unbound
-to begin with. None of them fire while you are typing a name.
+and saving from it, the two screenshots, and opening and closing the
+projector have keys of their own, unbound to begin with. None of them fire
+while you are typing a name.
 
 All but the Scene keys can be changed in **Settings → Hotkeys**: click a
 binding, press the key you want, or Backspace to clear it. They work while

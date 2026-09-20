@@ -891,6 +891,7 @@ mod portal {
                 HotkeyAction::ToggleReplayBuffer => "toggle-replay-buffer".to_owned(),
                 HotkeyAction::SaveReplay => "save-replay".to_owned(),
                 HotkeyAction::Fullscreen => "fullscreen".to_owned(),
+                HotkeyAction::ToggleProjector => "toggle-projector".to_owned(),
                 HotkeyAction::OpenSettings => "open-settings".to_owned(),
             },
             Hotkey::PushToTalk(channel) => format!("push-to-talk-{}", channel.0),
