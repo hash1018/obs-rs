@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 32;
+const SCHEMA_VERSION: i64 = 33;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -642,6 +642,38 @@ fn migrate(
             );
 
             PRAGMA user_version = 32;",
+        )?;
+    }
+    if step(33) {
+        // How see-through one placement is. On the item rather than the
+        // Source, so the same camera can be solid in one Scene and a wash in
+        // another — and applied where the layer is drawn, which costs
+        // nothing.
+        //
+        // A Color Source's alpha was the one value that already did this,
+        // through the layer in exactly the same way, so it moves here rather
+        // than staying as a second place to say the same thing: every item of
+        // one takes the alpha it was drawn at, and the colour itself becomes
+        // opaque. Nothing looks different afterwards.
+        transaction.execute_batch(
+            "ALTER TABLE scene_items
+                ADD COLUMN opacity REAL NOT NULL DEFAULT 1
+                CHECK (opacity BETWEEN 0 AND 1);
+
+            UPDATE scene_items
+               SET opacity = (
+                   SELECT color_source_settings.alpha / 255.0
+                     FROM color_source_settings
+                    WHERE color_source_settings.source_id = scene_items.source_id
+               )
+             WHERE EXISTS (
+                   SELECT 1 FROM color_source_settings
+                    WHERE color_source_settings.source_id = scene_items.source_id
+               );
+
+            UPDATE color_source_settings SET alpha = 255;
+
+            PRAGMA user_version = 33;",
         )?;
     }
     transaction.commit()?;

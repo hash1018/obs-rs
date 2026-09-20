@@ -92,6 +92,7 @@ impl SourceStore {
                 scene_items.crop_right AS item_crop_right,
                 scene_items.crop_bottom AS item_crop_bottom,
                 scene_items.z_index AS item_z_index,
+                scene_items.opacity AS item_opacity,
                 sources.name AS source_name,
                 sources.kind AS source_kind,
                 color_source_settings.width AS color_width,
@@ -420,6 +421,7 @@ impl SourceStore {
                             right: row.get("item_crop_right")?,
                             bottom: row.get("item_crop_bottom")?,
                         },
+                        opacity: row.get("item_opacity")?,
                         z_index: row.get("item_z_index")?,
                     },
                     Source {
@@ -574,6 +576,23 @@ impl SourceStore {
         add_to_scene(transaction, scene_id, source_id, size)
     }
 
+    /// How see-through one placement is, from nothing to one.
+    ///
+    /// The item's own, so the same Source can be solid in one Scene and a
+    /// wash in another — see [`crate::domain::SceneItem::opacity`]. Clamped
+    /// rather than refused: a value out of range is a caller's slip, and a
+    /// failed transaction is worse than a value brought back into it.
+    pub(crate) fn set_opacity(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        opacity: f32,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_items SET opacity = ?1 WHERE id = ?2",
+            params![f64::from(opacity.clamp(0.0, 1.0)), scene_item_id.0],
+        )?;
+        Ok(())
+    }
     /// A new Scene Source: another Scene of this project, shown in this one.
     ///
     /// Placed at Canvas size, which is what it is composited at. The name is

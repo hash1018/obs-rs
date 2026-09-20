@@ -117,6 +117,10 @@ pub enum UiAction {
     /// the portal's window picker on screen, which is why nothing does it
     /// without being asked.
     ReopenSource(SceneItemId),
+    /// How see-through one placement is, while its slider is still held. The
+    /// project hears it when the drag ends — see `DragSceneItem`, which
+    /// splits a Transform the same way.
+    DragItemOpacity(SceneItemId, f32),
     /// Load a Browser Source's page again, ignoring what was cached for it.
     /// Not a reopen: the same browser fetches its address a second time.
     RefreshPage(SceneItemId),

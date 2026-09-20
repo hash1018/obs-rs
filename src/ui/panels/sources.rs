@@ -1684,6 +1684,7 @@ mod tests {
             locked: false,
             transform: Transform::default(),
             crop: Crop::default(),
+            opacity: 1.0,
         }
     }
 

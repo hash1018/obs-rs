@@ -66,6 +66,7 @@ pub(in crate::ui) fn show(
                 }
                 show_placement(ui, item, editor, i18n);
                 show_crop(ui, item, editor, i18n, actions);
+                show_opacity(ui, item, i18n, actions);
                 let ended = status.is_some_and(|status| *status == SourceStatus::Ended);
                 show_settings(ui, item, ended, &snapshot.addable_scenes, i18n, actions);
             });
@@ -195,10 +196,7 @@ fn show_settings(
     actions: &mut Vec<UiAction>,
 ) {
     match &item.settings {
-        SourceSettings::Color(settings) => {
-            show_colour(ui, item.id, settings.rgba, i18n, actions);
-            show_opacity(ui, item.id, settings.rgba, i18n, actions);
-        }
+        SourceSettings::Color(settings) => show_colour(ui, item.id, settings.rgba, i18n, actions),
         SourceSettings::Text(settings) => show_text(ui, item.id, settings, i18n, actions),
         SourceSettings::Scene(settings) => {
             show_nested_scene(ui, item.id, settings, scenes, i18n, actions);
@@ -848,48 +846,49 @@ fn show_colour(
     ui.end_row();
 }
 
-/// How see-through a Color Source is.
+/// How see-through this placement is.
 ///
-/// Its own row rather than an alpha inside the picker above, because that is
-/// what it is: the alpha is not in the pixels, it is the layer's opacity —
-/// see `layer_for`. The picker edits the three channels that are pixels, and
-/// this edits the one that is not.
+/// The item's own rather than the Source's, which is why it sits with the
+/// placement values above rather than among the settings below: the same
+/// camera can be solid in one Scene and a wash in another. What it is not is
+/// the colour correction filter's opacity, which is a pass over the picture
+/// and belongs to the Source — this is the multiply the compositor was doing
+/// anyway, and costs nothing.
 ///
 /// Held in egui's memory while it is dragged and written to the project when
 /// the drag ends, the way every other dragged number here is; what is
-/// composited follows every frame of the gesture through
-/// [`UiAction::DragSourceColour`], so the Preview shows the value under the
-/// pointer rather than the one the project last heard.
+/// composited follows every frame of the gesture, so the Preview shows the
+/// value under the pointer rather than the one the project last heard.
 fn show_opacity(
     ui: &mut egui::Ui,
-    item: SceneItemId,
-    stored: [u8; 4],
+    item: &SceneItemSnapshot,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
-    let key = egui::Id::new(("colour-opacity", item));
-    let percent_of = |alpha: u8| (f32::from(alpha) / 255.0 * 100.0).round() as u8;
-    let mut percent = ui
-        .data(|data| data.get_temp::<u8>(key))
-        .unwrap_or_else(|| percent_of(stored[3]));
+    let key = egui::Id::new(("item-opacity", item.id));
+    let stored = (item.opacity.clamp(0.0, 1.0) * 100.0).round() as u8;
+    let mut percent = ui.data(|data| data.get_temp::<u8>(key)).unwrap_or(stored);
 
     ui.label(i18n.text(TextKey::PropertiesOpacity));
-    let slider = ui.add(egui::Slider::new(&mut percent, 0..=100).suffix("%"));
-    let rgba = [
-        stored[0],
-        stored[1],
-        stored[2],
-        ((u16::from(percent) * 255 + 50) / 100) as u8,
-    ];
+    // The bar takes what is left after the number beside it, or the row runs
+    // past a narrow dock's edge — egui gives a slider a fixed width
+    // otherwise, which is what the test at the bottom of this file catches.
+    let slider = ui
+        .scope(|ui| {
+            ui.spacing_mut().slider_width = (ui.available_width() - OPACITY_VALUE_WIDTH).max(24.0);
+            ui.add(egui::Slider::new(&mut percent, 0..=100).suffix("%"))
+        })
+        .inner;
+    let opacity = f32::from(percent) / 100.0;
     if slider.changed() {
         ui.data_mut(|data| data.insert_temp(key, percent));
-        actions.push(UiAction::DragSourceColour(item, rgba));
+        actions.push(UiAction::DragItemOpacity(item.id, opacity));
     }
     if slider.drag_stopped() || slider.lost_focus() {
         ui.data_mut(|data| data.remove_temp::<u8>(key));
-        if rgba != stored {
+        if percent != stored {
             actions.push(UiAction::Project(ProjectCommand::Source(
-                SourceCommand::SetColor(item, rgba),
+                SourceCommand::SetOpacity(item.id, opacity),
             )));
         }
     }
@@ -1349,6 +1348,9 @@ fn trouble(status: &SourceStatus, i18n: &LocalizationManager) -> Option<String> 
 /// What a `TextEdit` keeps for itself either side of its text.
 const FIELD_MARGIN: f32 = 8.0;
 
+/// What the number beside the opacity bar needs, `100%` and its box.
+const OPACITY_VALUE_WIDTH: f32 = 52.0;
+
 fn kind_key(kind: SourceKind) -> TextKey {
     match kind {
         SourceKind::DisplayCapture => TextKey::SourceKindDisplayCapture,
@@ -1457,6 +1459,7 @@ mod tests {
             locked: false,
             transform: Transform::default(),
             crop: Crop::default(),
+            opacity: 1.0,
             peak_db: None,
             position: Some(std::time::Duration::from_secs(3)),
         }

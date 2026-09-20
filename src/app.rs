@@ -840,6 +840,11 @@ impl ObsApp {
                     engine.reopen_source(item_id);
                 }
             }
+            UiAction::DragItemOpacity(item_id, opacity) => {
+                if let Some(engine) = &self.engine {
+                    engine.set_item_opacity(item_id, opacity);
+                }
+            }
             UiAction::RefreshPage(item_id) => {
                 if let Some(engine) = &self.engine {
                     engine.refresh_page(item_id);

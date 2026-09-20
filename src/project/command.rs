@@ -216,6 +216,11 @@ pub enum SourceCommand {
     AddScene(SceneId, SceneId),
     /// Which Scene a Scene Source shows.
     SetSceneSource(SceneItemId, SceneId),
+    /// How see-through one placement is, from nothing to one — the item's
+    /// own rather than the Source's. Recorded when the slider is let go, as
+    /// a Transform is; what is composited follows the drag through
+    /// `EngineManager::set_item_opacity`.
+    SetOpacity(SceneItemId, f32),
     /// The font file to draw with, or `None` for this application's own.
     SetTextFont(SceneItemId, Option<std::path::PathBuf>),
     SetTextFontSize(SceneItemId, f32),

@@ -1494,6 +1494,7 @@ mod tests {
                 ..Transform::default()
             },
             crop: Crop::default(),
+            opacity: 1.0,
             peak_db: None,
             position: None,
         }
@@ -1749,6 +1750,7 @@ mod tests {
                 ..Transform::default()
             },
             crop: Crop::default(),
+            opacity: 1.0,
             peak_db: None,
             position: None,
         }

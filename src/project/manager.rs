@@ -218,6 +218,9 @@ fn handle_source_command(
         SourceCommand::SetSceneSource(item_id, shown) => {
             SourceStore::set_scene_source(transaction, item_id, shown)
         }
+        SourceCommand::SetOpacity(item_id, opacity) => {
+            SourceStore::set_opacity(transaction, item_id, opacity)
+        }
         SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
         SourceCommand::SetTextFont(item_id, font) => {
             SourceStore::set_text_font(transaction, item_id, font.as_deref())
@@ -499,6 +502,7 @@ fn scene_items(
                     locked,
                     transform,
                     crop,
+                    opacity,
                     z_index,
                     ..
                 } = item;
@@ -523,6 +527,7 @@ fn scene_items(
                     locked,
                     transform,
                     crop,
+                    opacity,
                     // Filled in later, from the engine — see
                     // `ObsApp::poll_media_levels`.
                     peak_db: None,

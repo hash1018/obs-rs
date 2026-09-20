@@ -144,6 +144,8 @@ pub struct SceneItemSnapshot {
     pub locked: bool,
     pub transform: Transform,
     pub crop: Crop,
+    /// How see-through this placement is — see [`crate::domain::SceneItem`].
+    pub opacity: f32,
     /// The loudest sample this Source's own audio has reached since the last
     /// update, in decibels relative to full scale.
     ///
@@ -179,9 +181,8 @@ mod tests {
             source_size,
             transform: Transform::default(),
             crop,
-
+            opacity: 1.0,
             peak_db: None,
-
             position: None,
             visible: true,
             locked: false,

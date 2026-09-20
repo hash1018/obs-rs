@@ -39,5 +39,12 @@ pub struct SceneItem {
     pub locked: bool,
     pub transform: Transform,
     pub crop: Crop,
+    /// How see-through this placement is, from nothing to one.
+    ///
+    /// The item's rather than the Source's: the same camera can be solid in
+    /// one Scene and a wash in another. Applied where the layer is drawn, so
+    /// it costs nothing — unlike a colour correction filter's own opacity,
+    /// which is a pass over the picture and belongs to the Source.
+    pub opacity: f32,
     pub z_index: i64,
 }

@@ -90,6 +90,9 @@ enum EngineCommand {
     /// Open this item's Source again, at the user's request — see
     /// `EngineManager::reopen_source`.
     ReopenSource(SceneItemId),
+    /// How see-through one layer is, while its slider is held — see
+    /// `EngineManager::set_item_opacity`.
+    Opacity(SceneItemId, f32),
     /// Something done to a Browser Source's page — see
     /// `EngineManager::send_page_input`.
     PageInput(SceneItemId, crate::browser::PageInput),
@@ -538,6 +541,15 @@ impl EngineManager {
     /// reason [`Self::set_drawing_strokes`] exists.
     pub fn set_source_colour(&self, item: SceneItemId, rgba: [u8; 4]) {
         let _ = self.commands.send(EngineCommand::Colour(item, rgba));
+    }
+
+    /// Changes how see-through one layer is while its slider is still held.
+    ///
+    /// The same arrangement `set_dragging_transform` has, and for the same
+    /// reason: the project learns the value when the gesture ends, and the
+    /// Preview has to show it under the pointer.
+    pub fn set_item_opacity(&self, item: SceneItemId, opacity: f32) {
+        let _ = self.commands.send(EngineCommand::Opacity(item, opacity));
     }
 
     /// Redraws a Text Source while its field is still being typed into, for
@@ -1755,6 +1767,12 @@ fn apply_command(
             }
             false
         }
+        EngineCommand::Opacity(item_id, opacity) => {
+            if let Some(SourceState::Open(source)) = open.get(&item_id) {
+                let _ = source.layer.set_opacity(opacity.clamp(0.0, 1.0));
+            }
+            false
+        }
         EngineCommand::Colour(item_id, rgba) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
                 push_content(source, PushedContent::Color(rgba));
@@ -2800,11 +2818,12 @@ fn layer_for(
     layer.visible = item.visible;
     layer.fit = VideoFit::Stretch;
     layer.source = source_rect(item, crop);
-    // NV12 carries no alpha, so a Color Source's own is the layer's opacity
-    // rather than something the blend could read out of its pixels.
-    if let SourceSettings::Color(settings) = &item.settings {
-        layer.opacity = f32::from(settings.rgba[3]) / 255.0;
-    }
+    // How see-through this placement is, which is the item's own rather than
+    // the Source's: the same camera can be solid in one Scene and a wash in
+    // another. Applied here rather than in the picture, so it costs nothing —
+    // a colour correction filter's opacity is a pass over the pixels and
+    // belongs to the Source, which is the other half of the same question.
+    layer.opacity = item.opacity.clamp(0.0, 1.0);
     // A browser composites its page before handing it over, so what arrives
     // is colour already multiplied by its alpha. Blending it as though it
     // were not applies that alpha twice, and a half-transparent overlay comes
@@ -2971,6 +2990,7 @@ mod tests {
             source_size: [1280.0, 720.0],
             transform: Transform::default(),
             crop: crate::domain::Crop::default(),
+            opacity: 1.0,
             visible: true,
             locked: false,
         }
