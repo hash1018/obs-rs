@@ -224,7 +224,19 @@ impl ObsApp {
                         stats: audio_stats,
                         meter_wake,
                     },
-                    move || engine_repaint_ctx.request_repaint_after(REPAINT_NOW),
+                    move || {
+                        engine_repaint_ctx.request_repaint_after(REPAINT_NOW);
+                        // And the projector window, which is a second viewport
+                        // and has a repaint schedule of its own: without this
+                        // it draws when something happens to it rather than
+                        // when a frame arrives, which is a live picture
+                        // stuttering on a screen of its own. Asking for a
+                        // viewport that is not open costs nothing.
+                        engine_repaint_ctx.request_repaint_after_for(
+                            REPAINT_NOW,
+                            Self::projector_viewport(),
+                        );
+                    },
                 )
                 .inspect_err(|error| tracing::error!("could not start the engine: {error}"))
                 .ok()
@@ -412,6 +424,12 @@ impl ObsApp {
     /// application's own state each frame and has no borrow of it to keep.
     /// Escape closes it, and so does the window's own close button; either
     /// way the flag is read back here on the next pass.
+    /// The projector window's own id, which both the window and whatever
+    /// wakes it have to name.
+    fn projector_viewport() -> egui::ViewportId {
+        egui::ViewportId::from_hash_of("projector")
+    }
+
     fn show_projector(
         &mut self,
         ctx: &egui::Context,
@@ -447,7 +465,7 @@ impl ObsApp {
         let canvas = self.snapshots.sources.canvas;
         let closed = Arc::clone(&self.projector_closed);
         ctx.show_viewport_deferred(
-            egui::ViewportId::from_hash_of("projector"),
+            Self::projector_viewport(),
             builder,
             move |ctx, _class| {
                 egui::CentralPanel::default()
