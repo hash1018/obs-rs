@@ -197,14 +197,7 @@ fn show_settings(
     match &item.settings {
         SourceSettings::Color(settings) => {
             show_colour(ui, item.id, settings.rgba, i18n, actions);
-            // The alpha is the layer's opacity rather than something in the
-            // pixels — see `layer_for` — so it is reported as one, and the
-            // picker above edits only the three that are.
-            row(
-                ui,
-                i18n.text(TextKey::PropertiesOpacity).as_ref(),
-                &format!("{:.0}%", f32::from(settings.rgba[3]) / 255.0 * 100.0),
-            );
+            show_opacity(ui, item.id, settings.rgba, i18n, actions);
         }
         SourceSettings::Text(settings) => show_text(ui, item.id, settings, i18n, actions),
         SourceSettings::Scene(settings) => {
@@ -852,6 +845,54 @@ fn show_colour(
         }
         ui.monospace(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2]));
     });
+    ui.end_row();
+}
+
+/// How see-through a Color Source is.
+///
+/// Its own row rather than an alpha inside the picker above, because that is
+/// what it is: the alpha is not in the pixels, it is the layer's opacity —
+/// see `layer_for`. The picker edits the three channels that are pixels, and
+/// this edits the one that is not.
+///
+/// Held in egui's memory while it is dragged and written to the project when
+/// the drag ends, the way every other dragged number here is; what is
+/// composited follows every frame of the gesture through
+/// [`UiAction::DragSourceColour`], so the Preview shows the value under the
+/// pointer rather than the one the project last heard.
+fn show_opacity(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: [u8; 4],
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let key = egui::Id::new(("colour-opacity", item));
+    let percent_of = |alpha: u8| (f32::from(alpha) / 255.0 * 100.0).round() as u8;
+    let mut percent = ui
+        .data(|data| data.get_temp::<u8>(key))
+        .unwrap_or_else(|| percent_of(stored[3]));
+
+    ui.label(i18n.text(TextKey::PropertiesOpacity));
+    let slider = ui.add(egui::Slider::new(&mut percent, 0..=100).suffix("%"));
+    let rgba = [
+        stored[0],
+        stored[1],
+        stored[2],
+        ((u16::from(percent) * 255 + 50) / 100) as u8,
+    ];
+    if slider.changed() {
+        ui.data_mut(|data| data.insert_temp(key, percent));
+        actions.push(UiAction::DragSourceColour(item, rgba));
+    }
+    if slider.drag_stopped() || slider.lost_focus() {
+        ui.data_mut(|data| data.remove_temp::<u8>(key));
+        if rgba != stored {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::SetColor(item, rgba),
+            )));
+        }
+    }
     ui.end_row();
 }
 

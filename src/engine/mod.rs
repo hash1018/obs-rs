@@ -1758,6 +1758,12 @@ fn apply_command(
         EngineCommand::Colour(item_id, rgba) => {
             if let Some(SourceState::Open(source)) = open.get_mut(&item_id) {
                 push_content(source, PushedContent::Color(rgba));
+                // The alpha is the layer's own opacity rather than anything
+                // in those pixels — see `layer_for` — so a colour being
+                // dragged has to reach the layer as well as the picture, or
+                // the Preview would show the new colour at the old
+                // transparency until the project heard about it.
+                let _ = source.layer.set_opacity(f32::from(rgba[3]) / 255.0);
             }
             false
         }
