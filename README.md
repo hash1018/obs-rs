@@ -1,9 +1,9 @@
 # obs-rs
 
-An OBS-style scene compositor and screen recorder, written in Rust on top of
-[`media-pp`](https://github.com/hash1018/media-pp). Captures your desktop,
-composites it on the GPU, and records it — with an annotation layer you can
-draw on while it runs.
+An OBS-style scene compositor, screen recorder and streamer, written in Rust
+on top of [`media-pp`](https://github.com/hash1018/media-pp). Captures your
+desktop, composites it on the GPU, and records it or sends it to an RTMP
+service — with an annotation layer you can draw on while it runs.
 
 ![The obs-rs window: the Scenes, Sources and Properties docks down the left;
 the Preview in the middle, where a still picture, a selected video — outlined
@@ -75,6 +75,26 @@ bottom.](docs/screenshot.png)
 - **Recording** to MP4, Matroska or HLS, with hardware encoding where the
   machine has it. One recording can be split into several files by elapsed
   time or by size.
+- **Streaming** to any RTMP service — Twitch, YouTube, an nginx of your own.
+  The server and the stream key are kept apart, because that is how services
+  hand them out and because only one of the two is a secret: the key is
+  masked unless you ask to see it, and never written to the log. The
+  broadcast has its own encoder, bit rate, keyframe interval and height, so
+  publishing at 720p while recording at 1080p is a setting rather than a
+  compromise, and a broadcast that drops is opened again on its own at an
+  interval you choose.
+- **Filters.** On a picture: chroma key, luma key, and colour correction
+  (brightness, contrast, saturation, hue, gamma and opacity). On sound:
+  noise suppression, a gate, a compressor and a limiter, on a mixer channel
+  or on a Source's own audio. They are added, reordered and tuned while
+  everything runs — nothing is reopened, so a slider does not cost a camera
+  a visible stall.
+- **Replay buffer.** Keeps the last stretch of what is being composited in
+  memory and writes it out when you press the key — the clip you only knew
+  you wanted after it happened. It runs with or without a recording.
+- **Screenshots** of the canvas, or of one Source's own picture, saved
+  beside the recordings. Both are hotkeys, and unbound to begin with because
+  the keys are global.
 - **Audio.** Desktop and microphone channels with faders, mute, and level
   meters that read after the fader. A fader can boost past unity, and a lamp
   reports a channel that clipped. The Scene's own media files get a channel
@@ -134,28 +154,60 @@ at the last one.
 
 The **Properties** dock says what the selected source is: its name and kind,
 where it sits on the canvas and how large, and what it captures — the monitor
-and its place in the desktop, or the program and title of a window. Most of it
-reports rather than asks; a Color source's colour is the one thing edited
-there.
+and its place in the desktop, or the program and title of a window. What a
+source can be told is there too: a Color's colour, a camera's picture size
+and rate, a page's address, a clip's playback and scrub bar, a stream's
+transport and reconnect interval, and the four crop numbers exactly.
+
+The **Filters** dock is the selected source's own chain, under a **Picture**
+tab and a **Sound** one: a chroma key, a luma key or colour correction on
+what it shows, and noise suppression, a gate, a compressor or a limiter on
+what it plays. Buttons move a filter earlier or later in the chain, and
+switching one off does not cost it what it was tuned to. They belong to the
+source rather than to the Scene, so one placed in two Scenes is filtered in
+both. A mixer channel has a chain of its own, reached from the channel.
+Everything is applied while it runs: no slider reopens a camera.
 
 **Start Recording** writes to your Videos folder unless Settings says
 otherwise. What it records is the canvas, not the window — the selection
 outlines and the pen toolbar are editor-only and never appear in the file.
 
-Keys, while the window has focus: `Ctrl+R` starts and stops recording,
-`Ctrl+P` pauses and resumes one, `Ctrl+1` … `Ctrl+9` switch to that Scene,
-`F11` goes fullscreen, and `Ctrl+,` opens Settings. None of them fire while
-you are typing a name. All but the Scene keys can be changed in
-**Settings → Hotkeys**: click a binding, press the key you want, or Backspace
-to clear it.
+**Start Streaming** needs a server and a stream key in
+**Settings → Streaming**. The Controls dock says when a broadcast is live and
+the status bar counts how long it has been; a broadcast that drops says so
+and comes back on its own unless you turned that off. Recording and streaming
+are independent — either, both, or one started part way through the other.
+
+The **replay buffer** keeps the last stretch of the canvas in memory rather
+than writing it: start it from the Controls dock, and the key you bound
+writes what it holds to a file beside the recordings. It says how many
+seconds it is holding, and that it cannot save anything in its first second.
+
+Keys: `Ctrl+R` starts and stops recording, `Ctrl+P` pauses and resumes one,
+`Ctrl+1` … `Ctrl+9` switch to that Scene, `F11` goes fullscreen, and `Ctrl+,`
+opens Settings. Starting and stopping a broadcast, running the replay buffer
+and saving from it, and the two screenshots have keys of their own, unbound
+to begin with. None of them fire while you are typing a name.
+
+All but the Scene keys can be changed in **Settings → Hotkeys**: click a
+binding, press the key you want, or Backspace to clear it. They work while
+another application has focus, which is the point of them — a recorder has
+to be reachable from inside the game it is recording. On Windows that is a
+thread asking the system which bound keys are down; on Linux it is the
+desktop's own global-shortcuts portal, which asks you once whether to allow
+them. Each mixer channel gets a push-to-talk and a push-to-mute binding on
+that page too, which is why a key has to report being let go as well as
+pressed.
 
 **File → Show Recordings** opens that folder in your file manager, and
 **File → Settings** is the same dialog the Controls dock's button opens —
 there because that dock can be closed.
 
-Settings has four pages: General, Video (output resolution and frame rate),
-Audio (sample rate and channels), and Recording (where files go, format,
-encoder, bit rates, splitting).
+Settings has six pages: General, Video (output resolution and frame rate),
+Audio (sample rate, channels, and where monitoring is played), Recording
+(where files go, format, encoder, bit rates, splitting, the replay buffer),
+Streaming (server, key, its own encoder and bit rates, reconnecting), and
+Hotkeys.
 
 ## Getting it
 
@@ -236,15 +288,17 @@ has no such requirement.
 
 ## Where it is up to
 
-This is a working recorder, not a finished broadcaster. Worth knowing before
-you try it:
+This records and it broadcasts, but it is not everything OBS is. Worth
+knowing before you try it:
 
-- **No streaming.** There is no RTMP output, so nothing goes to Twitch or
-  YouTube yet. Recording is the whole of it.
 - **Ten source kinds.** Display Capture, Window Capture, Video Capture,
-  Media File, Network Stream, Image, Drawing, Color, Text and Browser
-  (Windows only, so far).
-- **No filters or transitions.** Switching Scenes is a cut.
+  Media File, Network Stream, Image, Drawing, Color, Text and Browser.
+- **No transitions.** Switching Scenes is a cut.
+- **No Studio Mode**, so there is no separate preview of what you are about
+  to cut to.
+- **A Scene cannot be a source in another Scene**, and there are no groups:
+  an overlay that belongs in every Scene is placed in each of them.
+- **No virtual camera**, so nothing here appears as a webcam in a meeting.
 
 ## Contributing
 
