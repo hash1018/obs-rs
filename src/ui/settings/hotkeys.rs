@@ -85,6 +85,18 @@ pub(super) fn show(
                 .collect(),
         ));
     }
+    // Every Scene's items in one section rather than a section per Scene:
+    // each row is already named for the Scene it is in, and a project of a
+    // dozen Scenes would otherwise be a dozen headings to scroll past.
+    let items: Vec<Hotkey> = scenes
+        .items
+        .iter()
+        .flat_map(|scene| scene.items.iter())
+        .map(|item| Hotkey::ToggleItem(item.id))
+        .collect();
+    if !items.is_empty() {
+        sections.push((TextKey::HotkeySectionSources, items));
+    }
     let label = |hotkey: Hotkey| label(hotkey, audio, scenes, i18n);
 
     // Vertical, and bounded: the pages are drawn inside the dialog's own
@@ -257,5 +269,19 @@ pub(crate) fn label(
                 .find(|scene| scene.id == id)
                 .map_or_else(|| "?".to_owned(), |scene| scene.name.clone()),
         ),
+        // Named for both, since the same Source in two Scenes is two rows
+        // and the Source's name alone would not tell them apart.
+        Hotkey::ToggleItem(id) => {
+            let found = scenes.items.iter().find_map(|scene| {
+                let item = scene.items.iter().find(|item| item.id == id)?;
+                Some((scene.name.clone(), item.name.clone()))
+            });
+            let (scene, source) = found.unwrap_or_else(|| ("?".to_owned(), "?".to_owned()));
+            let mut args = fluent_bundle::FluentArgs::new();
+            args.set("scene", scene);
+            args.set("source", source);
+            i18n.text_with(TextKey::HotkeyToggleItem, &args)
+                .into_owned()
+        }
     }
 }

@@ -133,6 +133,12 @@ pub enum SourceCommand {
     SetRestoreToken(SceneItemId, Option<String>),
     SetTransform(SceneItemId, Transform),
     SetVisible(SceneItemId, bool),
+    /// Shows the item, or hides it — whichever it is not now.
+    ///
+    /// Its own command rather than a `SetVisible` the caller works out,
+    /// because a key can toggle an item of a Scene the interface is not
+    /// showing and so has no visibility for — see `Hotkey::ToggleItem`.
+    ToggleVisible(SceneItemId),
     /// Puts one finished stroke on a Drawing. Sent when the pointer comes up,
     /// not while it is down — see `UiAction::DragStroke`.
     AddStroke(SceneItemId, Stroke),

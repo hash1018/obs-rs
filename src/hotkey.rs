@@ -32,7 +32,7 @@ use std::str::FromStr;
 use eframe::egui::{Key, Modifiers};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{AudioSourceId, SceneId};
+use crate::domain::{AudioSourceId, SceneId, SceneItemId};
 
 /// One key and the modifiers held with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,7 +243,7 @@ impl HotkeyAction {
 }
 
 /// Anything a key can be bound to: one of the fixed actions, or something
-/// about one mixer channel or one Scene.
+/// about one mixer channel, one Scene, or one item of a Scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Hotkey {
     Action(HotkeyAction),
@@ -255,6 +255,13 @@ pub enum Hotkey {
     ToggleMute(AudioSourceId),
     /// Makes this Scene the one shown.
     Scene(SceneId),
+    /// Shows the item this Scene holds, or hides it: the eye beside it in
+    /// the Sources dock, from a key.
+    ///
+    /// One placement rather than one Source. The same Source shown in two
+    /// Scenes is two items, and a key that took both could not be used to
+    /// hide one of them.
+    ToggleItem(SceneItemId),
 }
 
 impl Hotkey {
@@ -312,6 +319,19 @@ pub struct SceneHotkey {
     pub select: Binding,
 }
 
+/// One SceneItem's key, on the same terms.
+///
+/// The item is named by its project id, which is what the Sources dock and
+/// the engine already name a placement by. An item that has been removed
+/// leaves a row nothing reads, exactly as a deleted channel does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ItemHotkey {
+    pub item: i64,
+    #[serde(default)]
+    pub toggle: Binding,
+}
+
 /// What each hotkey is bound to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -325,12 +345,14 @@ pub struct HotkeySettings {
     pub save_replay: Binding,
     pub fullscreen: Binding,
     pub open_settings: Binding,
-    /// Only the channels and Scenes that have a key, so a file that binds
-    /// none of them says nothing about them.
+    /// Only the channels, Scenes and items that have a key, so a file that
+    /// binds none of them says nothing about them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<ChannelHotkeys>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub scenes: Vec<SceneHotkey>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<ItemHotkey>,
 }
 
 impl Default for HotkeySettings {
@@ -356,6 +378,7 @@ impl Default for HotkeySettings {
             open_settings: Chord::ctrl(Key::Comma).into(),
             channels: Vec::new(),
             scenes: Vec::new(),
+            items: Vec::new(),
         }
     }
 }
@@ -382,6 +405,11 @@ impl HotkeySettings {
                 .iter()
                 .find(|keys| keys.scene == id.0)
                 .and_then(|keys| keys.select.0),
+            Hotkey::ToggleItem(id) => self
+                .items
+                .iter()
+                .find(|keys| keys.item == id.0)
+                .and_then(|keys| keys.toggle.0),
         }
     }
 
@@ -409,6 +437,13 @@ impl HotkeySettings {
                     select: binding,
                 }),
             },
+            Hotkey::ToggleItem(id) => match self.items.iter_mut().find(|keys| keys.item == id.0) {
+                Some(keys) => keys.toggle = binding,
+                None => self.items.push(ItemHotkey {
+                    item: id.0,
+                    toggle: binding,
+                }),
+            },
         }
         // A row left with no key in it is dropped, so the file keeps only
         // what is bound — see the fields' own docs.
@@ -418,6 +453,7 @@ impl HotkeySettings {
                 || keys.toggle_mute.0.is_some()
         });
         self.scenes.retain(|keys| keys.select.0.is_some());
+        self.items.retain(|keys| keys.toggle.0.is_some());
     }
 
     /// Every hotkey that has a key, with it.
@@ -441,6 +477,11 @@ impl HotkeySettings {
         for keys in &self.scenes {
             if let Some(chord) = keys.select.0 {
                 bound.push((Hotkey::Scene(SceneId(keys.scene)), chord));
+            }
+        }
+        for keys in &self.items {
+            if let Some(chord) = keys.toggle.0 {
+                bound.push((Hotkey::ToggleItem(SceneItemId(keys.item)), chord));
             }
         }
         bound
@@ -601,12 +642,45 @@ mod tests {
         assert_eq!(read, settings, "{written}");
     }
 
+    /// An item's key is a row like the others: found where it was put, in
+    /// conflict with anything else holding the chord, through the file and
+    /// back, and gone from it once cleared.
+    #[test]
+    fn an_items_key_is_a_binding_like_the_rest() {
+        let mut settings = HotkeySettings::default();
+        let item = SceneItemId(11);
+        settings.set(Hotkey::ToggleItem(item), Some(Chord::plain(Key::F7)));
+
+        assert_eq!(
+            settings.binding(Hotkey::ToggleItem(item)),
+            Some(Chord::plain(Key::F7))
+        );
+        assert_eq!(settings.binding(Hotkey::ToggleItem(SceneItemId(12))), None);
+        assert!(
+            settings
+                .bound()
+                .contains(&(Hotkey::ToggleItem(item), Chord::plain(Key::F7)))
+        );
+        assert_eq!(
+            settings.conflict(HotkeyAction::ToggleRecording, Chord::plain(Key::F7)),
+            Some(Hotkey::ToggleItem(item))
+        );
+
+        let written = toml::to_string(&settings).expect("hotkeys are written");
+        let read: HotkeySettings = toml::from_str(&written).expect("and read back");
+        assert_eq!(read, settings, "{written}");
+
+        settings.set(Hotkey::ToggleItem(item), None);
+        assert!(settings.items.is_empty(), "a cleared row leaves the file");
+    }
+
     /// Only the window's own two stay behind when another application has
     /// focus, and only push-to-talk and push-to-mute last while held.
     #[test]
     fn what_works_elsewhere_and_what_is_held() {
         assert!(Hotkey::Action(HotkeyAction::ToggleRecording).is_global());
         assert!(Hotkey::Scene(SceneId(1)).is_global());
+        assert!(Hotkey::ToggleItem(SceneItemId(1)).is_global());
         assert!(!Hotkey::Action(HotkeyAction::Fullscreen).is_global());
         assert!(!Hotkey::Action(HotkeyAction::OpenSettings).is_global());
         assert!(Hotkey::PushToMute(AudioSourceId(1)).is_held());

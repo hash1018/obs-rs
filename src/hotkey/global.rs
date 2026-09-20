@@ -897,6 +897,7 @@ mod portal {
             Hotkey::PushToMute(channel) => format!("push-to-mute-{}", channel.0),
             Hotkey::ToggleMute(channel) => format!("toggle-mute-{}", channel.0),
             Hotkey::Scene(scene) => format!("scene-{}", scene.0),
+            Hotkey::ToggleItem(item) => format!("item-{}", item.0),
         }
     }
 
@@ -952,7 +953,7 @@ mod portal {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::domain::{AudioSourceId, SceneId};
+        use crate::domain::{AudioSourceId, SceneId, SceneItemId};
 
         /// What the desktop remembers a shortcut by must tell every hotkey
         /// apart — two sharing one would be allowed as one and do both.
@@ -972,6 +973,8 @@ mod portal {
                 Hotkey::PushToTalk(AudioSourceId(12)),
                 Hotkey::Scene(SceneId(1)),
                 Hotkey::Scene(SceneId(12)),
+                Hotkey::ToggleItem(SceneItemId(1)),
+                Hotkey::ToggleItem(SceneItemId(12)),
             ];
             let ids: HashSet<String> = hotkeys.iter().map(|hotkey| id(*hotkey)).collect();
             assert_eq!(ids.len(), hotkeys.len());

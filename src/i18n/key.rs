@@ -227,6 +227,8 @@ text_keys! {
     HotkeySectionGeneral          => "hotkey-section-general";
     HotkeySectionAudio            => "hotkey-section-audio";
     HotkeySectionScenes           => "hotkey-section-scenes";
+    HotkeySectionSources          => "hotkey-section-sources";
+    HotkeyToggleItem              => "hotkey-toggle-item";
     HotkeyPressAKey               => "hotkey-press-a-key";
     HotkeyNone                    => "hotkey-none";
     HotkeyConflict                => "hotkey-conflict";

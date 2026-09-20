@@ -34,7 +34,7 @@ use eframe::egui::{self, Key, Modifiers};
 use crate::domain::{AudioSourceId, SceneItemId};
 use crate::hotkey::tracker::{Edge, Keyboard, Tracker};
 use crate::hotkey::{Chord, Hotkey, HotkeyAction, HotkeySettings};
-use crate::project::{AudioCommand, ProjectCommand, SceneCommand};
+use crate::project::{AudioCommand, ProjectCommand, SceneCommand, SourceCommand};
 use crate::snapshots::Snapshots;
 
 use super::{UiAction, UiState};
@@ -197,6 +197,23 @@ fn pressed_action(
                 )));
             }
         }
+        // Against the row itself rather than against a snapshot: the item
+        // may be in a Scene this window is not showing, and so one whose
+        // visibility it does not hold — see `SourceCommand::ToggleVisible`.
+        // An item the project no longer has is left alone, as a mute key for
+        // a channel that has gone is.
+        Hotkey::ToggleItem(id) => {
+            if snapshots
+                .scenes
+                .items
+                .iter()
+                .any(|scene| scene.items.iter().any(|item| item.id == id))
+            {
+                actions.push(UiAction::Project(ProjectCommand::Source(
+                    SourceCommand::ToggleVisible(id),
+                )));
+            }
+        }
         Hotkey::PushToTalk(_) | Hotkey::PushToMute(_) => {}
     }
 }
@@ -345,7 +362,7 @@ mod tests {
 
     use super::*;
     use crate::domain::SceneId;
-    use crate::snapshots::SceneSnapshot;
+    use crate::snapshots::{SceneItemName, SceneSnapshot};
 
     /// The same key held down for `frames` passes of one `Context`, and
     /// what each pass dispatched.
@@ -696,6 +713,7 @@ mod tests {
             id: SceneId(9),
             name: "last".into(),
             shown_in: Vec::new(),
+            items: Vec::new(),
         }];
         let mut bindings = HotkeySettings::default();
         bindings.set(Hotkey::Scene(SceneId(9)), Some(Chord::plain(Key::F5)));
@@ -705,6 +723,42 @@ mod tests {
             [UiAction::Project(ProjectCommand::Scene(
                 SceneCommand::Select(SceneId(9))
             ))]
+        );
+    }
+
+    /// An item's own key shows or hides that one placement, and a key left
+    /// bound to an item the project no longer has does nothing.
+    #[test]
+    fn an_items_own_key_shows_it_or_hides_it() {
+        let gone = SceneItemId(5);
+        let mut snapshots = Snapshots::default();
+        snapshots.scenes.items = vec![SceneSnapshot {
+            id: SceneId(3),
+            name: "live".into(),
+            shown_in: Vec::new(),
+            items: vec![SceneItemName {
+                id: SceneItemId(4),
+                name: "logo".into(),
+            }],
+        }];
+        let mut bindings = HotkeySettings::default();
+        bindings.set(
+            Hotkey::ToggleItem(SceneItemId(4)),
+            Some(Chord::plain(Key::F6)),
+        );
+        bindings.set(Hotkey::ToggleItem(gone), Some(Chord::plain(Key::F7)));
+
+        assert_eq!(
+            hold_bound(Key::F6, Modifiers::NONE, 1, &snapshots, &bindings).remove(0),
+            [UiAction::Project(ProjectCommand::Source(
+                SourceCommand::ToggleVisible(SceneItemId(4))
+            ))]
+        );
+        assert!(
+            hold_bound(Key::F7, Modifiers::NONE, 1, &snapshots, &bindings)
+                .remove(0)
+                .is_empty(),
+            "an item that is gone is left alone"
         );
     }
 
@@ -763,11 +817,13 @@ mod tests {
                 id: SceneId(7),
                 name: "first".into(),
                 shown_in: Vec::new(),
+                items: Vec::new(),
             },
             SceneSnapshot {
                 id: SceneId(9),
                 name: "second".into(),
                 shown_in: Vec::new(),
+                items: Vec::new(),
             },
         ];
 

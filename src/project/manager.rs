@@ -7,8 +7,8 @@ use crate::persistence::{
     SceneStore, SourceStore,
 };
 use crate::snapshots::{
-    AudioSnapshot, AudioSourceSnapshot, NestedScene, SceneItemSnapshot, SceneSnapshot,
-    ScenesSnapshot, SourcesSnapshot,
+    AudioSnapshot, AudioSourceSnapshot, NestedScene, SceneItemName, SceneItemSnapshot,
+    SceneSnapshot, ScenesSnapshot, SourcesSnapshot,
 };
 
 use super::{AudioCommand, ProjectCommand, SceneCommand, SourceCommand};
@@ -338,6 +338,9 @@ fn handle_source_command(
         SourceCommand::SetVisible(scene_item_id, visible) => {
             SourceStore::set_visible(transaction, scene_item_id, visible)
         }
+        SourceCommand::ToggleVisible(scene_item_id) => {
+            SourceStore::toggle_visible(transaction, scene_item_id)
+        }
         SourceCommand::SetTransform(scene_item_id, transform) => {
             SourceStore::set_transform(transaction, scene_item_id, transform)
         }
@@ -402,6 +405,10 @@ fn scene_snapshot(database: &ProjectDatabase) -> PersistenceResult<ScenesSnapsho
         .map(|Scene { id, name, .. }| {
             Ok(SceneSnapshot {
                 shown_in: SourceStore::scenes_showing(database.connection(), id)?,
+                items: SourceStore::item_names(database.connection(), id)?
+                    .into_iter()
+                    .map(|(id, name)| SceneItemName { id, name })
+                    .collect(),
                 id,
                 name,
             })
@@ -1724,6 +1731,46 @@ mod tests {
         let (_, sources, _) = project_snapshot(&database).unwrap();
         assert!(!sources.items[0].visible);
         assert!(sources.items[0].locked);
+    }
+
+    /// What an item's key sends: the row is flipped from whatever it holds,
+    /// so nothing has to be told what it was — and the Scenes snapshot names
+    /// that item, which is what the Hotkeys page binds by.
+    #[test]
+    fn an_items_visibility_can_be_flipped_without_being_read_first() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene_snapshot(&database)
+            .unwrap()
+            .selected_scene_id
+            .unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(scene_id)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        let item = sources.items[0].id;
+        assert!(sources.items[0].visible, "a new item is shown");
+
+        handle_source_command(&mut database, SourceCommand::ToggleVisible(item)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(!sources.items[0].visible);
+
+        handle_source_command(&mut database, SourceCommand::ToggleVisible(item)).unwrap();
+        let (_, sources, _) = project_snapshot(&database).unwrap();
+        assert!(sources.items[0].visible, "and back again");
+
+        let scenes = scene_snapshot(&database).unwrap();
+        let scene = scenes
+            .items
+            .iter()
+            .find(|scene| scene.id == scene_id)
+            .expect("the selected Scene is listed");
+        assert_eq!(
+            scene
+                .items
+                .iter()
+                .map(|item| (item.id, item.name.as_str()))
+                .collect::<Vec<_>>(),
+            [(item, "Color Source")],
+            "the Hotkeys page is given the item and the name it lists it under"
+        );
     }
 
     #[test]

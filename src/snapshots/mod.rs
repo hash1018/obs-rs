@@ -5,7 +5,7 @@ mod stats;
 mod status;
 
 pub use audio::{AudioSnapshot, AudioSourceSnapshot};
-pub use scenes::{SceneSnapshot, ScenesSnapshot};
+pub use scenes::{SceneItemName, SceneSnapshot, ScenesSnapshot};
 pub use sources::{NestedScene, SceneItemSnapshot, SourcesSnapshot};
 pub use stats::{OutputStats, Rendering, Role, StatsRow, StatsSnapshot, Subject};
 pub use status::{

@@ -490,6 +490,30 @@ impl SourceStore {
             .collect::<Result<_, _>>()?)
     }
 
+    /// What one Scene holds, front-most first, as only a name and an id.
+    ///
+    /// The Hotkeys page's own query. It lists every Scene's items at once,
+    /// and reading each one the way the Sources dock does — settings,
+    /// filters, strokes — would be a whole project's worth of rows to put
+    /// two words on a label.
+    pub(crate) fn item_names(
+        connection: &Connection,
+        scene_id: SceneId,
+    ) -> PersistenceResult<Vec<(SceneItemId, String)>> {
+        let mut statement = connection.prepare(
+            "SELECT scene_items.id, sources.name
+             FROM scene_items
+             JOIN sources ON sources.id = scene_items.source_id
+             WHERE scene_items.scene_id = ?1
+             ORDER BY scene_items.z_index DESC, scene_items.id DESC",
+        )?;
+        Ok(statement
+            .query_map(params![scene_id.0], |row| {
+                Ok((SceneItemId(row.get::<_, i64>(0)?), row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<_, _>>()?)
+    }
+
     /// Every Source's name in the project.
     ///
     /// `sources.name` is UNIQUE, so this is what a caller checks a name
@@ -1539,6 +1563,23 @@ impl SourceStore {
         transaction.execute(
             "UPDATE scene_items SET visible = ?1 WHERE id = ?2",
             params![visible, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Flips one item's visibility, whatever it is now.
+    ///
+    /// One statement rather than a read and a write: what a key toggles is
+    /// an item of any Scene, and the interface only ever holds the selected
+    /// Scene's. Asking the row itself needs no snapshot and cannot act on a
+    /// stale one.
+    pub(crate) fn toggle_visible(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_items SET visible = NOT visible WHERE id = ?1",
+            params![scene_item_id.0],
         )?;
         Ok(())
     }

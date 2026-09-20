@@ -1,4 +1,4 @@
-use crate::domain::{SceneId, Transition};
+use crate::domain::{SceneId, SceneItemId, Transition};
 
 #[derive(Clone, Default)]
 pub struct ScenesSnapshot {
@@ -19,4 +19,19 @@ pub struct SceneSnapshot {
     /// say before it asks. Empty for a Scene nothing shows, which is most of
     /// them.
     pub shown_in: Vec<String>,
+    /// What this Scene holds, front-most first, for the Hotkeys page: an
+    /// item there is bound one at a time, and the name it is listed under is
+    /// its Source's.
+    ///
+    /// Every Scene's, not only the selected one's. The page lists them all,
+    /// and a key bound to an item of a Scene nobody is looking at is the
+    /// ordinary case.
+    pub items: Vec<SceneItemName>,
+}
+
+/// One placement, as the Hotkeys page names it.
+#[derive(Clone)]
+pub struct SceneItemName {
+    pub id: SceneItemId,
+    pub name: String,
 }

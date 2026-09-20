@@ -220,7 +220,9 @@ thread asking the system which bound keys are down; on Linux it is the
 desktop's own global-shortcuts portal, which asks you once whether to allow
 them. Each mixer channel gets a push-to-talk and a push-to-mute binding on
 that page too, which is why a key has to report being let go as well as
-pressed.
+pressed. Every Scene has a key of its own there, and so does every source
+in one: one key shows or hides that placement, so the same source in two
+Scenes is two keys rather than one that takes both.
 
 **File → Show Recordings** opens that folder in your file manager, and
 **File → Settings** is the same dialog the Controls dock's button opens —
