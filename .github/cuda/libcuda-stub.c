@@ -25,7 +25,10 @@
  * naming `cuImportExternalMemory` and friends. That is the failure this should
  * have — loud, and pointing at exactly what to add — but both places have to
  * be looked at when adding to it. `grep -rhoE '\bfn (cu[A-Z][A-Za-z0-9_]*)'`
- * over each source tree is what produced this list.
+ * over each source tree is what produced this list, and CI asks the same
+ * question before it builds anything: see "Check the libcuda stub declares
+ * every CUDA call" in `.github/workflows/ci.yml`, which names everything
+ * missing at once rather than one symbol per ten-minute run.
  *
  * # Two details that would be quiet bugs
  *
@@ -66,6 +69,7 @@ STUB(cuMemFree_v2)
 STUB(cuMemcpy2D_v2)
 STUB(cuMemcpyHtoD_v2)
 STUB(cuMemsetD2D16_v2)
+STUB(cuMemsetD2D32_v2)
 STUB(cuMemsetD2D8_v2)
 STUB(cuModuleGetFunction)
 STUB(cuModuleLoadData)

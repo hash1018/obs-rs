@@ -186,6 +186,34 @@ jobs:
           # this failure for the same one about libavcodec.
           echo "LD_LIBRARY_PATH=$PWD/target/cuda-stub:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
+      # The stub is a list kept by hand, and what it has to cover moves: a
+      # CUDA call added to `media-pp` reaches this repository as a link
+      # failure in the `Test` step below, ten minutes in and naming one
+      # symbol at a time. This asks the same question in seconds, and names
+      # every missing one at once.
+      #
+      # The two trees are the ones the stub's own comment names: `media-pp`,
+      # wherever Cargo put the revision `Cargo.lock` pins, and the Preview's
+      # extern block for the external-memory calls.
+      - name: Check the libcuda stub declares every CUDA call
+        run: |
+          set -euo pipefail
+          media_pp=$(cargo metadata --format-version 1 |
+            jq -r '.packages[] | select(.name == "media-pp") | .manifest_path')
+          missing=$(
+            grep -rhoE '\bfn (cu[A-Z][A-Za-z0-9_]*)' \
+              "$(dirname "$media_pp")/src" src/engine/preview/linux.rs |
+              sed 's/fn //' | sort -u |
+              while read -r symbol; do
+                grep -q "STUB($symbol)" .github/cuda/libcuda-stub.c || echo "$symbol"
+              done
+          )
+          if [ -n "$missing" ]; then
+            echo "::error::.github/cuda/libcuda-stub.c declares no stub for:"
+            echo "$missing" | sed 's/^/  /'
+            exit 1
+          fi
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
