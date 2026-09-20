@@ -31,6 +31,18 @@ pub struct SourcesSnapshot {
     /// snapshot that says the Scene changed, so it is the one that has to say
     /// how.
     pub transition: Transition,
+    /// The Scenes shown inside the selected one, and what each of them
+    /// holds — every Scene reachable from it, not only those placed
+    /// directly.
+    ///
+    /// Each is composited on its own and reaches the Canvas as the picture of
+    /// whatever item shows it, so the engine opens these items too, against
+    /// that composition rather than against the Canvas.
+    pub nested: Vec<NestedScene>,
+    /// The Scenes that may be added to the selected one as a Source: every
+    /// other Scene that does not lead back to it — see
+    /// `SourceStore::scenes_addable_to`.
+    pub addable_scenes: Vec<crate::domain::Scene>,
 }
 
 impl Default for SourcesSnapshot {
@@ -43,6 +55,8 @@ impl Default for SourcesSnapshot {
             live_items: HashSet::new(),
             names: HashSet::new(),
             transition: Transition::default(),
+            nested: Vec::new(),
+            addable_scenes: Vec::new(),
         }
     }
 }
@@ -234,4 +248,12 @@ mod tests {
             "the rectangle's corner is the first pixel left after cropping, got {back:?}"
         );
     }
+}
+
+/// One Scene shown inside the selected one, with the items it is made of.
+#[derive(Clone)]
+pub struct NestedScene {
+    pub scene_id: SceneId,
+    /// Front-most first, as the Scene's own dock would show them.
+    pub items: Vec<SceneItemSnapshot>,
 }

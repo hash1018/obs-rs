@@ -695,6 +695,7 @@ mod tests {
         snapshots.scenes.items = vec![SceneSnapshot {
             id: SceneId(9),
             name: "last".into(),
+            shown_in: Vec::new(),
         }];
         let mut bindings = HotkeySettings::default();
         bindings.set(Hotkey::Scene(SceneId(9)), Some(Chord::plain(Key::F5)));
@@ -761,10 +762,12 @@ mod tests {
             SceneSnapshot {
                 id: SceneId(7),
                 name: "first".into(),
+                shown_in: Vec::new(),
             },
             SceneSnapshot {
                 id: SceneId(9),
                 name: "second".into(),
+                shown_in: Vec::new(),
             },
         ];
 

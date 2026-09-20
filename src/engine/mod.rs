@@ -50,7 +50,7 @@ use output::{
     start_recording,
 };
 
-use backend::{Backend, BackendError};
+use backend::{Backend, BackendError, Target};
 use source::{
     OpenOutcome, OpenSource, PushedContent, filters, push_content, refresh_media_file,
     refresh_pushed,
@@ -1433,6 +1433,9 @@ struct OpenRequest {
     item: Box<SceneItemSnapshot>,
     layer: VideoLayer,
     fps: u32,
+    /// Which compositor it draws into: the Canvas, or the composition of a
+    /// Scene shown inside another — see [`Target`].
+    into: Target,
     /// A clone rather than a borrow: the mixer outlives one open, and the
     /// thread cannot hold a reference into the engine loop's own state.
     mixer: Option<media_pp::elements::MixerHandle>,
@@ -1446,6 +1449,8 @@ struct OpenRequest {
 pub(crate) struct Opened {
     item: Box<SceneItemSnapshot>,
     result: Result<OpenOutcome, BackendError>,
+    /// Where it was opened to draw — see [`Target`].
+    into: Target,
 }
 
 impl SourceOpener {
@@ -1460,10 +1465,12 @@ impl SourceOpener {
                         request.layer,
                         request.fps,
                         request.mixer.as_ref(),
+                        request.into,
                     );
                     let opened = Opened {
                         item: request.item,
                         result,
+                        into: request.into,
                     };
                     let Err(undelivered) = replies.send(EngineCommand::Opened(Box::new(opened)))
                     else {
@@ -2185,12 +2192,14 @@ fn request_open(
     open: &mut HashMap<SceneItemId, SourceState>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
+    into: Target,
 ) {
     let request = OpenRequest {
         item: Box::new(item.clone()),
         layer,
         fps: engine.backend.frame_rate(),
         mixer: mixer.cloned(),
+        into,
     };
     match engine.opener.request(request) {
         // Marked only once the thread has it, so a request that was never
@@ -2231,21 +2240,34 @@ fn finish_open(
         return;
     }
     let mut state = state_of(engine.project, &opened.item, opened.result);
+    // Which compositor it went into, which the Source itself has no reason
+    // to know — and which is what says, later, that the Scene it draws into
+    // is no longer being composited at all.
+    if let SourceState::Open(source) = &mut state
+        && let Target::Scene(scene) = opened.into
+    {
+        source.nested_in = Some(scene);
+    }
     // Placed where the item stands now rather than where it stood when this
     // was asked for: reordering a Scene, or recolouring a Source, while one
-    // opens would otherwise take until the next change to show.
-    if let SourceState::Open(source) = &mut state
-        && let Some((index, item)) = scene
-            .items
+    // opens would otherwise take until the next change to show. Its own
+    // Scene's order, which for a nested one is that Scene's rather than the
+    // Canvas's.
+    let placed = places(scene).map(|(_, items)| items).find_map(|items| {
+        items
             .iter()
             .enumerate()
             .find(|(_, item)| item.id == id)
+            .map(|(index, item)| (index, item, items.len()))
+    });
+    if let SourceState::Open(source) = &mut state
+        && let Some((index, item, count)) = placed
     {
         let _ = source.layer.set_layer(layer_for(
             item,
             item.transform,
             item.crop,
-            (scene.items.len() - index) as i32,
+            (count - index) as i32,
         ));
         refresh_pushed(source, item);
         // Here as well as in `reconcile`, so a Source that is monitored is
@@ -2347,18 +2369,20 @@ fn retry_missing(
     {
         return;
     }
-    let count = snapshot.items.len();
-    for (index, item) in snapshot.items.iter().enumerate() {
-        let Some(SourceState::Missing { since, .. }) = open.get(&item.id) else {
-            continue;
-        };
-        // Each on its own clock: a stream that asked to be left for a minute
-        // must not be reconnected on the tick that suits a window.
-        if since.elapsed() < retry_after(item) {
-            continue;
+    for (into, items) in places(snapshot) {
+        let count = items.len();
+        for (index, item) in items.iter().enumerate() {
+            let Some(SourceState::Missing { since, .. }) = open.get(&item.id) else {
+                continue;
+            };
+            // Each on its own clock: a stream that asked to be left for a
+            // minute must not be reconnected on the tick that suits a window.
+            if since.elapsed() < retry_after(item) {
+                continue;
+            }
+            let layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
+            request_open(engine, mixer, open, item, layer, into);
         }
-        let layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
-        request_open(engine, mixer, open, item, layer);
     }
 }
 
@@ -2568,6 +2592,29 @@ fn ramps(kind: crate::domain::TransitionKind, t: f32) -> (f32, f32) {
         }
     }
 }
+
+/// Every set of items being composited, with the compositor it draws into:
+/// the Scene being shown, and then each Scene shown inside it.
+///
+/// A nested Scene's items are opened exactly like the Canvas's — placed,
+/// filtered, paused when nothing shows them — against the composition of the
+/// Scene they belong to rather than against the Canvas. See
+/// `source::scene`.
+fn places(snapshot: &SourcesSnapshot) -> impl Iterator<Item = (Target, &Vec<SceneItemSnapshot>)> {
+    std::iter::once((Target::Canvas, &snapshot.items)).chain(
+        snapshot
+            .nested
+            .iter()
+            .map(|nested| (Target::Scene(nested.scene_id), &nested.items)),
+    )
+}
+
+/// The item `id` stands for, wherever it is being composited.
+fn item_of(snapshot: &SourcesSnapshot, id: SceneItemId) -> Option<&SceneItemSnapshot> {
+    places(snapshot)
+        .flat_map(|(_, items)| items)
+        .find(|item| item.id == id)
+}
 fn reconcile(
     engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
@@ -2580,31 +2627,39 @@ fn reconcile(
     // Collected rather than reopened here: the arm that notices holds a
     // mutable borrow of `open`, and replacing an entry needs another.
     let mut rebuild: Vec<SceneItemId> = Vec::new();
-    let count = snapshot.items.len();
-    for (index, item) in snapshot.items.iter().enumerate() {
-        // The snapshot is ordered front-most first, and the compositor draws
-        // larger z later, so the two run opposite ways.
-        let mut layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
-        // A Scene arriving comes up from nothing over the Scene being left,
-        // which is still drawn behind it — see [`SceneTransition`].
-        if let Some(transition) = transition {
-            layer.opacity *= transition.arriving();
-        }
-        match open.get_mut(&item.id) {
-            Some(SourceState::Open(source)) => {
-                let _ = source.layer.set_layer(layer);
-                refresh_pushed(source, item);
-                refresh_media_file(source, item, monitor.as_ref());
-                if refresh_filters(source, item) {
-                    rebuild.push(item.id);
-                }
+    for (into, items) in places(snapshot) {
+        let count = items.len();
+        for (index, item) in items.iter().enumerate() {
+            // The snapshot is ordered front-most first, and the compositor
+            // draws larger z later, so the two run opposite ways. Each Scene
+            // has a z of its own: a nested one is composited by itself.
+            let mut layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
+            // A Scene arriving comes up from nothing over the Scene being
+            // left, which is still drawn behind it — see
+            // [`SceneTransition`]. The items of a nested Scene are not
+            // faded one by one: the item showing that Scene is one layer of
+            // the Canvas, and it is that layer which comes up.
+            if let (Some(transition), Target::Canvas) = (transition, into) {
+                layer.opacity *= transition.arriving();
             }
-            Some(SourceState::Failed(_) | SourceState::Disconnected(_) | SourceState::Ended) => {}
-            // Already on its way, and asking again would only open a second
-            // one of whatever this is.
-            Some(SourceState::Opening) => {}
-            Some(SourceState::Missing { .. }) | None => {
-                request_open(engine, mixer, open, item, layer);
+            match open.get_mut(&item.id) {
+                Some(SourceState::Open(source)) => {
+                    let _ = source.layer.set_layer(layer);
+                    refresh_pushed(source, item);
+                    refresh_media_file(source, item, monitor.as_ref());
+                    if refresh_filters(source, item) {
+                        rebuild.push(item.id);
+                    }
+                }
+                Some(
+                    SourceState::Failed(_) | SourceState::Disconnected(_) | SourceState::Ended,
+                ) => {}
+                // Already on its way, and asking again would only open a
+                // second one of whatever this is.
+                Some(SourceState::Opening) => {}
+                Some(SourceState::Missing { .. }) | None => {
+                    request_open(engine, mixer, open, item, layer, into);
+                }
             }
         }
     }
@@ -2636,7 +2691,7 @@ fn reconcile(
         if transition.is_some_and(|transition| transition.holds(*id)) {
             continue;
         }
-        let item = snapshot.items.iter().find(|item| item.id == *id);
+        let item = item_of(snapshot, *id);
         let showing = item.is_some();
         // Two questions now, where there used to be one. Leaving the Scene
         // still stops a Source, but a media file can also be paused while its
@@ -2675,9 +2730,21 @@ fn reconcile(
         }
     }
 
-    // Only an item the project no longer holds anywhere is closed for good.
+    // Which Scenes are being composited for the Scene being shown: an item
+    // of a Scene that has stopped being shown inside this one draws into a
+    // composition that is no longer there.
+    let composited: std::collections::HashSet<_> = snapshot
+        .nested
+        .iter()
+        .map(|nested| nested.scene_id)
+        .collect();
+
+    // Only an item the project no longer holds anywhere is closed for good —
+    // and one whose composition has gone, which is the same thing for it.
     open.retain(|id, state| {
-        if snapshot.live_items.contains(id) {
+        let composition_gone = matches!(state, SourceState::Open(source)
+            if source.nested_in.is_some_and(|scene| !composited.contains(&scene)));
+        if snapshot.live_items.contains(id) && !composition_gone {
             return true;
         }
         if let SourceState::Open(source) = state {

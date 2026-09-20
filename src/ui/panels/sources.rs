@@ -58,6 +58,10 @@ pub(in crate::ui) struct SourcesPanelState {
     /// The symbolic link of the picked row, which is what tells two cameras
     /// apart: a machine with two of one model shows the same name twice.
     selected_camera: Option<String>,
+    scene_dialog_open: bool,
+    /// The Scene picked in that dialog, which is what a Scene Source will
+    /// show.
+    selected_nested_scene: Option<SceneId>,
     window_dialog_open: bool,
     window_targets: Vec<WindowTarget>,
     /// The platform handle of the picked row, which is the only thing in the
@@ -231,6 +235,7 @@ pub(in crate::ui) fn show(
     show_display_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_camera_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_window_dialog(ui.ctx(), state, snapshot, i18n, actions);
+    show_scene_dialog(ui.ctx(), state, snapshot, i18n, actions);
     show_stream_dialog(ui.ctx(), state, i18n, actions);
 }
 
@@ -467,11 +472,18 @@ fn show_source_row(
         .map_or(rect.right(), |badge: &egui::Response| {
             badge.rect.left() - BADGE_PADDING
         });
+    // A Scene Source is shown by the Scene it draws rather than by the name
+    // its own row carries: renaming that Scene renames it in every Scene it
+    // is placed in, with nothing to keep in step.
+    let shown_name = match &item.settings {
+        crate::domain::SourceSettings::Scene(settings) => settings.scene_name.as_str(),
+        _ => item.name.as_str(),
+    };
     let elided = elide::paint_one_row(
         ui,
         egui::pos2(left, rect.center().y),
         (name_right - left).max(0.0),
-        &item.name,
+        shown_name,
         color,
     );
 
@@ -482,9 +494,8 @@ fn show_source_row(
     let kind = i18n.text(source_kind_key(item.kind));
     let response = if elided {
         response.on_hover_text(format!(
-            "{}
-{kind}",
-            item.name
+            "{shown_name}
+{kind}"
         ))
     } else {
         response.on_hover_text(kind)
@@ -527,15 +538,27 @@ fn show_source_row(
             !item.locked,
         )));
     } else if response.double_clicked() {
-        // What the Scenes dock does, and for the same reason: a name is
-        // edited where it is read, and a dock this narrow has no room for a
-        // button that would only ever act on the selected row.
-        state.rename = Some(RenameState {
-            item_id: item.id,
-            name: item.name.clone(),
-            request_focus: true,
-            error: None,
-        });
+        match &item.settings {
+            // A Scene Source is named by the Scene it shows, so there is no
+            // name of its own to edit here: this goes there instead, which
+            // is where its items are.
+            crate::domain::SourceSettings::Scene(settings) => {
+                actions.push(UiAction::Project(ProjectCommand::Scene(
+                    crate::project::SceneCommand::Select(settings.scene_id),
+                )));
+            }
+            // What the Scenes dock does, and for the same reason: a name is
+            // edited where it is read, and a dock this narrow has no room
+            // for a button that would only ever act on the selected row.
+            _ => {
+                state.rename = Some(RenameState {
+                    item_id: item.id,
+                    name: item.name.clone(),
+                    request_focus: true,
+                    error: None,
+                });
+            }
+        }
     } else if response.clicked() {
         editor.select(item.id);
     }
@@ -738,6 +761,7 @@ fn source_kind_key(kind: SourceKind) -> TextKey {
         SourceKind::Drawing => TextKey::SourceKindDrawing,
         SourceKind::Text => TextKey::SourceKindText,
         SourceKind::Browser => TextKey::SourceKindBrowser,
+        SourceKind::Scene => TextKey::SourceKindScene,
     }
 }
 
@@ -910,6 +934,10 @@ fn show_add_dialog(
             }
             kind @ (SourceKind::MediaFile | SourceKind::Image) => {
                 open_file_picker(ctx, state, snapshot.scene_id, kind, i18n)
+            }
+            SourceKind::Scene => {
+                state.selected_nested_scene = snapshot.addable_scenes.first().map(|scene| scene.id);
+                state.scene_dialog_open = true;
             }
         }
         open = false;
@@ -1527,6 +1555,91 @@ fn paint_lock(painter: &egui::Painter, center: egui::Pos2, locked: bool, color: 
     }
 }
 
+/// The Scene picker, for a Scene placed inside another as a Source.
+///
+/// What it offers is `addable_scenes`: every Scene but this one, and none
+/// that would come back round to it — a Scene composited into itself is a
+/// compositor drawing its own output, and it is refused by not being offered
+/// rather than by an error after the fact.
+fn show_scene_dialog(
+    ctx: &egui::Context,
+    state: &mut SourcesPanelState,
+    snapshot: &SourcesSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    if !state.scene_dialog_open {
+        return;
+    }
+
+    let mut open = true;
+    let mut add = false;
+    let mut back = false;
+    let mut cancel = false;
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "scene_source_dialog",
+        &i18n.text(TextKey::SourceSceneTitle),
+        |ui| {
+            ui.set_min_width(320.0);
+            ui.label(i18n.text(TextKey::SourceScenePrompt));
+            ui.add_space(4.0);
+
+            show_list_view(ui, DISPLAY_LIST_HEIGHT, |ui| {
+                if snapshot.addable_scenes.is_empty() {
+                    ui.weak(i18n.text(TextKey::SourceSceneNone));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("scene_source_targets")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for scene in &snapshot.addable_scenes {
+                                let selected = state.selected_nested_scene == Some(scene.id);
+                                if list_row(ui, &scene.name, selected).clicked() {
+                                    state.selected_nested_scene = Some(scene.id);
+                                }
+                            }
+                        });
+                }
+            });
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        state.selected_nested_scene.is_some(),
+                        egui::Button::new(i18n.text(TextKey::ActionAdd)),
+                    )
+                    .clicked()
+                {
+                    add = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionBack)).clicked() {
+                    back = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionCancel)).clicked() {
+                    cancel = true;
+                }
+            });
+        },
+    );
+
+    if back {
+        open = false;
+        state.add_dialog_open = true;
+    } else if cancel || shown.escaped {
+        open = false;
+    } else if add {
+        if let (Some(scene_id), Some(shown)) =
+            (snapshot.scene_id, state.selected_nested_scene.take())
+        {
+            actions.push(source_action(SourceCommand::AddScene(scene_id, shown)));
+            state.select_new_item = true;
+        }
+        open = false;
+    }
+    state.scene_dialog_open = open;
+}
 #[cfg(test)]
 mod tests {
     use super::*;

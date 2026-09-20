@@ -209,6 +209,9 @@ pub(in crate::engine) fn open(
         // reported when the item was added is a hint rather than a fact —
         // this is what duplication actually opened.
         negotiated_size: Some(size),
+        // Set by the engine where it is opened into a Scene's own
+        // composition — see `Target`.
+        nested_in: None,
         showing: true,
         running: true,
         pushed: None,

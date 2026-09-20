@@ -175,3 +175,18 @@ mod tests {
         assert_send_sync::<Backend>();
     }
 }
+
+/// Which compositor a Source is opened into.
+///
+/// Every Source used to draw into the Canvas and nothing else. A Scene shown
+/// inside another Scene is composited on its own — see
+/// `crate::engine::source::scene` — so its items draw into that composition
+/// instead, and this is what says which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine) enum Target {
+    /// The Canvas: what is recorded, streamed and shown in the Preview.
+    Canvas,
+    /// One Scene's own composition, which reaches the Canvas as the picture
+    /// of whatever item shows that Scene.
+    Scene(crate::domain::SceneId),
+}

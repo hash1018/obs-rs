@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 31;
+const SCHEMA_VERSION: i64 = 32;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -627,6 +627,21 @@ fn migrate(
                 CHECK (transition_ms BETWEEN 50 AND 3000);
 
             PRAGMA user_version = 31;",
+        )?;
+    }
+    if step(32) {
+        // A Scene shown inside another Scene. No cascade on the Scene it
+        // shows: a Scene that is used elsewhere is deleted with the items
+        // showing it, which the caller does deliberately and says so first —
+        // silently emptying a Scene somebody else is composing is not
+        // something a foreign key should decide.
+        transaction.execute_batch(
+            "CREATE TABLE scene_source_settings (
+                source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                scene_id  INTEGER NOT NULL REFERENCES scenes(id)
+            );
+
+            PRAGMA user_version = 32;",
         )?;
     }
     transaction.commit()?;

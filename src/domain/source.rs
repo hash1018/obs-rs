@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::{Filter, SceneCanvas};
+use super::{Filter, SceneCanvas, SceneId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceId(pub i64);
@@ -24,6 +24,10 @@ stored_by_name! {
         /// A web page, rendered off-screen by a browser engine this
         /// application hosts — an overlay, an alert box, a chat window.
         Browser => "browser",
+        /// Another Scene of this project, composited into this one as a
+        /// single picture — an overlay kept in one place and placed in
+        /// several Scenes.
+        Scene => "scene",
     }
 }
 
@@ -607,6 +611,7 @@ pub enum SourceSettings {
     Image(ImageSourceSettings),
     Text(TextSourceSettings),
     Browser(BrowserSourceSettings),
+    Scene(SceneSourceSettings),
 }
 
 impl SourceSettings {
@@ -634,6 +639,9 @@ impl SourceSettings {
             Self::Rtsp(settings) => settings.size_hint,
             Self::Image(settings) => settings.size_hint,
             Self::Color(_) | Self::Drawing(_) | Self::Text(_) | Self::Browser(_) => None,
+            // A Scene is composited at Canvas size, always, so there is
+            // nothing to remember about it.
+            Self::Scene(_) => None,
         }
     }
 
@@ -645,6 +653,8 @@ impl SourceSettings {
             // Told to the page rather than negotiated with it, so this is the
             // size, not a hint at one — see [`BrowserSourceSettings`].
             Self::Browser(settings) => [settings.size[0] as f32, settings.size[1] as f32],
+            // The Canvas it is composited at, which is this one's.
+            Self::Scene(_) => [canvas.width, canvas.height],
             Self::DisplayCapture(settings) => settings
                 .size_hint
                 .map_or([canvas.width, canvas.height], |[width, height]| {
@@ -752,4 +762,16 @@ mod tests {
             );
         }
     }
+}
+
+/// Which Scene a Scene Source shows.
+///
+/// The name travels with the id, filled in from the project when a snapshot
+/// is taken: the Sources dock shows a Scene Source by the Scene's own name,
+/// so renaming the Scene renames what is shown in every Scene holding it,
+/// with nothing to keep in step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneSourceSettings {
+    pub scene_id: SceneId,
+    pub scene_name: String,
 }

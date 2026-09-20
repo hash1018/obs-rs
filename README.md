@@ -76,6 +76,14 @@ bottom.](docs/screenshot.png)
   the canvas; where it does not, fading through black is the one that is
   right. Switching again part way through ends the switch that was running
   and starts the new one.
+- **A Scene inside a Scene.** Any Scene can be placed in another as a
+  source, on Windows: an overlay with your logo, a watermark and an alert
+  box, kept in one Scene and shown in every Scene that needs it. Editing it
+  once changes it everywhere. It arrives as one picture, so it is moved,
+  scaled, cropped and filtered as one thing — and it is transparent where it
+  draws nothing, so what is under it still shows. A Scene cannot be put
+  inside itself, directly or round a loop, and deleting one that others show
+  says where it is used before it goes.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an
@@ -302,12 +310,16 @@ knowing before you try it:
 - **One transition for the project**, rather than one per Scene, and three
   to choose from. A stinger — a clip played over the switch — is not one of
   them.
-- **Ten source kinds.** Display Capture, Window Capture, Video Capture,
-  Media File, Network Stream, Image, Drawing, Color, Text and Browser.
+- **Eleven source kinds.** Display Capture, Window Capture, Video Capture,
+  Media File, Network Stream, Image, Drawing, Color, Text, Browser and
+  Scene — the last of those on Windows only, since compositing one Scene for
+  another needs a background that keeps its transparency and the CUDA
+  compositor works in NV12.
 - **No Studio Mode**, so there is no separate preview of what you are about
   to cut to.
-- **A Scene cannot be a source in another Scene**, and there are no groups:
-  an overlay that belongs in every Scene is placed in each of them.
+- **No groups.** A Scene can be placed inside another, which is how an
+  overlay is shared, but the sources of one Scene cannot be folded into a
+  collapsible bundle the way OBS groups them.
 - **No virtual camera**, so nothing here appears as a webcam in a meeting.
 
 ## Contributing

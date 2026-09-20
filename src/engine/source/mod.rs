@@ -18,6 +18,7 @@ pub(in crate::engine) mod filters;
 pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
 pub(in crate::engine) mod rtsp;
+pub(in crate::engine) mod scene;
 pub(in crate::engine) mod shared;
 pub(in crate::engine) mod sound;
 pub(in crate::engine) mod text;
@@ -250,6 +251,13 @@ pub(in crate::engine) struct OpenSource {
     /// `None` for a Source whose size is its own — a Color, a Drawing — and
     /// for one that could not read it.
     pub(in crate::engine) negotiated_size: Option<[u32; 2]>,
+    /// The Scene whose own composition this draws into, for an item of a
+    /// Scene shown inside another — see [`super::backend::Target`].
+    ///
+    /// `None` for an item of the Scene being shown, which draws into the
+    /// Canvas. Set by the engine when the open comes back rather than by the
+    /// Source, which knows what it shows and not where it is drawn.
+    pub(in crate::engine) nested_in: Option<crate::domain::SceneId>,
     /// Whether the Source is in the Scene being shown. One whose item left the
     /// Scene stays open but stops running, so coming back is a resume rather
     /// than another portal round trip.

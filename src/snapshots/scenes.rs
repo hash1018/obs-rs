@@ -13,4 +13,10 @@ pub struct ScenesSnapshot {
 pub struct SceneSnapshot {
     pub id: SceneId,
     pub name: String,
+    /// The Scenes that show this one as a Source, by name.
+    ///
+    /// What deleting it would take with it, which the dock has to be able to
+    /// say before it asks. Empty for a Scene nothing shows, which is most of
+    /// them.
+    pub shown_in: Vec<String>,
 }

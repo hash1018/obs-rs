@@ -109,7 +109,14 @@ fn channels<'a>(
         })
         .collect();
 
-    channels.extend(sources.items.iter().filter_map(|item| {
+    // The Scene's own items and those of every Scene shown inside it: a
+    // clip playing in an overlay is heard and recorded like any other, so
+    // it needs its fader here as much as one placed directly.
+    let items = sources
+        .items
+        .iter()
+        .chain(sources.nested.iter().flat_map(|nested| &nested.items));
+    channels.extend(items.filter_map(|item| {
         // A media file and a stream, the two kinds that carry sound of
         // their own. The same column for both; only a file can be paused.
         let (has_audio, gain_db, muted, monitored, paused, kind) = match &item.settings {

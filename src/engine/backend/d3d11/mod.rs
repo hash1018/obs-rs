@@ -34,12 +34,13 @@ use crate::snapshots::SceneItemSnapshot;
 
 use crate::engine::source::{self, OpenOutcome};
 
-use super::{BACKGROUND, BackendError};
+use super::{BACKGROUND, BackendError, Target};
 
 use crate::settings::RecordingEncoder;
 
 use crate::engine::preview::{PreviewRenderer, PreviewSurface, SharedTarget};
 use crate::engine::source::display_capture::{self, CaptureRegistry};
+use crate::engine::source::scene::SceneRegistry;
 use crate::engine::source::shared::{Share, SharedCapture};
 use crate::engine::source::video_capture::CameraRegistry;
 use crate::engine::source::window_capture::WindowRegistry;
@@ -60,6 +61,9 @@ pub(in crate::engine) struct Backend {
     pub(in crate::engine) context: Arc<Mutex<ID3D11DeviceContext>>,
     pub(in crate::engine) size: [u32; 2],
     pub(in crate::engine) compositor: D3d11VideoCompositorHandle,
+    /// Every Scene being composited for another Scene — see
+    /// `source::scene`.
+    scenes: Arc<SceneRegistry>,
     pub(in crate::engine) preview: Arc<Pipeline>,
     /// Where a recording branch is attached — see
     /// [`Backend::attach_output`].
@@ -104,6 +108,8 @@ impl Backend {
                 height,
                 frame_rate: ffmpeg::Rational::new(fps as i32, 1),
                 background: BACKGROUND,
+                // The Canvas is the whole of what is seen, so it is opaque.
+                background_alpha: 255,
             },
         )?;
 
@@ -185,6 +191,7 @@ impl Backend {
         let tee = tee.expect("Pipeline::new runs the builder before returning");
         Ok(Self {
             captures: Arc::new(CaptureRegistry::default()),
+            scenes: Arc::new(SceneRegistry::default()),
             cameras: Arc::new(CameraRegistry::default()),
             windows: Arc::new(WindowRegistry::default()),
             device,
@@ -263,8 +270,30 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
+        into: Target,
     ) -> Result<OpenOutcome, BackendError> {
-        let opened = self.open_kind(item, layer, fps, mixer);
+        // A Scene's own composition, for an item of a Scene shown inside
+        // another. `None` where nothing shows that Scene yet: the item that
+        // does is opened first and this one is asked for again on the next
+        // pass — see `reconcile`.
+        let composition = match into {
+            Target::Canvas => None,
+            Target::Scene(scene) => match self
+                .scenes
+                .open
+                .current(&source::scene::key(scene), |composition| {
+                    composition.extra.clone()
+                }) {
+                Some(composition) => Some(composition),
+                None => {
+                    return Ok(OpenOutcome::Absent(
+                        "the Scene this belongs to is not being composited".to_owned(),
+                    ));
+                }
+            },
+        };
+        let compositor = composition.as_ref().unwrap_or(&self.compositor);
+        let opened = self.open_kind(item, layer, fps, mixer, compositor);
         if opened.is_err() {
             self.remove_source(&crate::engine::source::input_name(item));
         }
@@ -277,6 +306,7 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
+        compositor: &D3d11VideoCompositorHandle,
     ) -> Result<OpenOutcome, BackendError> {
         // Every kind takes the context as well as the device: each one's
         // filters are built on it, whatever the kind does without them.
@@ -285,7 +315,7 @@ impl Backend {
             SourceKind::DisplayCapture => display_capture::open(
                 &self.device,
                 context,
-                &self.compositor,
+                compositor,
                 &self.captures,
                 item,
                 layer,
@@ -295,7 +325,7 @@ impl Backend {
             SourceKind::WindowCapture => source::window_capture::open(
                 &self.device,
                 context,
-                &self.compositor,
+                compositor,
                 &self.windows,
                 item,
                 layer,
@@ -304,7 +334,7 @@ impl Backend {
             SourceKind::MediaFile => source::media_file::open(
                 &self.device,
                 context,
-                &self.compositor,
+                compositor,
                 mixer,
                 &self.meter_wake,
                 item,
@@ -313,7 +343,7 @@ impl Backend {
             SourceKind::Rtsp => source::rtsp::open(
                 &self.device,
                 context,
-                &self.compositor,
+                compositor,
                 mixer,
                 &self.meter_wake,
                 item,
@@ -322,34 +352,42 @@ impl Backend {
             SourceKind::VideoCapture => source::video_capture::open(
                 &self.device,
                 context,
-                &self.compositor,
+                compositor,
                 &self.cameras,
                 item,
                 layer,
             ),
             SourceKind::Image => {
-                source::image::open(&self.device, context, &self.compositor, item, layer)
+                source::image::open(&self.device, context, compositor, item, layer)
             }
             SourceKind::Color => {
-                source::color::open(&self.device, context, &self.compositor, item, layer)
+                source::color::open(&self.device, context, compositor, item, layer)
                     .map(OpenOutcome::Open)
             }
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, context, &self.compositor, item, layer)
+                source::drawing::open(&self.device, context, compositor, item, layer)
                     .map(OpenOutcome::Open)
             }
-            SourceKind::Text => {
-                source::text::open(&self.device, context, &self.compositor, item, layer)
-                    .map(OpenOutcome::Open)
-            }
+            SourceKind::Text => source::text::open(&self.device, context, compositor, item, layer)
+                .map(OpenOutcome::Open),
             SourceKind::Browser => source::browser::open(
                 &self.device,
                 context,
-                &self.compositor,
+                compositor,
                 mixer,
                 &self.meter_wake,
                 item,
                 layer,
+            ),
+            SourceKind::Scene => source::scene::open(
+                &self.device,
+                context,
+                compositor,
+                &self.scenes,
+                item,
+                layer,
+                fps,
+                self.size,
             ),
         }
     }

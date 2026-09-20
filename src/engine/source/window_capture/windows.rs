@@ -142,6 +142,9 @@ pub(in crate::engine) fn open(
         // with. The Linux half has one because the portal negotiates its
         // stream up front.
         negotiated_size: None,
+        // Set by the engine where it is opened into a Scene's own
+        // composition — see `Target`.
+        nested_in: None,
         showing: true,
         running: true,
         pushed: None,

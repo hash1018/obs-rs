@@ -168,6 +168,9 @@ text_keys! {
     PropertiesUrlHint             => "properties-url-hint";
     PropertiesPageSize            => "properties-page-size";
     PropertiesFrameRate           => "properties-frame-rate";
+    PropertiesScene               => "properties-scene";
+    PropertiesSceneOpen           => "properties-scene-open";
+    PropertiesSceneOpenHint       => "properties-scene-open-hint";
     PropertiesPageShutdown        => "properties-page-shutdown";
     PropertiesPageRefreshWhenShown => "properties-page-refresh-when-shown";
     PropertiesPageRefresh         => "properties-page-refresh";
@@ -365,7 +368,14 @@ text_keys! {
     SourceKindVideoCapture        => "source-kind-video-capture";
     SourceKindImage               => "source-kind-image";
     SourceKindBrowser             => "source-kind-browser";
+    SourceKindScene               => "source-kind-scene";
+    SourceSceneTitle              => "source-scene-title";
+    SourceScenePrompt             => "source-scene-prompt";
+    SourceSceneNone               => "source-scene-none";
     ActionAdd                     => "action-add";
+    ActionDelete                  => "action-delete";
+    SceneDeleteTitle              => "scene-delete-title";
+    SceneDeleteUsed               => "scene-delete-used";
     ActionCancel                  => "action-cancel";
     ActionBack                    => "action-back";
     PreviewNoFrame                => "preview-no-frame";

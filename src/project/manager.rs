@@ -1,14 +1,14 @@
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
-use crate::domain::{AudioFilterOwner, Scene, SceneItem, Source};
+use crate::domain::{AudioFilterOwner, Scene, SceneId, SceneItem, Source};
 use crate::persistence::{
     AudioFilterStore, AudioStore, FilterNeighbour, FilterStore, PersistenceResult, ProjectDatabase,
     SceneStore, SourceStore,
 };
 use crate::snapshots::{
-    AudioSnapshot, AudioSourceSnapshot, SceneItemSnapshot, SceneSnapshot, ScenesSnapshot,
-    SourcesSnapshot,
+    AudioSnapshot, AudioSourceSnapshot, NestedScene, SceneItemSnapshot, SceneSnapshot,
+    ScenesSnapshot, SourcesSnapshot,
 };
 
 use super::{AudioCommand, ProjectCommand, SceneCommand, SourceCommand};
@@ -208,6 +208,16 @@ fn handle_source_command(
         SourceCommand::SetBrowserRefreshWhenShown(item_id, refresh) => {
             SourceStore::set_browser_refresh_when_shown(transaction, item_id, refresh)
         }
+        SourceCommand::AddScene(scene_id, shown) => SourceStore::add_scene(
+            transaction,
+            scene_id,
+            shown,
+            crate::domain::SceneCanvas::DEFAULT,
+        )
+        .map(|_| ()),
+        SourceCommand::SetSceneSource(item_id, shown) => {
+            SourceStore::set_scene_source(transaction, item_id, shown)
+        }
         SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
         SourceCommand::SetTextFont(item_id, font) => {
             SourceStore::set_text_font(transaction, item_id, font.as_deref())
@@ -386,14 +396,55 @@ fn handle_scene_command(
 fn scene_snapshot(database: &ProjectDatabase) -> PersistenceResult<ScenesSnapshot> {
     let items = SceneStore::list(database.connection())?
         .into_iter()
-        .map(|Scene { id, name, .. }| SceneSnapshot { id, name })
-        .collect();
+        .map(|Scene { id, name, .. }| {
+            Ok(SceneSnapshot {
+                shown_in: SourceStore::scenes_showing(database.connection(), id)?,
+                id,
+                name,
+            })
+        })
+        .collect::<PersistenceResult<Vec<_>>>()?;
     let selected_scene_id = SceneStore::selected_scene_id(database.connection())?;
     Ok(ScenesSnapshot {
         items,
         selected_scene_id,
         transition: SceneStore::transition(database.connection())?,
     })
+}
+
+/// Every Scene shown inside `scene_id`, with what each holds.
+///
+/// Breadth-first from the Scene being shown and deduplicated: one Scene
+/// placed in two others is composited once, and a project that somehow held
+/// a loop — a database edited by hand — is walked once rather than for ever.
+fn nested_scenes(
+    database: &ProjectDatabase,
+    scene_id: SceneId,
+    canvas: crate::domain::SceneCanvas,
+) -> PersistenceResult<Vec<NestedScene>> {
+    use crate::domain::SourceSettings;
+
+    let mut nested = Vec::new();
+    let mut seen = std::collections::HashSet::from([scene_id]);
+    let mut left = vec![scene_id];
+    while let Some(scene) = left.pop() {
+        let items = scene_items(database, scene, canvas)?;
+        for item in &items {
+            if let SourceSettings::Scene(settings) = &item.settings
+                && seen.insert(settings.scene_id)
+            {
+                left.push(settings.scene_id);
+            }
+        }
+        // Not the Scene being shown: its items are the snapshot's own.
+        if scene != scene_id {
+            nested.push(NestedScene {
+                scene_id: scene,
+                items,
+            });
+        }
+    }
+    Ok(nested)
 }
 
 fn sources_snapshot(
@@ -407,6 +458,7 @@ fn sources_snapshot(
             live_items,
             names,
             transition: scenes.transition,
+            addable_scenes: Vec::new(),
             ..SourcesSnapshot::default()
         });
     };
@@ -416,57 +468,69 @@ fn sources_snapshot(
         .iter()
         .find(|scene| scene.id == scene_id)
         .map(|scene| scene.name.clone());
-    let items = SourceStore::list_for_scene(database.connection(), scene_id)?
-        .into_iter()
-        .map(|(item, source)| {
-            debug_assert_eq!(item.scene_id, scene_id);
-            debug_assert_eq!(item.source_id, source.id);
-            let SceneItem {
-                id,
-                visible,
-                locked,
-                transform,
-                crop,
-                z_index,
-                ..
-            } = item;
-            let Source {
-                id: _,
-                name,
-                kind,
-                settings,
-                filters,
-                audio_filters,
-            } = source;
-            debug_assert!(z_index >= 0);
-            SceneItemSnapshot {
-                id,
-                name,
-                kind,
-                source_size: settings.source_size(canvas),
-                settings,
-                filters,
-                audio_filters,
-                visible,
-                locked,
-                transform,
-                crop,
-                // Filled in later, from the engine — see `ObsApp::poll_media_levels`.
-                peak_db: None,
-                position: None,
-            }
-        })
-        .collect();
-
     Ok(SourcesSnapshot {
+        addable_scenes: SourceStore::scenes_addable_to(database.connection(), scene_id)?,
+        nested: nested_scenes(database, scene_id, canvas)?,
+        items: scene_items(database, scene_id, canvas)?,
         canvas,
         scene_id: Some(scene_id),
         scene_name,
-        items,
         live_items,
         names,
         transition: scenes.transition,
     })
+}
+
+/// One Scene's items, front-most first.
+fn scene_items(
+    database: &ProjectDatabase,
+    scene_id: SceneId,
+    canvas: crate::domain::SceneCanvas,
+) -> PersistenceResult<Vec<SceneItemSnapshot>> {
+    Ok(
+        SourceStore::list_for_scene(database.connection(), scene_id)?
+            .into_iter()
+            .map(|(item, source)| {
+                debug_assert_eq!(item.scene_id, scene_id);
+                debug_assert_eq!(item.source_id, source.id);
+                let SceneItem {
+                    id,
+                    visible,
+                    locked,
+                    transform,
+                    crop,
+                    z_index,
+                    ..
+                } = item;
+                let Source {
+                    id: _,
+                    name,
+                    kind,
+                    settings,
+                    filters,
+                    audio_filters,
+                } = source;
+                debug_assert!(z_index >= 0);
+                SceneItemSnapshot {
+                    id,
+                    name,
+                    kind,
+                    source_size: settings.source_size(canvas),
+                    settings,
+                    filters,
+                    audio_filters,
+                    visible,
+                    locked,
+                    transform,
+                    crop,
+                    // Filled in later, from the engine — see
+                    // `ObsApp::poll_media_levels`.
+                    peak_db: None,
+                    position: None,
+                }
+            })
+            .collect(),
+    )
 }
 
 fn project_snapshot(

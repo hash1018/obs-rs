@@ -356,6 +356,9 @@ fn opened(
         refreshed_token: None,
         filters: filters.open,
         filter_rack: filters.filter_rack,
+        // Set by the engine where it is opened into a Scene's own
+        // composition — see `Target`.
+        nested_in: None,
         showing: true,
         running: true,
         pushed: Some(PushedSurface {
@@ -627,6 +630,7 @@ mod tests {
                 height,
                 frame_rate: ffmpeg::Rational::new(30, 1),
                 background: Color::new(255, 0, 0),
+                background_alpha: 255,
             },
         )
         .expect("compositor");
@@ -786,6 +790,7 @@ mod tests {
                 height,
                 frame_rate: ffmpeg::Rational::new(30, 1),
                 background: Color::new(255, 0, 0),
+                background_alpha: 255,
             },
         )
         .expect("compositor");

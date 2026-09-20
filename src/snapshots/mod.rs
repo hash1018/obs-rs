@@ -6,7 +6,7 @@ mod status;
 
 pub use audio::{AudioSnapshot, AudioSourceSnapshot};
 pub use scenes::{SceneSnapshot, ScenesSnapshot};
-pub use sources::{SceneItemSnapshot, SourcesSnapshot};
+pub use sources::{NestedScene, SceneItemSnapshot, SourcesSnapshot};
 pub use stats::{OutputStats, Rendering, Role, StatsRow, StatsSnapshot, Subject};
 pub use status::{
     ReplayFailure, ReplayFill, ReplayReport, SavedReplay, ScreenshotReport, SourceStatus,

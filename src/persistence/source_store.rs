@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -7,13 +7,13 @@ use crate::domain::{
     AudioFilterOwner, BrowserSourceSettings, ClockFormat, ColorSourceSettings, Crop,
     DEFAULT_BROWSER_FPS, DEFAULT_BROWSER_SIZE, DEFAULT_FONT_SIZE, DisplayCaptureSettings,
     DisplayCaptureTarget, DrawingSourceSettings, ImageSourceSettings, MAX_GAIN_DB, MIN_GAIN_DB,
-    MediaFileSettings, RtspSourceSettings, RtspTransport, SceneCanvas, SceneId, SceneItem,
-    SceneItemId, Source, SourceId, SourceKind, SourceSettings, Stroke, TextAlignment, TextMode,
-    TextSourceSettings, TextTimer, TimerFormat, Transform, VideoCaptureMode, VideoCaptureSettings,
-    WindowCaptureSettings, WindowCaptureTarget,
+    MediaFileSettings, RtspSourceSettings, RtspTransport, Scene, SceneCanvas, SceneId, SceneItem,
+    SceneItemId, SceneSourceSettings, Source, SourceId, SourceKind, SourceSettings, Stroke,
+    TextAlignment, TextMode, TextSourceSettings, TextTimer, TimerFormat, Transform,
+    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
 };
 
-use super::{AudioFilterStore, FilterStore, PersistenceResult};
+use super::{AudioFilterStore, FilterStore, PersistenceResult, SceneStore};
 
 /// A stroke's points as they are stored: pairs of little-endian `f32`.
 ///
@@ -166,7 +166,9 @@ impl SourceStore {
                 browser_source_settings.muted AS browser_muted,
                 browser_source_settings.monitored AS browser_monitored,
                 browser_source_settings.shut_down_when_hidden AS browser_shut_down,
-                browser_source_settings.refresh_when_shown AS browser_refresh
+                browser_source_settings.refresh_when_shown AS browser_refresh,
+                scene_source_settings.scene_id AS nested_scene_id,
+                nested_scenes.name AS nested_scene_name
              FROM scene_items
              JOIN sources ON sources.id = scene_items.source_id
              LEFT JOIN color_source_settings
@@ -189,6 +191,10 @@ impl SourceStore {
                 ON text_source_settings.source_id = sources.id
              LEFT JOIN browser_source_settings
                 ON browser_source_settings.source_id = sources.id
+             LEFT JOIN scene_source_settings
+                ON scene_source_settings.source_id = sources.id
+             LEFT JOIN scenes AS nested_scenes
+                ON nested_scenes.id = scene_source_settings.scene_id
              WHERE scene_items.scene_id = ?1
              ORDER BY scene_items.z_index DESC, scene_items.id DESC",
         )?;
@@ -288,6 +294,10 @@ impl SourceStore {
                         monitored: row.get("browser_monitored")?,
                         shut_down_when_hidden: row.get("browser_shut_down")?,
                         refresh_when_shown: row.get("browser_refresh")?,
+                    }),
+                    SourceKind::Scene => SourceSettings::Scene(SceneSourceSettings {
+                        scene_id: SceneId(row.get("nested_scene_id")?),
+                        scene_name: row.get("nested_scene_name")?,
                     }),
                     SourceKind::WindowCapture => {
                         SourceSettings::WindowCapture(WindowCaptureSettings {
@@ -564,6 +574,111 @@ impl SourceStore {
         add_to_scene(transaction, scene_id, source_id, size)
     }
 
+    /// A new Scene Source: another Scene of this project, shown in this one.
+    ///
+    /// Placed at Canvas size, which is what it is composited at. The name is
+    /// the Scene's own where that is free and numbered where it is not —
+    /// what the dock shows is the Scene's current name either way, so this
+    /// only has to be unique, not right.
+    pub(crate) fn add_scene(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+        shown: SceneId,
+        canvas: SceneCanvas,
+    ) -> PersistenceResult<SceneItemId> {
+        let shown_name: String =
+            transaction.query_row("SELECT name FROM scenes WHERE id = ?1", [shown.0], |row| {
+                row.get(0)
+            })?;
+        let name = unique_source_name(transaction, &shown_name)?;
+        let source_id = create(transaction, &name, SourceKind::Scene)?;
+        transaction.execute(
+            "INSERT INTO scene_source_settings (source_id, scene_id) VALUES (?1, ?2)",
+            params![source_id.0, shown.0],
+        )?;
+        add_to_scene(transaction, scene_id, source_id, canvas)
+    }
+
+    /// Which Scene a Scene Source shows.
+    pub(crate) fn set_scene_source(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        shown: SceneId,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE scene_source_settings
+                SET scene_id = ?1
+              WHERE source_id = (SELECT source_id FROM scene_items WHERE id = ?2)",
+            params![shown.0, scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// The Scenes that may be shown inside `scene_id`: every other Scene that
+    /// does not already lead back to it.
+    ///
+    /// Answered here rather than checked when one is picked, so a Scene that
+    /// would close a loop is simply not offered. A loop would be a Scene
+    /// composited into itself, which is a compositor drawing its own output —
+    /// and nothing downstream of here could recover from it.
+    pub(crate) fn scenes_addable_to(
+        connection: &Connection,
+        scene_id: SceneId,
+    ) -> PersistenceResult<Vec<Scene>> {
+        let nesting = nesting(connection)?;
+        Ok(SceneStore::list(connection)?
+            .into_iter()
+            .filter(|scene| scene.id != scene_id && !reaches(&nesting, scene.id, scene_id))
+            .collect())
+    }
+
+    /// The Scenes that show `scene_id` directly, by name — what the question
+    /// before deleting a Scene has to be able to say.
+    pub(crate) fn scenes_showing(
+        connection: &Connection,
+        scene_id: SceneId,
+    ) -> PersistenceResult<Vec<String>> {
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT scenes.name
+               FROM scene_source_settings
+               JOIN scene_items ON scene_items.source_id = scene_source_settings.source_id
+               JOIN scenes ON scenes.id = scene_items.scene_id
+              WHERE scene_source_settings.scene_id = ?1
+              ORDER BY scenes.position, scenes.id",
+        )?;
+        Ok(statement
+            .query_map([scene_id.0], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Removes every Scene Source showing `scene_id`, wherever it is placed.
+    ///
+    /// What deleting a Scene that other Scenes show does, once that has been
+    /// asked about — see [`Self::scenes_showing`]. The Sources themselves go
+    /// with their last item, as they do anywhere else.
+    pub(crate) fn remove_scene_sources(
+        transaction: &Transaction<'_>,
+        scene_id: SceneId,
+    ) -> PersistenceResult<()> {
+        // The placements first: `scene_items.source_id` restricts rather than
+        // cascades, so a Source is only ever deleted once nothing places it —
+        // the same order removing one item at a time takes.
+        transaction.execute(
+            "DELETE FROM scene_items
+              WHERE source_id IN (
+                  SELECT source_id FROM scene_source_settings WHERE scene_id = ?1
+              )",
+            [scene_id.0],
+        )?;
+        transaction.execute(
+            "DELETE FROM sources
+              WHERE id IN (
+                  SELECT source_id FROM scene_source_settings WHERE scene_id = ?1
+              )",
+            [scene_id.0],
+        )?;
+        Ok(())
+    }
     /// A new Browser Source, pointed nowhere yet.
     ///
     /// No address, because there is no address it could be given that the
@@ -1577,7 +1692,8 @@ fn set_negotiated_size(
         | SourceKind::Color
         | SourceKind::Drawing
         | SourceKind::Text
-        | SourceKind::Browser => {
+        | SourceKind::Browser
+        | SourceKind::Scene => {
             return Ok(());
         }
     };
@@ -1789,6 +1905,41 @@ fn unique_source_name(connection: &Connection, base: &str) -> PersistenceResult<
     }
 }
 
+/// Which Scene shows which, as a map from a Scene to the Scenes placed in it.
+///
+/// Read whole rather than walked one query at a time: the graph is as many
+/// rows as there are Scene Sources in the project, which is a handful, and
+/// the question asked of it — does this lead back to that — is a walk.
+fn nesting(connection: &Connection) -> PersistenceResult<HashMap<i64, Vec<SceneId>>> {
+    let mut statement = connection.prepare(
+        "SELECT scene_items.scene_id, scene_source_settings.scene_id
+           FROM scene_source_settings
+           JOIN scene_items ON scene_items.source_id = scene_source_settings.source_id",
+    )?;
+    let mut nesting: HashMap<i64, Vec<SceneId>> = HashMap::new();
+    let rows = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+    for row in rows {
+        let (holder, shown) = row?;
+        nesting.entry(holder).or_default().push(SceneId(shown));
+    }
+    Ok(nesting)
+}
+
+/// Whether `from` shows `target`, directly or through the Scenes it shows.
+fn reaches(nesting: &HashMap<i64, Vec<SceneId>>, from: SceneId, target: SceneId) -> bool {
+    let mut seen = HashSet::new();
+    let mut left = vec![from];
+    while let Some(scene) = left.pop() {
+        if scene == target {
+            return true;
+        }
+        if !seen.insert(scene.0) {
+            continue;
+        }
+        left.extend(nesting.get(&scene.0).into_iter().flatten().copied());
+    }
+    false
+}
 #[cfg(test)]
 mod tests {
     use super::*;

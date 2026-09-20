@@ -16,6 +16,9 @@ const BUTTON_PADDING: f32 = 12.0;
 #[derive(Default)]
 pub(in crate::ui) struct ScenesPanelState {
     rename: Option<RenameState>,
+    /// The Scene whose deletion is being asked about — see
+    /// `show_delete_dialog`.
+    deleting: Option<SceneId>,
 }
 
 struct RenameState {
@@ -47,7 +50,8 @@ pub(in crate::ui) fn show(
     // after the buttons it would sit above them.
     let mut list = toolbar::reserve_list_below(ui, "scenes_list_area", TRANSITION_ROW_HEIGHT);
     show_transition(ui, snapshot, i18n, actions);
-    show_toolbar(ui, snapshot, i18n, actions);
+    show_toolbar(ui, snapshot, &mut state.deleting, i18n, actions);
+    show_delete_dialog(ui.ctx(), state, snapshot, i18n, actions);
 
     toolbar::scroll_content(&mut list, "scenes_list", |ui| {
         for scene in &snapshot.items {
@@ -160,6 +164,7 @@ fn show_rename_editor(
 fn show_toolbar(
     ui: &mut egui::Ui,
     snapshot: &ScenesSnapshot,
+    deleting: &mut Option<SceneId>,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -180,7 +185,17 @@ fn show_toolbar(
         .clicked()
             && let Some(scene_id) = selected
         {
-            actions.push(scene_action(SceneCommand::Delete(scene_id)));
+            // Asked about first where other Scenes show this one: deleting it
+            // empties them too — see `show_delete_dialog`.
+            match snapshot
+                .items
+                .iter()
+                .find(|scene| scene.id == scene_id)
+                .is_some_and(|scene| !scene.shown_in.is_empty())
+            {
+                true => *deleting = Some(scene_id),
+                false => actions.push(scene_action(SceneCommand::Delete(scene_id))),
+            }
         }
         if toolbar::button(
             ui,
@@ -300,4 +315,57 @@ fn kind_label(kind: TransitionKind, i18n: &LocalizationManager) -> std::borrow::
         TransitionKind::Fade => TextKey::SceneTransitionFade,
         TransitionKind::FadeToBlack => TextKey::SceneTransitionFadeToBlack,
     })
+}
+
+/// Asks before a Scene that other Scenes show is deleted.
+///
+/// Deleting it takes the items showing it with it, wherever they are — so
+/// this names those Scenes rather than leaving somebody to find an overlay
+/// missing from a Scene they were not looking at. A Scene nothing shows is
+/// deleted where it is asked for, with no question.
+fn show_delete_dialog(
+    ctx: &egui::Context,
+    state: &mut ScenesPanelState,
+    snapshot: &ScenesSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let Some(scene_id) = state.deleting else {
+        return;
+    };
+    let Some(scene) = snapshot.items.iter().find(|scene| scene.id == scene_id) else {
+        state.deleting = None;
+        return;
+    };
+
+    let mut delete = false;
+    let mut cancel = false;
+    let shown = crate::ui::dialog::show(
+        ctx,
+        "scene_delete_dialog",
+        &i18n.text(TextKey::SceneDeleteTitle),
+        |ui| {
+            ui.set_min_width(320.0);
+            let mut args = fluent_bundle::FluentArgs::new();
+            args.set("scene", scene.name.clone());
+            args.set("scenes", scene.shown_in.join(", "));
+            ui.label(i18n.text_with(TextKey::SceneDeleteUsed, &args));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button(i18n.text(TextKey::ActionDelete)).clicked() {
+                    delete = true;
+                }
+                if ui.button(i18n.text(TextKey::ActionCancel)).clicked() {
+                    cancel = true;
+                }
+            });
+        },
+    );
+
+    if delete {
+        actions.push(scene_action(SceneCommand::Delete(scene_id)));
+    }
+    if delete || cancel || shown.escaped {
+        state.deleting = None;
+    }
 }

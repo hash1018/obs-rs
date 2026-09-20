@@ -67,7 +67,7 @@ pub(in crate::ui) fn show(
                 show_placement(ui, item, editor, i18n);
                 show_crop(ui, item, editor, i18n, actions);
                 let ended = status.is_some_and(|status| *status == SourceStatus::Ended);
-                show_settings(ui, item, ended, i18n, actions);
+                show_settings(ui, item, ended, &snapshot.addable_scenes, i18n, actions);
             });
     });
 }
@@ -190,6 +190,7 @@ fn show_settings(
     ui: &mut egui::Ui,
     item: &SceneItemSnapshot,
     ended: bool,
+    scenes: &[crate::domain::Scene],
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -206,6 +207,9 @@ fn show_settings(
             );
         }
         SourceSettings::Text(settings) => show_text(ui, item.id, settings, i18n, actions),
+        SourceSettings::Scene(settings) => {
+            show_nested_scene(ui, item.id, settings, scenes, i18n, actions);
+        }
         SourceSettings::Drawing(settings) => {
             row(
                 ui,
@@ -1316,6 +1320,7 @@ fn kind_key(kind: SourceKind) -> TextKey {
         SourceKind::Drawing => TextKey::SourceKindDrawing,
         SourceKind::Text => TextKey::SourceKindText,
         SourceKind::Browser => TextKey::SourceKindBrowser,
+        SourceKind::Scene => TextKey::SourceKindScene,
     }
 }
 
@@ -1325,6 +1330,56 @@ fn yes_no(value: bool) -> TextKey {
     } else {
         TextKey::PropertiesNo
     }
+}
+
+/// Which Scene a Scene Source shows, and the way into it.
+///
+/// The Scene is a choice rather than a report: pointing a Scene Source at
+/// another Scene is the same kind of edit as pointing a Browser Source at
+/// another address, and it costs the same — the Source is opened again
+/// against the Scene now named. What it cannot be pointed at is any Scene
+/// that leads back to the one it is in, which is why the list is the
+/// project's rather than every Scene there is.
+///
+/// The button beside it goes there. A Scene Source is not edited where it is
+/// placed — clicking into it in the Preview picks up the whole thing — so
+/// this is the way to the Scene whose items it is made of.
+fn show_nested_scene(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    settings: &crate::domain::SceneSourceSettings,
+    scenes: &[crate::domain::Scene],
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.label(i18n.text(TextKey::PropertiesScene));
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(("nested-scene", item.0))
+            .selected_text(&settings.scene_name)
+            .show_ui(ui, |ui| {
+                for scene in scenes {
+                    if ui
+                        .selectable_label(scene.id == settings.scene_id, &scene.name)
+                        .clicked()
+                        && scene.id != settings.scene_id
+                    {
+                        actions.push(UiAction::Project(ProjectCommand::Source(
+                            SourceCommand::SetSceneSource(item, scene.id),
+                        )));
+                    }
+                }
+            });
+        if ui
+            .button(i18n.text(TextKey::PropertiesSceneOpen))
+            .on_hover_text(i18n.text(TextKey::PropertiesSceneOpenHint))
+            .clicked()
+        {
+            actions.push(UiAction::Project(ProjectCommand::Scene(
+                crate::project::SceneCommand::Select(settings.scene_id),
+            )));
+        }
+    });
+    ui.end_row();
 }
 
 #[cfg(test)]

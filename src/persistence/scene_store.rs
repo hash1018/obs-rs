@@ -2,7 +2,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::{Scene, SceneId, Transition, TransitionKind};
 
-use super::PersistenceResult;
+use super::{PersistenceResult, SourceStore};
 
 pub(crate) struct SceneStore;
 
@@ -88,6 +88,10 @@ impl SceneStore {
         }
 
         let selected = selected_scene_id(transaction)?;
+        // First, so the Scene is not held by the Sources showing it: those
+        // items go with it, which the user has already been asked about —
+        // see `SourceStore::scenes_showing`.
+        SourceStore::remove_scene_sources(transaction, scene_id)?;
         transaction.execute("DELETE FROM scenes WHERE id = ?1", [scene_id.0])?;
         // The Scene's items go with it — `scene_items.scene_id` cascades —
         // and a Source no item stands for any more goes too, the same as when
@@ -321,7 +325,7 @@ fn select(connection: &Connection, scene_id: SceneId) -> PersistenceResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::Transform;
+    use crate::domain::{SceneCanvas, Transform};
     use crate::persistence::{ProjectDatabase, SourceStore};
 
     fn selected(database: &ProjectDatabase) -> SceneId {
@@ -477,5 +481,97 @@ mod tests {
             .unwrap();
         assert_eq!(remaining, 0, "nothing places that Source any more");
         assert!(source_ids(&database, first).is_empty());
+    }
+
+    /// A Scene can be shown inside another, and the list of what may be
+    /// added leaves out anything that would lead back round: a Scene cannot
+    /// hold itself, directly or through the Scenes it holds.
+    #[test]
+    fn a_scene_may_not_be_shown_inside_itself() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let first = selected(&database);
+        let (second, third) = database
+            .transaction(|transaction| {
+                Ok((SceneStore::add(transaction)?, SceneStore::add(transaction)?))
+            })
+            .unwrap();
+
+        fn addable(database: &ProjectDatabase, scene: SceneId) -> Vec<SceneId> {
+            SourceStore::scenes_addable_to(database.connection(), scene)
+                .unwrap()
+                .into_iter()
+                .map(|scene| scene.id)
+                .collect()
+        }
+        assert_eq!(
+            addable(&database, first),
+            vec![second, third],
+            "every Scene but this one, to begin with"
+        );
+
+        // first shows second, so second may no longer show first.
+        database
+            .transaction(|transaction| {
+                SourceStore::add_scene(transaction, first, second, SceneCanvas::DEFAULT).map(|_| ())
+            })
+            .unwrap();
+        assert_eq!(
+            addable(&database, second),
+            vec![third],
+            "first would come back round"
+        );
+        assert_eq!(addable(&database, third), vec![first, second]);
+
+        // And through one in between: second shows third, so third may show
+        // neither of them.
+        database
+            .transaction(|transaction| {
+                SourceStore::add_scene(transaction, second, third, SceneCanvas::DEFAULT).map(|_| ())
+            })
+            .unwrap();
+        assert!(
+            addable(&database, third).is_empty(),
+            "both lead back to third"
+        );
+    }
+
+    /// A Scene that others show says so, and deleting it takes the items
+    /// showing it with it — the Source included, since nothing stands for it
+    /// any more.
+    #[test]
+    fn deleting_a_scene_takes_the_items_showing_it() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let first = selected(&database);
+        let second = database.transaction(SceneStore::add).unwrap();
+        database
+            .transaction(|transaction| {
+                SourceStore::add_scene(transaction, first, second, SceneCanvas::DEFAULT).map(|_| ())
+            })
+            .unwrap();
+
+        assert_eq!(
+            SourceStore::scenes_showing(database.connection(), second).unwrap(),
+            vec![
+                SceneStore::list(database.connection()).unwrap()[0]
+                    .name
+                    .clone()
+            ],
+            "the Scene holding it is named, for the question before deleting"
+        );
+        assert_eq!(source_ids(&database, first).len(), 1);
+
+        database
+            .transaction(|transaction| SceneStore::delete(transaction, second))
+            .unwrap();
+        assert!(
+            source_ids(&database, first).is_empty(),
+            "the item showing it went with it"
+        );
+        assert!(
+            SourceStore::names(database.connection())
+                .unwrap()
+                .is_empty(),
+            "and so did the Source, which nothing stands for now"
+        );
     }
 }

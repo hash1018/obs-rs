@@ -211,6 +211,11 @@ pub enum SourceCommand {
     /// Whether coming back into view loads the page again. Told to the
     /// running Source the same way, and acted on the next time it is shown.
     SetBrowserRefreshWhenShown(SceneItemId, bool),
+    /// Another Scene of this project, placed in one as a Source: the Scene
+    /// it goes into, and the Scene it shows.
+    AddScene(SceneId, SceneId),
+    /// Which Scene a Scene Source shows.
+    SetSceneSource(SceneItemId, SceneId),
     /// The font file to draw with, or `None` for this application's own.
     SetTextFont(SceneItemId, Option<std::path::PathBuf>),
     SetTextFontSize(SceneItemId, f32),

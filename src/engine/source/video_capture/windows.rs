@@ -163,6 +163,9 @@ pub(in crate::engine) fn open(
         // offers falls back to its own. On a camera another item opened
         // first, it is that item's mode.
         negotiated_size: Some(size),
+        // Set by the engine where it is opened into a Scene's own
+        // composition — see `Target`.
+        nested_in: None,
         showing: true,
         running: true,
         pushed: None,

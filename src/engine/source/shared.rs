@@ -379,6 +379,23 @@ impl<E> Registry<E> {
             .map(ask)
     }
 
+    /// The capture new items of `key` would join, if there is one.
+    ///
+    /// What a nested Scene's own items are opened against: the composition
+    /// already registered for that Scene — see `source::scene`.
+    pub(in crate::engine) fn current<R>(
+        &self,
+        key: &str,
+        ask: impl FnOnce(&Shared<E>) -> R,
+    ) -> Option<R> {
+        self.lock()
+            .get(key)?
+            .iter()
+            .rev()
+            .find(|capture| capture.joinable())
+            .map(ask)
+    }
+
     /// The same of every open capture of this kind.
     ///
     /// Asked by the Windows display, for its rate handles; see `extra`.

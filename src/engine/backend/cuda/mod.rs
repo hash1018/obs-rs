@@ -30,7 +30,7 @@ use crate::snapshots::SceneItemSnapshot;
 use crate::engine::source::shared::{Share, SharedCapture};
 use crate::engine::source::{self, OpenOutcome};
 
-use super::{BACKGROUND, BackendError};
+use super::{BACKGROUND, BackendError, Target};
 
 /// The running recording: which branch it is, and the control that stops it
 /// taking frames without stopping anything else.
@@ -108,6 +108,7 @@ impl Backend {
                 height,
                 frame_rate: ffmpeg::Rational::new(fps as i32, 1),
                 background: BACKGROUND,
+                background_alpha: 255,
             },
         )?;
 
@@ -274,7 +275,14 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
+        into: Target,
     ) -> Result<OpenOutcome, BackendError> {
+        // Nothing is composited for a Scene here — see `source::scene` — so
+        // nothing is ever opened into one. Answered rather than asserted:
+        // the engine asks for whatever the project holds.
+        if let Target::Scene(_) = into {
+            return Ok(source::scene::open());
+        }
         let opened = self.open_kind(item, layer, fps, mixer);
         if opened.is_err() {
             self.remove_source(&crate::engine::source::input_name(item));
@@ -347,6 +355,7 @@ impl Backend {
             }
             SourceKind::Text => source::text::open(&self.device, &self.compositor, item, layer)
                 .map(OpenOutcome::Open),
+            SourceKind::Scene => Ok(source::scene::open()),
             SourceKind::Browser => source::browser::open(
                 &self.device,
                 &self.compositor,

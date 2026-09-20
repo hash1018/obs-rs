@@ -323,6 +323,9 @@ pub(in crate::engine) fn open(
         refreshed_token: None,
         filters: filters.open,
         filter_rack: filters.filter_rack,
+        // Set by the engine where it is opened into a Scene's own
+        // composition — see `Target`.
+        nested_in: None,
         showing: true,
         running: true,
         pushed: None,
@@ -415,6 +418,9 @@ pub(in crate::engine) fn open(
         refreshed_token: None,
         filters: filters.open,
         filter_rack: filters.filter_rack,
+        // Set by the engine where it is opened into a Scene's own
+        // composition — see `Target`.
+        nested_in: None,
         showing: true,
         running: true,
         pushed: None,
