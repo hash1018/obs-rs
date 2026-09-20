@@ -232,10 +232,8 @@ impl ObsApp {
                         // when a frame arrives, which is a live picture
                         // stuttering on a screen of its own. Asking for a
                         // viewport that is not open costs nothing.
-                        engine_repaint_ctx.request_repaint_after_for(
-                            REPAINT_NOW,
-                            Self::projector_viewport(),
-                        );
+                        engine_repaint_ctx
+                            .request_repaint_after_for(REPAINT_NOW, Self::projector_viewport());
                     },
                 )
                 .inspect_err(|error| tracing::error!("could not start the engine: {error}"))
@@ -464,39 +462,35 @@ impl ObsApp {
         let texture = frame.map(|frame| frame.texture_id);
         let canvas = self.snapshots.sources.canvas;
         let closed = Arc::clone(&self.projector_closed);
-        ctx.show_viewport_deferred(
-            Self::projector_viewport(),
-            builder,
-            move |ctx, _class| {
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
-                    .show(ctx, |ui| {
-                        let Some(texture) = texture else {
-                            return;
-                        };
-                        // The Canvas, whole and in its own shape: a screen is
-                        // rarely the shape of the Scene, and a stretched
-                        // picture is not what is being recorded.
-                        let into = ui.available_rect_before_wrap();
-                        let scale = (into.width() / canvas.width)
-                            .min(into.height() / canvas.height)
-                            .max(0.0);
-                        let size = egui::vec2(canvas.width * scale, canvas.height * scale);
-                        let rect = egui::Rect::from_center_size(into.center(), size);
-                        ui.painter().image(
-                            texture,
-                            rect,
-                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                            egui::Color32::WHITE,
-                        );
-                    });
-                if ctx.input(|input| input.key_pressed(egui::Key::Escape))
-                    || ctx.input(|input| input.viewport().close_requested())
-                {
-                    closed.store(true, Ordering::Relaxed);
-                }
-            },
-        );
+        ctx.show_viewport_deferred(Self::projector_viewport(), builder, move |ctx, _class| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+                .show(ctx, |ui| {
+                    let Some(texture) = texture else {
+                        return;
+                    };
+                    // The Canvas, whole and in its own shape: a screen is
+                    // rarely the shape of the Scene, and a stretched
+                    // picture is not what is being recorded.
+                    let into = ui.available_rect_before_wrap();
+                    let scale = (into.width() / canvas.width)
+                        .min(into.height() / canvas.height)
+                        .max(0.0);
+                    let size = egui::vec2(canvas.width * scale, canvas.height * scale);
+                    let rect = egui::Rect::from_center_size(into.center(), size);
+                    ui.painter().image(
+                        texture,
+                        rect,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                });
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape))
+                || ctx.input(|input| input.viewport().close_requested())
+            {
+                closed.store(true, Ordering::Relaxed);
+            }
+        });
     }
 
     /// Notes where the window is, so closing can write it down.
