@@ -16,7 +16,8 @@ pub struct Scene {
 pub enum TransitionKind {
     /// The next Scene is simply there, which is what switching did before
     /// there was anything else. The default, so an existing project behaves
-    /// as it did.
+    /// as it did — and shown as "None" rather than as a cut, since what the
+    /// row above it offers is a transition and this is the absence of one.
     #[default]
     Cut,
     /// The Scene being left stays where it is while the one arriving is drawn

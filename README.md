@@ -68,13 +68,14 @@ bottom.](docs/screenshot.png)
   cached for it — what an overlay you have just edited on disk needs — and
   **Refresh when shown** does that every time the source comes back into
   view.
-- **Transitions.** Switching Scenes can be a cut, a fade, or a fade through
-  black, with the length in milliseconds — under the Scenes list, because it
-  is one setting for the whole project. A fade brings the arriving Scene up
-  over the one being left, which is exactly a dissolve wherever the arriving
-  Scene covers the canvas; where it does not, fading through black is the one
-  that is right. Switching again part way through ends the switch that was
-  running and starts the new one.
+- **Transitions.** Switching Scenes can be nothing at all — the default, and
+  what it has always been — or a fade, or a fade through black, with the
+  length in milliseconds. Under the Scenes list, because it is one setting
+  for the whole project. A fade brings the arriving Scene up over the one
+  being left, which is exactly a dissolve wherever the arriving Scene covers
+  the canvas; where it does not, fading through black is the one that is
+  right. Switching again part way through ends the switch that was running
+  and starts the new one.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an
