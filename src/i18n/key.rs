@@ -48,6 +48,8 @@ text_keys! {
     MenuExit                      => "menu-exit";
     MenuView                      => "menu-view";
     MenuFullscreen                => "menu-fullscreen";
+    MenuProjector                 => "menu-projector";
+    MenuProjectorWindow           => "menu-projector-window";
     MenuDocks                     => "menu-docks";
     MenuTheme                     => "menu-theme";
     ThemeSystem                   => "theme-system";

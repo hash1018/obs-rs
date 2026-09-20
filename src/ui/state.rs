@@ -21,6 +21,12 @@ pub struct UiState {
     pub(super) project_error: Option<String>,
     pub(super) dock_layout: DockLayout,
     pub(super) fullscreen: bool,
+    /// The Canvas on another screen, while one is open — see
+    /// [`Projector`]. `None` is the ordinary case: this is asked for when it
+    /// is wanted and closed when it is not, rather than remembered across
+    /// runs, where a window appearing on a second screen at launch would be
+    /// a surprise.
+    pub projector: Option<Projector>,
     pub(super) scenes: ScenesPanelState,
     pub(super) editor: SceneEditorState,
     pub(super) sources: SourcesPanelState,
@@ -97,4 +103,24 @@ impl UiState {
         self.settings.open_with(settings);
         self.settings.show_hotkeys();
     }
+}
+
+/// Where a projector window is, while one is open.
+///
+/// What it shows is fixed — the Canvas, as it is composited, with none of the
+/// editor's own marks — so all this says is which screen it fills, or that it
+/// is an ordinary window the user places themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Projector {
+    /// Filling one screen, by the name and place the display list gave.
+    Screen {
+        name: String,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
+    /// A window like any other, for a desktop that will not let an
+    /// application choose a screen — and for a second view on this one.
+    Window,
 }

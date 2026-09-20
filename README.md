@@ -88,6 +88,13 @@ bottom.](docs/screenshot.png)
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an
   edge back, and the Properties dock takes the four numbers exactly.
+- **Projector.** The Canvas on another screen, from `View → Projector`:
+  a window with nothing in it but what is being composited — no selection
+  outlines, no toolbar, no docks. Pick a display and it fills it, or take it
+  as an ordinary window; Escape closes it. It costs one more draw of a
+  picture that exists either way, so it is a second view rather than a
+  second output: nothing is encoded, and the recording does not know it is
+  there.
 - **Recording** to MP4, Matroska or HLS, with hardware encoding where the
   machine has it. One recording can be split into several files by elapsed
   time or by size.
@@ -318,6 +325,8 @@ knowing before you try it:
 - **No groups.** A Scene can be placed inside another, which is how an
   overlay is shared, but the sources of one Scene cannot be folded into a
   collapsible bundle the way OBS groups them.
+- **No multiview**, so there is no grid of every Scene to switch from. The
+  projector shows the Canvas, which is one Scene at a time.
 - **No virtual camera**, so nothing here appears as a webcam in a meeting.
 
 ## Contributing

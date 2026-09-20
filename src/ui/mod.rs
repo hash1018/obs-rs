@@ -20,7 +20,7 @@ pub use docking::WorkspaceDocks;
 pub use preview::PreviewZoom;
 pub(crate) use settings::hotkey_label;
 pub use shell::hotkeys::{act as act_on_hotkeys, keyboard_taken};
-pub use state::UiState;
+pub use state::{Projector, UiState};
 
 pub(super) struct UiResources<'a> {
     snapshots: &'a Snapshots,

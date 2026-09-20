@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -20,6 +21,11 @@ use crate::capture::linux::{SystemDisplayPicker, SystemDisplayPickerUpdate};
 
 pub struct ObsApp {
     ui_state: UiState,
+    /// Set by the projector window when it is asked to close, and read back
+    /// on the next pass — see [`Self::show_projector`]. A flag rather than a
+    /// call because that window is drawn from a closure this application's
+    /// state is not lent to.
+    projector_closed: Arc<AtomicBool>,
     snapshots: Snapshots,
     project_manager: Option<ProjectManager>,
     resources: Option<ResourceManager>,
@@ -190,6 +196,7 @@ impl ObsApp {
 
         Self {
             ui_state,
+            projector_closed: Arc::new(AtomicBool::new(false)),
             snapshots: Snapshots::default(),
             project_manager,
             resources: ResourceManager::spawn(move || {
@@ -393,6 +400,87 @@ impl ObsApp {
     /// window manager's, and `UiAction::Exit` alike — intercepting one of
     /// those and not the others would leave a way out that skipped the
     /// question.
+    /// The Canvas on another screen, while one is asked for.
+    ///
+    /// A window of its own showing the same texture the Preview draws — the
+    /// composited Canvas, and nothing else: no selection outlines, no crop
+    /// marks, no toolbar, since those are drawn over that texture rather
+    /// than into it. So this costs one more draw of a picture that exists
+    /// either way, and nothing on the engine's side at all.
+    ///
+    /// Deferred rather than immediate, because it is drawn from this
+    /// application's own state each frame and has no borrow of it to keep.
+    /// Escape closes it, and so does the window's own close button; either
+    /// way the flag is read back here on the next pass.
+    fn show_projector(
+        &mut self,
+        ctx: &egui::Context,
+        frame: Option<&crate::engine::CompositeFrame>,
+    ) {
+        if self.projector_closed.swap(false, Ordering::Relaxed) {
+            self.ui_state.projector = None;
+        }
+        let Some(projector) = self.ui_state.projector.clone() else {
+            return;
+        };
+
+        let mut builder = egui::ViewportBuilder::default().with_title("obs-rs");
+        builder = match &projector {
+            // Placed on that screen before it is told to fill one: which
+            // screen a window fills is the one it is on, and nothing in this
+            // API names a display.
+            ui::Projector::Screen {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => builder
+                .with_position([*x as f32, *y as f32])
+                .with_inner_size([*width as f32, *height as f32])
+                .with_decorations(false)
+                .with_fullscreen(true),
+            ui::Projector::Window => builder.with_inner_size([960.0, 540.0]),
+        };
+
+        let texture = frame.map(|frame| frame.texture_id);
+        let canvas = self.snapshots.sources.canvas;
+        let closed = Arc::clone(&self.projector_closed);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("projector"),
+            builder,
+            move |ctx, _class| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+                    .show(ctx, |ui| {
+                        let Some(texture) = texture else {
+                            return;
+                        };
+                        // The Canvas, whole and in its own shape: a screen is
+                        // rarely the shape of the Scene, and a stretched
+                        // picture is not what is being recorded.
+                        let into = ui.available_rect_before_wrap();
+                        let scale = (into.width() / canvas.width)
+                            .min(into.height() / canvas.height)
+                            .max(0.0);
+                        let size = egui::vec2(canvas.width * scale, canvas.height * scale);
+                        let rect = egui::Rect::from_center_size(into.center(), size);
+                        ui.painter().image(
+                            texture,
+                            rect,
+                            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                    });
+                if ctx.input(|input| input.key_pressed(egui::Key::Escape))
+                    || ctx.input(|input| input.viewport().close_requested())
+                {
+                    closed.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+    }
+
     /// Notes where the window is, so closing can write it down.
     ///
     /// Only while it is neither maximized nor minimized. A maximized window's
@@ -980,6 +1068,7 @@ impl eframe::App for ObsApp {
                 .unwrap_or_default(),
         );
         ui::show(ui, &mut self.ui_state, &resources, &mut self.ui_actions);
+        self.show_projector(ui.ctx(), composite_frame.as_deref());
 
         let ctx = ui.ctx().clone();
         if let Some(global) = &self.global_hotkeys {

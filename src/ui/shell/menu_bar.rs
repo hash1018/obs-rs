@@ -4,6 +4,7 @@ use crate::i18n::{Locale, LocalizationManager, TextKey};
 use crate::settings::Theme;
 
 use super::{UiAction, UiState, docking::DockPanel};
+use crate::ui::Projector;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -83,6 +84,10 @@ pub fn show(
                         actions.push(UiAction::SetFullscreen(state.fullscreen));
                         ui.close();
                     }
+
+                    ui.menu_button(i18n.text(TextKey::MenuProjector), |ui| {
+                        show_projector_menu(ui, state, i18n);
+                    });
 
                     ui.menu_button(i18n.text(TextKey::MenuDocks), |ui| {
                         for panel in DockPanel::ALL {
@@ -195,3 +200,52 @@ pub fn show_about(ui: &mut egui::Ui, state: &mut UiState, i18n: &LocalizationMan
 /// Where this application is developed. From the manifest rather than
 /// written out here, so it stays whatever `cargo` publishes.
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+
+/// The screens a projector can fill, and the switch that opens one.
+///
+/// Toggles rather than opens: the screen a projector is already on is ticked,
+/// and picking it again closes that window — the same shape the docks and
+/// fullscreen above have.
+///
+/// A desktop that shows its own picker for captures cannot be asked which
+/// screens it has either, so there the list is one entry: a window, which the
+/// user puts where they want and fills the screen with themselves.
+fn show_projector_menu(
+    ui: &mut egui::Ui,
+    state: &mut crate::ui::UiState,
+    i18n: &LocalizationManager,
+) {
+    if let crate::capture::SourcePicker::Enumerated { monitors, .. } =
+        crate::capture::source_picker()
+    {
+        for monitor in monitors {
+            let open = matches!(
+                &state.projector,
+                Some(Projector::Screen { name, .. }) if *name == monitor.name
+            );
+            let label = format!(
+                "{} — {}×{}",
+                monitor.name, monitor.rect.width, monitor.rect.height
+            );
+            if ui.selectable_label(open, label).clicked() {
+                state.projector = (!open).then(|| Projector::Screen {
+                    name: monitor.name.clone(),
+                    x: monitor.rect.x,
+                    y: monitor.rect.y,
+                    width: monitor.rect.width,
+                    height: monitor.rect.height,
+                });
+                ui.close();
+            }
+        }
+    }
+
+    let windowed = matches!(state.projector, Some(Projector::Window));
+    if ui
+        .selectable_label(windowed, i18n.text(TextKey::MenuProjectorWindow))
+        .clicked()
+    {
+        state.projector = (!windowed).then_some(Projector::Window);
+        ui.close();
+    }
+}
