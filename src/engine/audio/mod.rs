@@ -74,7 +74,7 @@ use media_pp::{
     queue::OverflowPolicy,
 };
 
-use crate::capture::AudioDeviceTarget;
+use crate::capture::{AudioDeviceTarget, AudioProcessTarget};
 use crate::domain::{AudioFilterId, AudioFilterSettings, AudioSourceId};
 use crate::snapshots::{AudioSnapshot, AudioSourceSnapshot};
 
@@ -479,7 +479,12 @@ impl AudioEngine {
     /// going, touches only that source. Called again on every endpoint change
     /// too, which is what opens a source whose device has just arrived — and
     /// closes one whose device has just left.
-    pub(super) fn apply(&mut self, snapshot: &AudioSnapshot, devices: &[AudioDeviceTarget]) {
+    pub(super) fn apply(
+        &mut self,
+        snapshot: &AudioSnapshot,
+        devices: &[AudioDeviceTarget],
+        processes: &[AudioProcessTarget],
+    ) {
         if self.mixer.is_none() {
             return;
         }
@@ -502,7 +507,7 @@ impl AudioEngine {
             // has lost its endpoint, and the mixer dock hides a source that
             // is not running — so one left in the map would show a channel
             // with a meter that can never move again.
-            if !device::device_available(devices, source) {
+            if !device::device_available(devices, processes, source) {
                 self.close(source.id);
                 continue;
             }
@@ -520,7 +525,7 @@ impl AudioEngine {
                         tracing::error!("could not change the filters on {}: {error}", source.name);
                     }
                 }
-                _ => self.reopen(source),
+                _ => self.reopen(source, processes),
             }
         }
     }
@@ -586,7 +591,7 @@ impl AudioEngine {
 
     /// Closes this source if it was open and opens it again on the endpoint
     /// the project now names.
-    fn reopen(&mut self, source: &AudioSourceSnapshot) {
+    fn reopen(&mut self, source: &AudioSourceSnapshot, processes: &[AudioProcessTarget]) {
         let name = format!("audio-{}", source.id.0);
         // Closed before the new one opens: two captures of one endpoint is
         // something both backends allow and neither is what was asked for.
@@ -611,6 +616,7 @@ impl AudioEngine {
             monitored,
             muted,
             meter,
+            processes,
         ) {
             Ok((open, peak)) => {
                 self.levels.track(source.id, peak);
@@ -712,6 +718,7 @@ fn attach_monitor_output(
 /// afterwards: a `Tee`'s branches are fixed when it is built, so a source
 /// whose monitoring changed is reopened — the same cost, and for the same
 /// reason, as one whose device changed.
+#[allow(clippy::too_many_arguments)]
 fn open_source(
     mixer: &MixerHandle,
     monitor: Option<&MixerHandle>,
@@ -722,6 +729,9 @@ fn open_source(
     // it down — decided by the caller, which knows about both.
     silent: bool,
     mut meter: Meter,
+    // Every application playing something, for the one kind that is opened
+    // against a process rather than an endpoint.
+    processes: &[AudioProcessTarget],
 ) -> Result<(OpenAudioSource, Arc<AtomicU32>), BackendError> {
     let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
     let monitor_input = match (monitored, monitor) {
@@ -733,7 +743,7 @@ fn open_source(
         _ => None,
     };
     let (capture, capture_format) =
-        device::open_capture(name, source.kind, source.device.as_deref())?;
+        device::open_capture(name, source.kind, source.device.as_deref(), processes)?;
     // Both captures count their `pts` in samples at their own rate — see
     // `time_base` on either.
     let (rack, mut filter_rack) = filters::rack(

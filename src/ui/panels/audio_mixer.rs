@@ -19,7 +19,9 @@
 
 use eframe::egui;
 
-use crate::capture::AudioDeviceTarget;
+use std::sync::Arc;
+
+use crate::capture::{AudioDeviceTarget, AudioProcessTarget};
 use crate::domain::{AudioSourceKind, MAX_GAIN_DB, MIN_GAIN_DB};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{AudioCommand, ProjectCommand};
@@ -46,6 +48,10 @@ struct Channel<'a> {
     /// Set for a device channel. A media file or a stream has no endpoint
     /// to choose, so its name opens its filters rather than a picker.
     device: Option<Device<'a>>,
+    /// Set for a channel that listens to one application instead — which
+    /// picks from what is playing rather than from the device list, and is
+    /// the only channel that can be taken away again.
+    application: Option<Application<'a>>,
     /// What the name's hover says this is.
     kind: TextKey,
     /// Whether this channel is played back — `None` for a channel there is
@@ -55,6 +61,19 @@ struct Channel<'a> {
     /// what is already being played on it, so it is audible before obs-rs
     /// touches it. See [`AudioSourceKind::can_be_monitored`].
     monitored: Option<bool>,
+}
+
+/// What an application channel picks from, and what it is picking for.
+struct Application<'a> {
+    source: crate::domain::AudioSourceId,
+    /// The executable it stored, or `None` where nothing has been picked.
+    executable: Option<&'a str>,
+    /// Whether a capture of it is actually running. An application channel
+    /// is shown whether or not one is — unlike a device channel, which is
+    /// simply absent until its endpoint is there — because it is a channel
+    /// somebody added, and a game that is not running yet must not take the
+    /// fader they set for it with it.
+    running: bool,
 }
 
 /// What a device channel picks from, and what it is picking for.
@@ -89,21 +108,30 @@ fn channels<'a>(
     let mut channels: Vec<Channel<'a>> = audio
         .items
         .iter()
-        .filter(|source| source.running)
+        // An application channel is drawn whether or not it is running: it
+        // was added by hand, and the application it listens to can be
+        // started an hour from now — see `Application::running`.
+        .filter(|source| source.running || source.kind == AudioSourceKind::Application)
         .map(|source| Channel {
             id: ChannelId::Device(source.id),
             name: &source.name,
             gain_db: source.gain_db,
             muted: source.muted,
             peak_db: source.peak_db,
-            device: Some(Device {
+            device: source.kind.is_device().then_some(Device {
                 source: source.id,
                 kind: source.kind,
                 id: source.device.as_deref(),
             }),
+            application: (source.kind == AudioSourceKind::Application).then_some(Application {
+                source: source.id,
+                executable: source.device.as_deref(),
+                running: source.running,
+            }),
             kind: match source.kind {
                 AudioSourceKind::Output => TextKey::AudioKindOutput,
                 AudioSourceKind::Input => TextKey::AudioKindInput,
+                AudioSourceKind::Application => TextKey::AudioKindApplication,
             },
             monitored: source.kind.can_be_monitored().then_some(source.monitored),
         })
@@ -169,6 +197,7 @@ fn channels<'a>(
             // was still going.
             peak_db: item.peak_db.filter(|_| !paused),
             device: None,
+            application: None,
             kind,
             // Always, and these are the channels the control was really
             // wanted for: a file's or a stream's sound exists nowhere but
@@ -286,6 +315,15 @@ pub(in crate::ui) fn show(
     // Collected once because the mute strip below places its buttons by
     // column index, so the two have to be walking the same sequence.
     let channels = channels(snapshot, sources, status);
+    // Whether the desktop is also carrying whatever an application channel
+    // captures, which is the one mistake this dock can warn about: both
+    // unmuted means that application is recorded twice, louder and slightly
+    // out of phase with itself. Muting either is the answer, so the warning
+    // goes away when one of them is.
+    let desktop_too = snapshot
+        .items
+        .iter()
+        .any(|source| source.kind == AudioSourceKind::Output && source.running && !source.muted);
     if channels.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.weak(i18n.text(TextKey::AudioEmpty));
@@ -316,9 +354,18 @@ pub(in crate::ui) fn show(
                 // so without this they would collide on ids derived from
                 // their position alone.
                 ui.push_id(channel.id, |ui| {
-                    show_channel(ui, channel, devices, channel_height, i18n, actions);
+                    show_channel(
+                        ui,
+                        channel,
+                        devices,
+                        desktop_too,
+                        channel_height,
+                        i18n,
+                        actions,
+                    );
                 });
             }
+            show_add_application(ui, i18n, actions);
         });
         // Scrolled to the end, the quietest mark on the scale would
         // otherwise sit directly on the mute strip's edge. The same gap
@@ -334,6 +381,31 @@ pub(in crate::ui) fn show(
         i18n,
         actions,
     );
+}
+
+/// The `+` that adds an application channel, at the end of the row where the
+/// new column will appear.
+///
+/// The only channel a project gains or loses, so this is the only button of
+/// its kind here — and it is absent where the platform cannot capture an
+/// application at all, rather than adding a channel that could never open.
+fn show_add_application(
+    ui: &mut egui::Ui,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    if !crate::capture::captures_applications() {
+        return;
+    }
+    ui.vertical(|ui| {
+        if ui
+            .button("➕")
+            .on_hover_text(i18n.text(TextKey::AudioAddApplication))
+            .clicked()
+        {
+            actions.push(audio_action(AudioCommand::AddApplication));
+        }
+    });
 }
 
 /// The mute and monitor buttons, in a strip below the channels rather than
@@ -379,6 +451,7 @@ fn show_channel(
     ui: &mut egui::Ui,
     channel: &Channel<'_>,
     devices: &[AudioDeviceTarget],
+    desktop_too: bool,
     channel_height: f32,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
@@ -387,7 +460,7 @@ fn show_channel(
     ui.allocate_ui(size, |ui| {
         ui.vertical(|ui| {
             ui.set_width(SOURCE_WIDTH);
-            show_name(ui, channel, devices, i18n, actions);
+            show_name(ui, channel, devices, desktop_too, i18n, actions);
             // One indent for both rows rather than centring each: the readout
             // is a number whose width changes with its own value, and a
             // centred one would slide left and right as a fader is moved.
@@ -438,9 +511,14 @@ fn show_name(
     ui: &mut egui::Ui,
     channel: &Channel<'_>,
     devices: &[AudioDeviceTarget],
+    desktop_too: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
+    if let Some(application) = &channel.application {
+        show_application_name(ui, channel, application, desktop_too, i18n, actions);
+        return;
+    }
     let Some(source) = &channel.device else {
         // A media file or a stream has no endpoint to choose, so its name
         // opens a menu with the one thing it does have — its filters —
@@ -554,6 +632,125 @@ fn show_name(
     menu.inner
         .response
         .on_hover_text(format!("{kind} · {listening}"));
+}
+
+/// The name of a channel that listens to one application, which is also
+/// where the application is picked.
+///
+/// The same shape as a device channel's — a menu under the name, what it is
+/// listening to on the hover — with three differences: the list is what is
+/// playing rather than what is plugged in, it is taken again while the menu
+/// is open because nothing notifies anyone that an application started, and
+/// this is the one channel that can be removed.
+fn show_application_name(
+    ui: &mut egui::Ui,
+    channel: &Channel<'_>,
+    application: &Application<'_>,
+    desktop_too: bool,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    let kind = i18n.text(channel.kind);
+    let none = i18n.text(TextKey::AudioApplicationNone);
+    // The application it stored, as a picker would show it — and the
+    // channel's own name until one is picked, which is what the project
+    // stores and what its pipeline is registered under.
+    let label = application
+        .executable
+        .map(|executable| executable.to_owned())
+        .unwrap_or_else(|| channel.name.to_owned());
+    let title = egui::RichText::new(format!("{label} ⏷"));
+    let title = if application.running {
+        title.strong()
+    } else {
+        // An application that is not running has a channel that is not
+        // carrying anything, and a name that says as much before the meter
+        // has to.
+        title.weak()
+    };
+
+    let menu = ui.vertical_centered(|ui| {
+        ui.menu_button(title, |ui| {
+            let playing = processes(ui);
+            for process in playing.iter() {
+                let chosen = application
+                    .executable
+                    .is_some_and(|executable| executable.eq_ignore_ascii_case(&process.executable));
+                if ui.selectable_label(chosen, &process.executable).clicked() {
+                    actions.push(audio_action(AudioCommand::SetDevice(
+                        application.source,
+                        Some(process.executable.clone()),
+                    )));
+                    ui.close();
+                }
+            }
+            if playing.is_empty() {
+                ui.weak(i18n.text(TextKey::AudioNoApplications));
+            }
+            ui.separator();
+            // Said where the choice is made, which is where it can be acted
+            // on: the desktop carries this application's sound as well, so
+            // leaving both unmuted records it twice.
+            if desktop_too {
+                ui.weak(
+                    egui::RichText::new(i18n.text(TextKey::AudioApplicationAlsoInDesktop))
+                        .color(ui.visuals().warn_fg_color),
+                );
+                ui.separator();
+            }
+            if ui.button(i18n.text(TextKey::AudioFilters)).clicked() {
+                actions.push(UiAction::ShowAudioFilters(AudioFilterHost::Channel(
+                    application.source,
+                )));
+                ui.close();
+            }
+            if ui.button(i18n.text(TextKey::AudioRemoveChannel)).clicked() {
+                actions.push(audio_action(AudioCommand::Remove(application.source)));
+                ui.close();
+            }
+        })
+    });
+
+    let listening = match application.executable {
+        None => none.into_owned(),
+        Some(executable) if application.running => executable.to_owned(),
+        Some(executable) => format!(
+            "{executable} ({})",
+            i18n.text(TextKey::AudioApplicationNotRunning)
+        ),
+    };
+    let hover = if desktop_too {
+        format!(
+            "{kind} · {listening}\n{}",
+            i18n.text(TextKey::AudioApplicationAlsoInDesktop)
+        )
+    } else {
+        format!("{kind} · {listening}")
+    };
+    menu.inner.response.on_hover_text(hover);
+}
+
+/// What is playing right now, taken again when what is remembered is old.
+///
+/// Kept in egui's own per-frame store rather than passed in: the list is
+/// only ever looked at while this menu is open, nothing notifies anyone when
+/// an application starts playing, and a dock that enumerated audio sessions
+/// every frame would pay for a picker nobody had opened. Two seconds is
+/// short enough that an application started while the menu is open appears
+/// in it.
+fn processes(ui: &egui::Ui) -> Arc<Vec<AudioProcessTarget>> {
+    const REFRESH: f64 = 2.0;
+    let id = egui::Id::new("audio_mixer_processes");
+    let now = ui.input(|input| input.time);
+    let known: Option<(f64, Arc<Vec<AudioProcessTarget>>)> = ui.data(|data| data.get_temp(id));
+    if let Some((taken, processes)) = known
+        && now - taken < REFRESH
+    {
+        return processes;
+    }
+    let processes = Arc::new(crate::capture::audio_processes());
+    ui.data_mut(|data| data.insert_temp(id, (now, Arc::clone(&processes))));
+    processes
 }
 
 /// The fader stays live while muted rather than greying out: muting is not

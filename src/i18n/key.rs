@@ -192,6 +192,13 @@ text_keys! {
     AudioMonitorUnavailable       => "audio-monitor-unavailable";
     AudioKindOutput               => "audio-kind-output";
     AudioKindInput                => "audio-kind-input";
+    AudioKindApplication          => "audio-kind-application";
+    AudioAddApplication           => "audio-add-application";
+    AudioApplicationNone          => "audio-application-none";
+    AudioApplicationNotRunning    => "audio-application-not-running";
+    AudioNoApplications           => "audio-no-applications";
+    AudioRemoveChannel            => "audio-remove-channel";
+    AudioApplicationAlsoInDesktop => "audio-application-also-in-desktop";
     AudioDeviceDefault            => "audio-device-default";
     AudioNoDevices                => "audio-no-devices";
     AudioFilters                  => "audio-filters";

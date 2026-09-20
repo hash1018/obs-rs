@@ -456,6 +456,33 @@ impl IMMNotificationClient_Impl for EndpointWatch_Impl {
     }
 }
 
+/// Every process holding an audio session, as the mixer's own picker shows
+/// them — see [`crate::capture::audio_processes`].
+pub fn audio_processes() -> Vec<crate::capture::AudioProcessTarget> {
+    let processes = match WasapiCaptureSource::list_processes() {
+        Ok(processes) => processes,
+        Err(error) => {
+            tracing::warn!("could not list the applications playing audio: {error}");
+            return Vec::new();
+        }
+    };
+    let own = std::process::id();
+    processes
+        .into_iter()
+        // Nothing a channel could store, and so nothing it could find again.
+        .filter(|process| !process.executable.is_empty())
+        // Not this application. obs-rs holds a render session of its own
+        // whenever it is monitoring, and capturing that would be capturing
+        // what it is playing back — the audio twin of pointing a Window
+        // Capture at the Preview.
+        .filter(|process| process.id != own)
+        .map(|process| crate::capture::AudioProcessTarget {
+            id: process.id,
+            executable: process.executable,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,7 +12,7 @@
 //! and they have to agree: one deciding a source is unopenable that the other
 //! would have opened is a channel missing from the dock for no reason.
 
-use crate::capture::AudioDeviceTarget;
+use crate::capture::{AudioDeviceTarget, AudioProcessTarget};
 use crate::domain::AudioSourceKind;
 use crate::snapshots::AudioSourceSnapshot;
 
@@ -27,12 +27,39 @@ use super::BackendError;
 /// is a channel missing from the dock for no reason.
 pub(super) fn device_available(
     devices: &[AudioDeviceTarget],
+    processes: &[AudioProcessTarget],
     source: &AudioSourceSnapshot,
 ) -> bool {
+    if source.kind == AudioSourceKind::Application {
+        // An application, not an endpoint: what has to be there is a live
+        // process of the executable this channel stored. Nothing picked yet
+        // is nothing to open — the channel is still shown, which is the one
+        // place this differs from a device (see the mixer dock).
+        return source
+            .device
+            .as_deref()
+            .is_some_and(|executable| find(processes, executable).is_some());
+    }
     devices.iter().any(|device| {
         device.kind == source.kind
             && (source.device.as_deref() == Some(device.id.as_str()) || device.is_default)
     })
+}
+
+/// The live process a channel storing `executable` should capture.
+///
+/// The first, where an application runs as several — a browser with a
+/// process per tab, a game with a launcher beside it. They are ordered by
+/// process id, so this is the oldest of them, which for an application that
+/// starts one audio process is the one that has it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn find<'a>(
+    processes: &'a [AudioProcessTarget],
+    executable: &str,
+) -> Option<&'a AudioProcessTarget> {
+    processes
+        .iter()
+        .find(|process| process.executable.eq_ignore_ascii_case(executable))
 }
 
 /// Opens the endpoint a source names, or the system default when it names
@@ -42,6 +69,7 @@ pub(super) fn open_capture(
     name: &str,
     kind: AudioSourceKind,
     device: Option<&str>,
+    processes: &[AudioProcessTarget],
 ) -> Result<
     (
         media_pp::elements::WasapiCaptureSource,
@@ -56,6 +84,17 @@ pub(super) fn open_capture(
     let wanted = match kind {
         AudioSourceKind::Output => WasapiDeviceKind::Render,
         AudioSourceKind::Input => WasapiDeviceKind::Capture,
+        // An application is opened against a process rather than an
+        // endpoint, and a process id belongs to one run — so the stored
+        // executable is looked up in the list the caller just took.
+        // `device_available` asked the same question of the same list
+        // first, so in the ordinary case this finds what it found.
+        AudioSourceKind::Application => {
+            let executable = device.ok_or("no application has been chosen for this channel")?;
+            let process = find(processes, executable)
+                .ok_or_else(|| format!("{executable} is not running"))?;
+            return Ok(WasapiCaptureSource::open_process(name, process.id)?);
+        }
     };
     let devices = WasapiCaptureSource::list_devices()?;
     let device: WasapiDevice = pick(
@@ -75,6 +114,7 @@ pub(super) fn open_capture(
     name: &str,
     kind: AudioSourceKind,
     device: Option<&str>,
+    _processes: &[AudioProcessTarget],
 ) -> Result<
     (
         media_pp::elements::PipeWireAudioCaptureSource,
@@ -90,6 +130,13 @@ pub(super) fn open_capture(
     let wanted = match kind {
         AudioSourceKind::Output => PipeWireAudioDeviceKind::Sink,
         AudioSourceKind::Input => PipeWireAudioDeviceKind::Source,
+        // PipeWire can capture one application's stream, and nothing here
+        // asks it to yet — the Windows half landed first. A channel of this
+        // kind lists nothing to pick on Linux, so this is what a project
+        // carried over from another machine meets.
+        AudioSourceKind::Application => {
+            return Err("capturing one application is not written for PipeWire yet".into());
+        }
     };
     let devices = PipeWireAudioCaptureSource::list_devices()?;
     // The node *name*, not the id: an id is valid only while its node is, so
@@ -112,6 +159,7 @@ pub(super) fn open_capture(
     _name: &str,
     _kind: AudioSourceKind,
     _device: Option<&str>,
+    _processes: &[AudioProcessTarget],
 ) -> Result<
     (
         media_pp::elements::TestAudioSource,
@@ -252,17 +300,62 @@ mod tests {
 
         assert!(device_available(
             &[mic.clone(), speakers.clone()],
+            &[],
             &source(AudioSourceKind::Input, None)
         ));
         // Only playback endpoints: an input source has nothing to open.
         assert!(!device_available(
             &[speakers],
+            &[],
             &source(AudioSourceKind::Input, None)
         ));
         assert!(!device_available(
             &[],
+            &[],
             &source(AudioSourceKind::Input, None)
         ));
+    }
+
+    /// An application channel is openable exactly while the executable it
+    /// stored is running — no device list, and no default to fall back to,
+    /// because there is no such thing as a default application.
+    #[test]
+    fn an_application_channel_needs_its_own_application_running() {
+        let playing = [
+            AudioProcessTarget {
+                id: 100,
+                executable: "chrome.exe".to_owned(),
+            },
+            AudioProcessTarget {
+                id: 200,
+                executable: "game.exe".to_owned(),
+            },
+        ];
+
+        assert!(device_available(
+            &[],
+            &playing,
+            &source(AudioSourceKind::Application, Some("game.exe"))
+        ));
+        // Windows is not case-sensitive about a file name, and neither is
+        // the picker somebody chose from.
+        assert!(device_available(
+            &[],
+            &playing,
+            &source(AudioSourceKind::Application, Some("Game.exe"))
+        ));
+        assert!(
+            !device_available(
+                &[],
+                &playing,
+                &source(AudioSourceKind::Application, Some("other.exe"))
+            ),
+            "an application that is not running has nothing to capture"
+        );
+        assert!(
+            !device_available(&[], &playing, &source(AudioSourceKind::Application, None)),
+            "a channel with nothing picked yet opens nothing"
+        );
     }
 
     /// The stored endpoint counts whether or not it is the default one —
@@ -275,6 +368,7 @@ mod tests {
         ];
         assert!(device_available(
             &devices,
+            &[],
             &source(AudioSourceKind::Input, Some("usb"))
         ));
     }
@@ -287,6 +381,7 @@ mod tests {
         let devices = [device("built-in", AudioSourceKind::Input, true)];
         assert!(device_available(
             &devices,
+            &[],
             &source(AudioSourceKind::Input, Some("unplugged"))
         ));
 
@@ -294,6 +389,7 @@ mod tests {
         let devices = [device("speakers", AudioSourceKind::Output, true)];
         assert!(!device_available(
             &devices,
+            &[],
             &source(AudioSourceKind::Input, Some("unplugged"))
         ));
     }
@@ -306,10 +402,12 @@ mod tests {
         let devices = [device("usb", AudioSourceKind::Input, false)];
         assert!(device_available(
             &devices,
+            &[],
             &source(AudioSourceKind::Input, Some("usb"))
         ));
         assert!(!device_available(
             &devices,
+            &[],
             &source(AudioSourceKind::Input, None)
         ));
     }

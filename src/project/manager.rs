@@ -139,6 +139,8 @@ fn handle_audio_command(
     command: AudioCommand,
 ) -> PersistenceResult<()> {
     database.transaction(|transaction| match command {
+        AudioCommand::AddApplication => AudioStore::add_application(transaction).map(|_| ()),
+        AudioCommand::Remove(id) => AudioStore::remove(transaction, id),
         AudioCommand::SetGainDb(id, gain_db) => AudioStore::set_gain_db(transaction, id, gain_db),
         AudioCommand::SetMuted(id, muted) => AudioStore::set_muted(transaction, id, muted),
         AudioCommand::SetDevice(id, device) => {

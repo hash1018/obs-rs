@@ -168,6 +168,13 @@ impl AudioManager {
                 // the project's answer, and the machine only changed what
                 // can be run.
                 let mut project: Option<AudioSnapshot> = None;
+                // What an application channel is opened against. Refreshed
+                // on the health tick rather than watched for: Windows has
+                // no notification for "this application started playing",
+                // and a second is as soon as anyone needs to hear it. Taken
+                // only while the project holds a channel that wants one, so
+                // the ordinary project pays nothing for this.
+                let mut known_processes: Vec<crate::capture::AudioProcessTarget> = Vec::new();
 
                 // Ends when the manager says so — see `AudioCommand::Shutdown`.
                 // Dropping the engine on the way out stops every capture and
@@ -260,6 +267,22 @@ impl AudioManager {
                         known_devices = crate::capture::audio_devices();
                         published_devices.store(Some(Arc::new(known_devices.clone())));
                     }
+                    // An application channel opens against a process that
+                    // can appear and disappear while nothing else moves, so
+                    // the list is taken again on every tick that has one to
+                    // look for — and a change in it is a reason to
+                    // reconcile, which is what opens a channel whose
+                    // application has just been started and closes one whose
+                    // application has just gone.
+                    if project.as_ref().is_some_and(wants_a_process) {
+                        let processes = crate::capture::audio_processes();
+                        if processes != known_processes {
+                            known_processes = processes;
+                            project_changed = true;
+                        }
+                    } else if !known_processes.is_empty() {
+                        known_processes.clear();
+                    }
                     // Only when something it reads has moved. A fader being
                     // dragged wakes this loop sixty times a second, and
                     // reconciling the whole graph against a project that has
@@ -269,7 +292,7 @@ impl AudioManager {
                     if (project_changed || devices_changed)
                         && let Some(project) = &project
                     {
-                        engine.apply(project, &known_devices);
+                        engine.apply(project, &known_devices, &known_processes);
                     }
                     // Whatever the mix and monitor pipelines reported since
                     // the last pass. Before the early return below, because
@@ -459,6 +482,18 @@ impl Drop for AudioManager {
             let _ = worker.join();
         }
     }
+}
+
+/// Whether this project has a channel that listens to an application.
+///
+/// What decides whether the worker goes looking for processes at all: on a
+/// project with none, which is most of them, the enumeration below never
+/// runs.
+fn wants_a_process(project: &AudioSnapshot) -> bool {
+    project
+        .items
+        .iter()
+        .any(|source| source.kind == crate::domain::AudioSourceKind::Application)
 }
 
 #[cfg(test)]

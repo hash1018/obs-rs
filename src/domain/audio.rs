@@ -19,6 +19,14 @@ pub enum AudioSourceKind {
     Output,
     /// What a microphone or line input hears.
     Input,
+    /// What one application is playing, and nothing else beside it.
+    ///
+    /// Not a side of the sound card at all, which is why it is worth saying
+    /// what it is instead: Windows mixes one process tree into a stream of
+    /// its own and hands that over, so a game can be recorded without the
+    /// chat program next to it. What such a source stores in place of an
+    /// endpoint is the executable's name — see [`AudioSource::device`].
+    Application,
 }
 
 impl AudioSourceKind {
@@ -37,10 +45,22 @@ impl AudioSourceKind {
         matches!(self, Self::Input)
     }
 
+    /// Whether this listens to a device at all, rather than to something a
+    /// picker finds another way.
+    ///
+    /// An application is not an endpoint: it is not in the device list, it
+    /// has no default to fall back to, and it can be gone for an hour and
+    /// come back — which is why what it stores is a name to look up rather
+    /// than an id to open.
+    pub fn is_device(self) -> bool {
+        matches!(self, Self::Output | Self::Input)
+    }
+
     pub(crate) fn from_storage_name(name: &str) -> Option<Self> {
         match name {
             "output" => Some(Self::Output),
             "input" => Some(Self::Input),
+            "application" => Some(Self::Application),
             _ => None,
         }
     }
@@ -70,6 +90,13 @@ pub struct AudioSource {
     /// its default. `None` is not "unset": it follows the user changing their
     /// default device, which is what somebody who never opened the picker
     /// expects.
+    ///
+    /// For [`AudioSourceKind::Application`] this is not a device but the
+    /// executable's file name — `chrome.exe` — and `None` means nothing has
+    /// been picked yet, since there is no default application to fall back
+    /// to. One column either way: both are "what this channel listens to,
+    /// written the way it will be looked up again", and a second column that
+    /// is null for two kinds out of three would say no more.
     pub device: Option<String>,
     /// Gain in decibels, where `0.0` is unchanged. Decibels rather than a
     /// linear factor because that is what a fader is marked in and what

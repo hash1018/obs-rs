@@ -2356,7 +2356,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "media-pp"
 version = "0.2.0"
-source = "git+https://github.com/hash1018/media-pp#8d4f2f697665f386e3bb013709a042f5492d1316"
+source = "git+https://github.com/hash1018/media-pp#9145f7d31824e4156f258e97e83e883020f0da53"
 dependencies = [
  "ab_glyph",
  "arc-swap",
@@ -2376,6 +2376,7 @@ dependencies = [
  "time",
  "tracing-appender",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

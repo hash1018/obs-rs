@@ -43,6 +43,62 @@ impl AudioStore {
         Ok(rows.into_iter().flatten().collect())
     }
 
+    /// Adds a channel that captures one application's sound, listening to
+    /// nothing until one is picked.
+    ///
+    /// The only kind of channel a project gains or loses: the desktop and
+    /// the microphone are there from the first run, because every machine
+    /// has both sides of a sound card, and an application channel is one
+    /// somebody asked for.
+    ///
+    /// Named `Application Audio`, and `Application Audio 2` where that is
+    /// taken — `audio_sources.name` is UNIQUE, and it is also the name the
+    /// engine registers this channel's pipeline under. The name is a
+    /// fallback for the dock, which shows the chosen application instead as
+    /// soon as there is one.
+    pub(crate) fn add_application(
+        transaction: &Transaction<'_>,
+    ) -> PersistenceResult<AudioSourceId> {
+        let name = free_name(transaction)?;
+        let position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM audio_sources",
+            [],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT INTO audio_sources (name, kind, device, gain_db, muted, position)
+             VALUES (?1, 'application', NULL, 0, 0, ?2)",
+            params![name, position],
+        )?;
+        Ok(AudioSourceId(transaction.last_insert_rowid()))
+    }
+
+    /// Takes a channel away, with the filters on it.
+    ///
+    /// Only an application channel: the two device channels are what the
+    /// mixer *is*, and a project that had lost one would have no way back to
+    /// it. Refused rather than ignored, so a caller that meant one cannot
+    /// quietly remove the other.
+    pub(crate) fn remove(
+        transaction: &Transaction<'_>,
+        id: AudioSourceId,
+    ) -> PersistenceResult<()> {
+        let kind: Option<String> = transaction
+            .query_row(
+                "SELECT kind FROM audio_sources WHERE id = ?1",
+                params![id.0],
+                |row| row.get(0),
+            )
+            .ok();
+        if kind.as_deref() != Some("application") {
+            return Err("only an application channel can be removed".into());
+        }
+        // The filters go with it through `ON DELETE CASCADE`; see the audio
+        // filter table's own foreign key.
+        transaction.execute("DELETE FROM audio_sources WHERE id = ?1", params![id.0])?;
+        Ok(())
+    }
+
     pub(crate) fn set_monitored(
         transaction: &Transaction<'_>,
         id: AudioSourceId,
@@ -103,6 +159,31 @@ impl AudioStore {
     }
 }
 
+/// A name no channel has yet, for a new application channel.
+///
+/// Counts up rather than using the id, which is not known until the row is
+/// written — and a name that came from an id would leave gaps a person can
+/// see ("Application Audio 7" in a project with two of them).
+fn free_name(transaction: &Transaction<'_>) -> PersistenceResult<String> {
+    const BASE: &str = "Application Audio";
+    for suffix in 1..=u32::MAX {
+        let name = if suffix == 1 {
+            BASE.to_owned()
+        } else {
+            format!("{BASE} {suffix}")
+        };
+        let taken: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM audio_sources WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        if taken == 0 {
+            return Ok(name);
+        }
+    }
+    Err("every application channel name is taken".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,7 +226,73 @@ mod tests {
             AudioSourceKind::from_storage_name("input"),
             Some(AudioSourceKind::Input)
         );
+        assert_eq!(
+            AudioSourceKind::from_storage_name("application"),
+            Some(AudioSourceKind::Application)
+        );
         assert_eq!(AudioSourceKind::from_storage_name("midi"), None);
+    }
+
+    /// An application channel is the one a project gains and loses. It comes
+    /// back out as the kind it went in as, listening to nothing until an
+    /// application is chosen, and the second one is not named the same as
+    /// the first — the column is UNIQUE, and the engine registers this
+    /// channel's pipeline under that name.
+    #[test]
+    fn application_channels_are_added_named_and_taken_away() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+
+        let first = database
+            .transaction(AudioStore::add_application)
+            .expect("a channel is added");
+        let _second = database
+            .transaction(AudioStore::add_application)
+            .expect("and another");
+
+        let sources = AudioStore::list(database.connection()).unwrap();
+        let added: Vec<_> = sources
+            .iter()
+            .filter(|source| source.kind == AudioSourceKind::Application)
+            .map(|source| (source.name.as_str(), source.device.as_deref()))
+            .collect();
+        assert_eq!(
+            added,
+            vec![("Application Audio", None), ("Application Audio 2", None)],
+            "listening to nothing until one is picked"
+        );
+
+        database
+            .transaction(|transaction| AudioStore::remove(transaction, first))
+            .expect("and removed again");
+        let names: Vec<String> = AudioStore::list(database.connection())
+            .unwrap()
+            .into_iter()
+            .map(|source| source.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "Desktop Audio".to_owned(),
+                "Microphone".to_owned(),
+                "Application Audio 2".to_owned()
+            ]
+        );
+    }
+
+    /// The desktop and the microphone are what the mixer *is*: a project
+    /// that had lost one would have no way back to it, so removing one is
+    /// refused rather than quietly done.
+    #[test]
+    fn a_device_channel_cannot_be_removed() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let desktop = AudioStore::list(database.connection()).unwrap()[0].id;
+
+        assert!(
+            database
+                .transaction(|transaction| AudioStore::remove(transaction, desktop))
+                .is_err()
+        );
+        assert_eq!(AudioStore::list(database.connection()).unwrap().len(), 2);
     }
 
     #[test]

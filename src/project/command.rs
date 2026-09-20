@@ -19,6 +19,16 @@ pub enum ProjectCommand {
 /// [`crate::domain::AudioSourceId`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum AudioCommand {
+    /// Adds a channel that captures one application's sound, listening to
+    /// nothing until one is picked in the mixer.
+    ///
+    /// The only channel a project gains or loses: the desktop and the
+    /// microphone are what every machine has, and this is one somebody asked
+    /// for — see `AudioStore::add_application`.
+    AddApplication,
+    /// Takes an application channel away, with its filters. Refused for the
+    /// two device channels, which the mixer *is*.
+    Remove(AudioSourceId),
     /// Gain in decibels. Clamped where it is stored rather than here, so
     /// every way in lands on the same range.
     SetGainDb(AudioSourceId, f32),
