@@ -239,6 +239,11 @@ impl Backend {
 
     pub(in crate::engine) fn remove_source(&self, name: &str) {
         self.compositor.remove_source(name);
+        // And from every Scene being composited for another — see the D3D11
+        // twin.
+        self.scenes
+            .open
+            .each(|composition| composition.extra.remove_source(name));
         self.capture_rates
             .lock()
             .expect("capture rates poisoned")

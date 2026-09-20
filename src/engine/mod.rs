@@ -2248,6 +2248,7 @@ fn finish_open(
     {
         source.nested_in = Some(scene);
     }
+    tracing::debug!("opened \"{}\" into {:?}", opened.item.name, opened.into);
     // Placed where the item stands now rather than where it stood when this
     // was asked for: reordering a Scene, or recolouring a Source, while one
     // opens would otherwise take until the next change to show. Its own
@@ -2643,6 +2644,18 @@ fn reconcile(
                 layer.opacity *= transition.arriving();
             }
             match open.get_mut(&item.id) {
+                // Drawing into the wrong compositor: an item of a Scene that
+                // was being edited on its own was opened against the Canvas,
+                // and is now shown inside another Scene — or the other way
+                // round. It has to be opened again against the compositor it
+                // now belongs to, or it goes on drawing at Canvas
+                // coordinates while the Scene holding it is moved and scaled
+                // around it.
+                Some(SourceState::Open(source)) if source.nested_in != into.scene() => {
+                    source.source.stop();
+                    engine.backend.remove_source(&source.name);
+                    rebuild.push(item.id);
+                }
                 Some(SourceState::Open(source)) => {
                     let _ = source.layer.set_layer(layer);
                     refresh_pushed(source, item);

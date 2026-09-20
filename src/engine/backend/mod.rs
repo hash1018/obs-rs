@@ -190,3 +190,14 @@ pub(in crate::engine) enum Target {
     /// of whatever item shows that Scene.
     Scene(crate::domain::SceneId),
 }
+
+impl Target {
+    /// The Scene whose own composition this is, and `None` for the Canvas —
+    /// which is exactly what an open Source records in `nested_in`.
+    pub(in crate::engine) fn scene(self) -> Option<crate::domain::SceneId> {
+        match self {
+            Self::Canvas => None,
+            Self::Scene(scene) => Some(scene),
+        }
+    }
+}

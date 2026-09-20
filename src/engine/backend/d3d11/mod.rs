@@ -253,6 +253,12 @@ impl Backend {
 
     pub(in crate::engine) fn remove_source(&self, name: &str) {
         self.compositor.remove_source(name);
+        // And from every Scene being composited for another: an item of a
+        // nested Scene draws into that composition rather than into the
+        // Canvas, and removing a name a compositor never took is a no-op.
+        self.scenes
+            .open
+            .each(|composition| composition.extra.remove_source(name));
     }
 
     /// Opens one Scene item's Source, leaving nothing behind if it fails.
