@@ -68,6 +68,13 @@ bottom.](docs/screenshot.png)
   cached for it — what an overlay you have just edited on disk needs — and
   **Refresh when shown** does that every time the source comes back into
   view.
+- **Transitions.** Switching Scenes can be a cut, a fade, or a fade through
+  black, with the length in milliseconds — under the Scenes list, because it
+  is one setting for the whole project. A fade brings the arriving Scene up
+  over the one being left, which is exactly a dissolve wherever the arriving
+  Scene covers the canvas; where it does not, fading through black is the one
+  that is right. Switching again part way through ends the switch that was
+  running and starts the new one.
 - **Crop.** Alt-drag a source's handle to cut into its picture instead of
   resizing it: the dragged edge moves, the opposite one stays, and what is
   being cut off shows faintly behind while you aim. Alt+double-click puts an
@@ -291,9 +298,11 @@ has no such requirement.
 This records and it broadcasts, but it is not everything OBS is. Worth
 knowing before you try it:
 
+- **One transition for the project**, rather than one per Scene, and three
+  to choose from. A stinger — a clip played over the switch — is not one of
+  them.
 - **Ten source kinds.** Display Capture, Window Capture, Video Capture,
   Media File, Network Stream, Image, Drawing, Color, Text and Browser.
-- **No transitions.** Switching Scenes is a cut.
 - **No Studio Mode**, so there is no separate preview of what you are about
   to cut to.
 - **A Scene cannot be a source in another Scene**, and there are no groups:

@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::domain::SceneId;
+use crate::domain::{MAX_TRANSITION_MS, MIN_TRANSITION_MS, SceneId, Transition, TransitionKind};
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::project::{ProjectCommand, SceneCommand};
 use crate::snapshots::ScenesSnapshot;
@@ -41,9 +41,12 @@ pub(in crate::ui) fn show(
         state.rename = None;
     }
 
-    // Taken before the strip is shown, so the list gets a `Ui` that cannot
-    // reach the buttons — see `toolbar::reserve_list`.
-    let mut list = toolbar::reserve_list(ui, "scenes_list_area");
+    // Taken before either strip is shown, so the list gets a `Ui` that
+    // cannot reach them — see `toolbar::reserve_list_below`. The transition
+    // row is added first because a bottom panel takes the bottom: added
+    // after the buttons it would sit above them.
+    let mut list = toolbar::reserve_list_below(ui, "scenes_list_area", TRANSITION_ROW_HEIGHT);
+    show_transition(ui, snapshot, i18n, actions);
     show_toolbar(ui, snapshot, i18n, actions);
 
     toolbar::scroll_content(&mut list, "scenes_list", |ui| {
@@ -217,4 +220,84 @@ fn show_toolbar(
 
 fn scene_action(command: SceneCommand) -> UiAction {
     UiAction::Project(ProjectCommand::Scene(command))
+}
+
+/// How tall the row under the buttons is. A combo box and a number field,
+/// with the same air around them the buttons have.
+const TRANSITION_ROW_HEIGHT: f32 = 30.0;
+
+/// What the number field needs before it starts clipping its own suffix.
+const DURATION_WIDTH: f32 = 62.0;
+
+/// What a Scene switch does, under the list it applies to.
+///
+/// The kind is written the moment it is picked. The length is written when
+/// the drag ends, the way every other number here is: a drag through a second
+/// of values is one setting, not four hundred, and what is being dragged is
+/// kept in egui's own memory meanwhile — without that the field reads back
+/// the stored value every frame and will not move at all.
+fn show_transition(
+    ui: &mut egui::Ui,
+    snapshot: &ScenesSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    toolbar::row(ui, "scenes_transition", TRANSITION_ROW_HEIGHT, |ui| {
+        let stored = snapshot.transition;
+        ui.label(i18n.text(TextKey::SceneTransition));
+
+        let held = egui::Id::new("scene-transition-ms");
+        let width = (ui.available_width() - DURATION_WIDTH - ui.spacing().item_spacing.x).max(60.0);
+        egui::ComboBox::from_id_salt("scene-transition-kind")
+            .width(width)
+            .selected_text(kind_label(stored.kind, i18n))
+            .show_ui(ui, |ui| {
+                for kind in TransitionKind::ALL {
+                    if ui
+                        .selectable_label(stored.kind == kind, kind_label(kind, i18n))
+                        .clicked()
+                        && stored.kind != kind
+                    {
+                        actions.push(scene_action(SceneCommand::SetTransition(Transition {
+                            kind,
+                            ..stored
+                        })));
+                    }
+                }
+            });
+
+        // Dimmed rather than hidden for a cut: what it would be is worth
+        // seeing while deciding whether to turn one on.
+        let mut milliseconds = ui
+            .data(|data| data.get_temp::<u32>(held))
+            .unwrap_or(stored.milliseconds);
+        let field = ui.add_enabled(
+            stored.kind.is_animated(),
+            egui::DragValue::new(&mut milliseconds)
+                .range(MIN_TRANSITION_MS..=MAX_TRANSITION_MS)
+                .speed(5)
+                .suffix(" ms"),
+        );
+        if field.changed() {
+            ui.data_mut(|data| data.insert_temp(held, milliseconds));
+        }
+        if field.drag_stopped() || field.lost_focus() {
+            ui.data_mut(|data| data.remove_temp::<u32>(held));
+            if milliseconds != stored.milliseconds {
+                actions.push(scene_action(SceneCommand::SetTransition(Transition {
+                    milliseconds,
+                    ..stored
+                })));
+            }
+        }
+        field.on_hover_text(i18n.text(TextKey::SceneTransitionLength));
+    });
+}
+
+fn kind_label(kind: TransitionKind, i18n: &LocalizationManager) -> std::borrow::Cow<'_, str> {
+    i18n.text(match kind {
+        TransitionKind::Cut => TextKey::SceneTransitionCut,
+        TransitionKind::Fade => TextKey::SceneTransitionFade,
+        TransitionKind::FadeToBlack => TextKey::SceneTransitionFadeToBlack,
+    })
 }

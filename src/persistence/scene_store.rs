@@ -1,6 +1,6 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::domain::{Scene, SceneId};
+use crate::domain::{Scene, SceneId, Transition, TransitionKind};
 
 use super::PersistenceResult;
 
@@ -22,6 +22,47 @@ impl SceneStore {
 
     pub(crate) fn selected_scene_id(connection: &Connection) -> PersistenceResult<Option<SceneId>> {
         selected_scene_id(connection)
+    }
+
+    /// What a Scene switch does, as the project holds it.
+    ///
+    /// A kind this build does not know — a project written by a newer one —
+    /// reads as a cut rather than failing the whole snapshot: an unswitched
+    /// Scene is worse than an unfamiliar switch.
+    pub(crate) fn transition(connection: &Connection) -> PersistenceResult<Transition> {
+        let (kind, milliseconds) = connection.query_row(
+            "SELECT transition_kind, transition_ms FROM app_state WHERE id = 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        Ok(Transition {
+            kind: TransitionKind::from_storage_name(&kind).unwrap_or_default(),
+            milliseconds: milliseconds.clamp(
+                i64::from(crate::domain::MIN_TRANSITION_MS),
+                i64::from(crate::domain::MAX_TRANSITION_MS),
+            ) as u32,
+        })
+    }
+
+    /// Both halves at once, because the dock writes whichever the user
+    /// touched and the column for the other must not be left behind.
+    pub(crate) fn set_transition(
+        transaction: &Transaction<'_>,
+        transition: Transition,
+    ) -> PersistenceResult<()> {
+        transaction.execute(
+            "UPDATE app_state
+                SET transition_kind = ?1, transition_ms = ?2
+              WHERE id = 1",
+            params![
+                transition.kind.storage_name(),
+                transition.milliseconds.clamp(
+                    crate::domain::MIN_TRANSITION_MS,
+                    crate::domain::MAX_TRANSITION_MS
+                )
+            ],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn add(transaction: &Transaction<'_>) -> PersistenceResult<SceneId> {
@@ -287,6 +328,50 @@ mod tests {
         selected_scene_id(database.connection())
             .unwrap()
             .expect("a new project opens with a Scene selected")
+    }
+
+    /// A new project cuts, which is what switching Scenes has always done
+    /// here, and both halves of a transition survive being written and read
+    /// back — a fade that came back as a cut would be a setting that does
+    /// nothing.
+    #[test]
+    fn a_project_cuts_until_it_is_told_otherwise() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+
+        assert_eq!(
+            SceneStore::transition(database.connection()).unwrap(),
+            Transition::default(),
+            "a new project cuts, at the default length"
+        );
+
+        let fade = Transition {
+            kind: TransitionKind::FadeToBlack,
+            milliseconds: 750,
+        };
+        database
+            .transaction(|transaction| SceneStore::set_transition(transaction, fade))
+            .unwrap();
+        assert_eq!(SceneStore::transition(database.connection()).unwrap(), fade);
+
+        // Back to a cut, which must not take the length with it: turning a
+        // fade off and on again should find it as it was.
+        database
+            .transaction(|transaction| {
+                SceneStore::set_transition(
+                    transaction,
+                    Transition {
+                        kind: TransitionKind::Cut,
+                        ..fade
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            SceneStore::transition(database.connection())
+                .unwrap()
+                .milliseconds,
+            750
+        );
     }
 
     fn source_ids(database: &ProjectDatabase, scene_id: SceneId) -> Vec<i64> {

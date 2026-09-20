@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 30;
+const SCHEMA_VERSION: i64 = 31;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -611,6 +611,22 @@ fn migrate(
                 CHECK (refresh_when_shown IN (0, 1));
 
             PRAGMA user_version = 30;",
+        )?;
+    }
+    if step(31) {
+        // How the Canvas gets from one Scene to the next. On `app_state`
+        // because it is one answer for the project, like the Scene that is
+        // selected; a cut for every project there is, which is what
+        // switching has done until now. The length is kept whatever the kind
+        // is, so turning a fade off and on again does not forget it.
+        transaction.execute_batch(
+            "ALTER TABLE app_state
+                ADD COLUMN transition_kind TEXT NOT NULL DEFAULT 'cut';
+            ALTER TABLE app_state
+                ADD COLUMN transition_ms INTEGER NOT NULL DEFAULT 300
+                CHECK (transition_ms BETWEEN 50 AND 3000);
+
+            PRAGMA user_version = 31;",
         )?;
     }
     transaction.commit()?;

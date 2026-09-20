@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::domain::{
     AudioFilter, Crop, Filter, SceneCanvas, SceneId, SceneItemId, SourceKind, SourceSettings,
-    Transform,
+    Transform, Transition,
 };
 
 #[derive(Clone)]
@@ -26,6 +26,11 @@ pub struct SourcesSnapshot {
     /// be able to say that before sending the rename, and the items above are
     /// only some of the names there are.
     pub names: HashSet<String>,
+    /// What the switch to this Scene should do — see [`Transition`]. Carried
+    /// here rather than asked of the project by the engine: this is the
+    /// snapshot that says the Scene changed, so it is the one that has to say
+    /// how.
+    pub transition: Transition,
 }
 
 impl Default for SourcesSnapshot {
@@ -37,6 +42,7 @@ impl Default for SourcesSnapshot {
             items: Vec::new(),
             live_items: HashSet::new(),
             names: HashSet::new(),
+            transition: Transition::default(),
         }
     }
 }

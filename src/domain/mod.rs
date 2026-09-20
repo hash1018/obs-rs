@@ -69,7 +69,7 @@ pub use filter::{
     ChromaKeyMethod, ChromaKeySettings, ColorCorrectionSettings, Filter, FilterId, FilterKind,
     FilterSettings, LumaKeySettings,
 };
-pub use scene::{Scene, SceneId};
+pub use scene::{MAX_TRANSITION_MS, MIN_TRANSITION_MS, Scene, SceneId, Transition, TransitionKind};
 pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
 pub use source::{
     BrowserSourceSettings, ClockFormat, ColorSourceSettings, DEFAULT_BROWSER_FPS,

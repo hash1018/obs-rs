@@ -249,4 +249,8 @@ pub enum SceneCommand {
     MoveDown(SceneId),
     Rename(SceneId, String),
     Select(SceneId),
+    /// What switching Scenes does, for the whole project — see
+    /// [`crate::domain::Transition`]. Both halves at once, since the dock
+    /// sends whichever was touched with the other beside it.
+    SetTransition(crate::domain::Transition),
 }

@@ -32,8 +32,19 @@ const SIDE_MARGIN: i8 = 4;
 /// height — that arithmetic is only correct until one of the three numbers
 /// changes, and it fails silently by a few pixels when it stops being.
 pub(super) fn strip(ui: &mut egui::Ui, id: &'static str, contents: impl FnOnce(&mut egui::Ui)) {
+    row(ui, id, HEIGHT, contents)
+}
+
+/// A strip of a height of its own, for a dock whose bottom is not only
+/// buttons — the Scenes dock's transition row.
+pub(super) fn row(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    height: f32,
+    contents: impl FnOnce(&mut egui::Ui),
+) {
     egui::Panel::bottom(id)
-        .exact_size(HEIGHT)
+        .exact_size(height)
         .resizable(false)
         .frame(
             egui::Frame::new()
@@ -168,8 +179,14 @@ fn paint_icon(ui: &egui::Ui, response: &egui::Response, icon: ToolIcon) {
 /// than making it reachable. What bounds the scroll area is
 /// [`scroll_content`], and a list has to be built with both.
 pub(super) fn reserve_list(ui: &mut egui::Ui, id: &'static str) -> egui::Ui {
+    reserve_list_below(ui, id, 0.0)
+}
+
+/// The same, for a dock with something else under its buttons: `extra` is
+/// what that something is tall, and the list stops above both.
+pub(super) fn reserve_list_below(ui: &mut egui::Ui, id: &'static str, extra: f32) -> egui::Ui {
     let mut rect = ui.available_rect_before_wrap().intersect(ui.max_rect());
-    rect.max.y = (rect.max.y - HEIGHT).max(rect.min.y);
+    rect.max.y = (rect.max.y - HEIGHT - extra).max(rect.min.y);
     let mut list = ui.new_child(
         egui::UiBuilder::new()
             .id_salt(id)

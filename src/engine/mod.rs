@@ -980,6 +980,8 @@ fn run(
 
     let mut open = HashMap::new();
     let mut scene = SourcesSnapshot::default();
+    // The Scene switch being drawn, while one is — see [`SceneTransition`].
+    let mut transition: Option<SceneTransition> = None;
     let mut looked_for_missing = Instant::now();
     // The reading the next one is measured against — see `engine::load`.
     let mut last_load = (Instant::now(), load::Load::default());
@@ -989,7 +991,38 @@ fn run(
     // start does, so one can never land half-way through a recording being
     // opened.
     while !stop.load(Ordering::Acquire) {
-        match commands.recv_timeout(Duration::from_millis(100)) {
+        // Before the wait, so the wait itself can be the transition's clock:
+        // a fade is pushed a tick at a time and ends by being reconciled
+        // once more, which is where the Scene it left is finally stopped.
+        let waiting = match &transition {
+            Some(running) if running.finished() => {
+                tracing::debug!("transition: done after {:?}", running.started.elapsed());
+                transition = None;
+                reconcile(
+                    &engine,
+                    recording.mixer_handle(),
+                    recording.monitor_handle(),
+                    &mut open,
+                    &scene,
+                    None,
+                );
+                Duration::from_millis(100)
+            }
+            Some(running) => {
+                running.tick(&open);
+                reconcile(
+                    &engine,
+                    recording.mixer_handle(),
+                    recording.monitor_handle(),
+                    &mut open,
+                    &scene,
+                    Some(running),
+                );
+                TRANSITION_TICK
+            }
+            None => Duration::from_millis(100),
+        };
+        match commands.recv_timeout(waiting) {
             Ok(command) => {
                 let mut reconciled = apply_command(
                     &engine,
@@ -997,6 +1030,7 @@ fn run(
                     &mut scene,
                     &published,
                     &mut recording,
+                    &mut transition,
                     command,
                 );
                 // Whatever else is already waiting, so a gesture's newer
@@ -1008,6 +1042,7 @@ fn run(
                         &mut scene,
                         &published,
                         &mut recording,
+                        &mut transition,
                         next,
                     );
                 }
@@ -1620,10 +1655,19 @@ fn apply_command(
     scene: &mut SourcesSnapshot,
     published: &Published,
     recording: &mut OutputState,
+    transition: &mut Option<SceneTransition>,
     command: EngineCommand,
 ) -> bool {
     match command {
         EngineCommand::Scene(snapshot) => {
+            if snapshot.scene_id != scene.scene_id {
+                // A switch made while one is still running ends that one
+                // where it stands: the Scene it was leaving is dropped here
+                // and stopped by the `reconcile` below, and the Scene it was
+                // arriving at is the one now being left. Three Scenes drawn
+                // at once would be neither what was asked for nor legible.
+                *transition = SceneTransition::begin(scene, &snapshot, open);
+            }
             *scene = *snapshot;
             reconcile(
                 engine,
@@ -1631,6 +1675,7 @@ fn apply_command(
                 recording.monitor_handle(),
                 open,
                 scene,
+                transition.as_ref(),
             );
             true
         }
@@ -2363,12 +2408,173 @@ fn refresh_filters(source: &mut OpenSource, item: &SceneItemSnapshot) -> bool {
     }
 }
 
+/// How often a transition's opacities are pushed while one runs.
+///
+/// Faster than the loop's ordinary wait, which is a tenth of a second and
+/// would draw a three-hundred-millisecond fade in three steps. A tick costs
+/// one call per layer being left.
+const TRANSITION_TICK: Duration = Duration::from_millis(8);
+
+/// How far into a [`TransitionKind::Fade`] the Scene being left is held at
+/// full opacity.
+///
+/// It is held because a dissolve done in one compositing pass is exact only
+/// while what is arriving is drawn over something: the arriving Scene at
+/// opacity `t` over the leaving one at full is `(1-t)·leaving + t·arriving`,
+/// which is the dissolve. Fading both at once would instead darken the
+/// middle of every transition.
+///
+/// What the hold costs is the other case: where the arriving Scene does not
+/// cover the Canvas, the one underneath would be there at the end. So the
+/// last of the transition takes it away — a fast fade rather than a cut, and
+/// invisible wherever the arriving Scene covers what is under it.
+const FADE_HOLD: f32 = 0.85;
+
+/// How far below the arriving Scene's layers the leaving ones are put.
+///
+/// Larger than any z the Canvas itself uses, so a Scene being left is behind
+/// every layer of the Scene arriving whatever either holds.
+const LEAVING_Z: i32 = -1_000_000;
+
+/// A Scene switch, while it is being drawn.
+///
+/// The Scene being left keeps its Sources running and its layers placed for
+/// as long as this lives; what changes per tick is opacity. When it ends the
+/// next `reconcile` finds those items in no Scene and stops them, which is
+/// what a cut does at once.
+struct SceneTransition {
+    kind: crate::domain::TransitionKind,
+    started: Instant,
+    duration: Duration,
+    /// The layers being left, as they were placed, already pushed behind
+    /// what is arriving.
+    leaving: Vec<(SceneItemId, media_pp::elements::VideoLayer)>,
+}
+
+impl SceneTransition {
+    /// The switch that has just been asked for, or `None` where it is a cut,
+    /// where there is no Scene to leave, or where nothing of the old one is
+    /// open to leave.
+    fn begin(
+        leaving_scene: &SourcesSnapshot,
+        arriving: &SourcesSnapshot,
+        open: &HashMap<SceneItemId, SourceState>,
+    ) -> Option<Self> {
+        let transition = arriving.transition;
+        if !transition.kind.is_animated() || leaving_scene.scene_id.is_none() {
+            return None;
+        }
+        let count = leaving_scene.items.len();
+        let leaving: Vec<_> = leaving_scene
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.visible && matches!(open.get(&item.id), Some(SourceState::Open(_)))
+            })
+            .map(|(index, item)| {
+                let mut layer = layer_for(
+                    item,
+                    item.transform,
+                    item.crop,
+                    (count - index) as i32 + LEAVING_Z,
+                );
+                // Whatever the item's own alpha was is where its fade starts.
+                layer.opacity = layer.opacity.clamp(0.0, 1.0);
+                (item.id, layer)
+            })
+            .collect();
+        if leaving.is_empty() {
+            return None;
+        }
+        tracing::debug!(
+            "transition: {:?} over {:?}, leaving {} layer(s)",
+            transition.kind,
+            transition.duration(),
+            leaving.len()
+        );
+        Some(Self {
+            kind: transition.kind,
+            started: Instant::now(),
+            duration: transition.duration(),
+            leaving,
+        })
+    }
+
+    /// How far through it is, from nothing to one.
+    fn progress(&self) -> f32 {
+        let elapsed = self.started.elapsed().as_secs_f32();
+        let duration = self.duration.as_secs_f32();
+        match duration > 0.0 {
+            true => (elapsed / duration).clamp(0.0, 1.0),
+            false => 1.0,
+        }
+    }
+
+    fn finished(&self) -> bool {
+        self.started.elapsed() >= self.duration
+    }
+
+    /// What the arriving Scene's layers are multiplied by.
+    fn arriving(&self) -> f32 {
+        ramps(self.kind, self.progress()).0
+    }
+
+    /// What the leaving Scene's layers are multiplied by.
+    fn leaving_opacity(&self) -> f32 {
+        ramps(self.kind, self.progress()).1
+    }
+
+    /// Whether this item belongs to the Scene being left, and so must not be
+    /// stopped or hidden while the transition runs.
+    fn holds(&self, item: SceneItemId) -> bool {
+        self.leaving.iter().any(|(id, _)| *id == item)
+    }
+
+    /// Pushes this moment's opacities to the layers being left.
+    fn tick(&self, open: &HashMap<SceneItemId, SourceState>) {
+        let fade = self.leaving_opacity();
+        for (id, layer) in &self.leaving {
+            let Some(SourceState::Open(source)) = open.get(id) else {
+                continue;
+            };
+            let mut layer = *layer;
+            layer.opacity *= fade;
+            let _ = source.layer.set_layer(layer);
+        }
+    }
+}
+
+/// What the arriving and the leaving Scene are drawn at, `t` of the way
+/// through a transition.
+///
+/// A function of the fraction alone so the shape of a transition can be read
+/// and tested without waiting one out. See [`FADE_HOLD`] for why a fade holds
+/// the Scene it is leaving at full rather than fading both at once.
+fn ramps(kind: crate::domain::TransitionKind, t: f32) -> (f32, f32) {
+    use crate::domain::TransitionKind;
+
+    let t = t.clamp(0.0, 1.0);
+    match kind {
+        // Out over the first half, in over the second, with black in the
+        // middle where neither is drawn.
+        TransitionKind::FadeToBlack => (
+            (t * 2.0 - 1.0).clamp(0.0, 1.0),
+            (1.0 - t * 2.0).clamp(0.0, 1.0),
+        ),
+        // A cut never reaches here — it starts no transition at all.
+        TransitionKind::Cut | TransitionKind::Fade => {
+            (t, ((1.0 - t) / (1.0 - FADE_HOLD)).clamp(0.0, 1.0))
+        }
+    }
+}
 fn reconcile(
     engine: &Engine<'_>,
     mixer: Option<&media_pp::elements::MixerHandle>,
     monitor: Option<media_pp::elements::MixerHandle>,
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
+    transition: Option<&SceneTransition>,
 ) {
     // Sources whose filter chain is no longer the one they were opened with.
     // Collected rather than reopened here: the arm that notices holds a
@@ -2378,7 +2584,12 @@ fn reconcile(
     for (index, item) in snapshot.items.iter().enumerate() {
         // The snapshot is ordered front-most first, and the compositor draws
         // larger z later, so the two run opposite ways.
-        let layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
+        let mut layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
+        // A Scene arriving comes up from nothing over the Scene being left,
+        // which is still drawn behind it — see [`SceneTransition`].
+        if let Some(transition) = transition {
+            layer.opacity *= transition.arriving();
+        }
         match open.get_mut(&item.id) {
             Some(SourceState::Open(source)) => {
                 let _ = source.layer.set_layer(layer);
@@ -2418,6 +2629,13 @@ fn reconcile(
         let SourceState::Open(source) = state else {
             continue;
         };
+        // An item of the Scene being left keeps running and keeps its layer
+        // for as long as the transition draws it. Stopping it here is what
+        // happens on the pass after the transition ends, which is also all a
+        // cut ever did.
+        if transition.is_some_and(|transition| transition.holds(*id)) {
+            continue;
+        }
         let item = snapshot.items.iter().find(|item| item.id == *id);
         let showing = item.is_some();
         // Two questions now, where there used to be one. Leaving the Scene
@@ -2601,6 +2819,53 @@ fn with_the_same_camera(scene: &SourcesSnapshot, item_id: SceneItemId) -> Vec<Sc
 
 #[cfg(test)]
 mod tests {
+
+    /// A fade is a dissolve, which in one compositing pass means the Scene
+    /// arriving comes up over the Scene being left rather than the two
+    /// crossing — so the one being left stays at full until the very end,
+    /// and only then goes, taking with it whatever the arriving Scene does
+    /// not cover.
+    #[test]
+    fn a_fade_brings_one_scene_up_over_the_other() {
+        use crate::domain::TransitionKind::Fade;
+
+        assert_eq!(ramps(Fade, 0.0), (0.0, 1.0), "nothing has happened yet");
+        assert_eq!(ramps(Fade, 0.5), (0.5, 1.0), "half arrived, none left");
+        assert_eq!(ramps(Fade, 1.0), (1.0, 0.0), "arrived, and the old gone");
+        let (arriving, leaving) = ramps(Fade, FADE_HOLD);
+        assert_eq!(
+            (arriving, leaving),
+            (FADE_HOLD, 1.0),
+            "the hold ends where the old Scene starts to go"
+        );
+    }
+
+    /// Out to black and in again: the Scene being left is gone by halfway,
+    /// the one arriving has not started, and the Canvas is what it draws when
+    /// nothing is drawn on it.
+    #[test]
+    fn a_fade_to_black_leaves_a_moment_with_neither_scene() {
+        use crate::domain::TransitionKind::FadeToBlack;
+
+        assert_eq!(ramps(FadeToBlack, 0.0), (0.0, 1.0));
+        assert_eq!(ramps(FadeToBlack, 0.25), (0.0, 0.5), "on the way out");
+        assert_eq!(ramps(FadeToBlack, 0.5), (0.0, 0.0), "black");
+        assert_eq!(ramps(FadeToBlack, 0.75), (0.5, 0.0), "on the way in");
+        assert_eq!(ramps(FadeToBlack, 1.0), (1.0, 0.0));
+    }
+
+    /// Neither ramp may leave the range a layer's opacity is, whatever it is
+    /// asked — a clock that jumped, a duration of zero.
+    #[test]
+    fn a_ramp_stays_within_one_opacity() {
+        for kind in crate::domain::TransitionKind::ALL {
+            for step in -2..=12 {
+                let (arriving, leaving) = ramps(kind, step as f32 / 10.0);
+                assert!((0.0..=1.0).contains(&arriving), "{kind:?} at {step}");
+                assert!((0.0..=1.0).contains(&leaving), "{kind:?} at {step}");
+            }
+        }
+    }
     use super::*;
     use crate::domain::{SourceKind, WindowCaptureTarget};
 

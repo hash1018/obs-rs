@@ -283,6 +283,11 @@ text_keys! {
     SceneNameEmpty                => "scene-name-empty";
     SceneNameDuplicate            => "scene-name-duplicate";
     SceneAdd                      => "scene-add";
+    SceneTransition               => "scene-transition";
+    SceneTransitionCut            => "scene-transition-cut";
+    SceneTransitionFade           => "scene-transition-fade";
+    SceneTransitionFadeToBlack    => "scene-transition-fade-to-black";
+    SceneTransitionLength         => "scene-transition-length";
     SceneRemove                   => "scene-remove";
     SceneDuplicate                => "scene-duplicate";
     SceneMoveUp                   => "scene-move-up";

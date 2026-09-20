@@ -377,6 +377,9 @@ fn handle_scene_command(
         SceneCommand::MoveDown(scene_id) => SceneStore::move_down(transaction, scene_id),
         SceneCommand::Rename(scene_id, name) => SceneStore::rename(transaction, scene_id, &name),
         SceneCommand::Select(scene_id) => SceneStore::select(transaction, scene_id),
+        SceneCommand::SetTransition(transition) => {
+            SceneStore::set_transition(transaction, transition)
+        }
     })
 }
 
@@ -389,6 +392,7 @@ fn scene_snapshot(database: &ProjectDatabase) -> PersistenceResult<ScenesSnapsho
     Ok(ScenesSnapshot {
         items,
         selected_scene_id,
+        transition: SceneStore::transition(database.connection())?,
     })
 }
 
@@ -402,6 +406,7 @@ fn sources_snapshot(
         return Ok(SourcesSnapshot {
             live_items,
             names,
+            transition: scenes.transition,
             ..SourcesSnapshot::default()
         });
     };
@@ -460,6 +465,7 @@ fn sources_snapshot(
         items,
         live_items,
         names,
+        transition: scenes.transition,
     })
 }
 
