@@ -359,8 +359,9 @@ pub(in crate::engine) fn open(
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
         // A file has no deadline, so a software decode may run whole
-        // pictures ahead on every thread.
-        DecodeThreading::default(),
+        // pictures ahead on every thread where that is faster — the
+        // choice `Auto` makes by codec.
+        Some(DecodeThreading::default()),
     )?;
     // NV12 from the decoder, bridged to BGRA only while there are filters —
     // the camera's arrangement, and the reason an unfiltered file still goes
@@ -488,8 +489,9 @@ pub(in crate::engine) fn open(
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
         // A file has no deadline, so a software decode may run whole
-        // pictures ahead on every thread.
-        DecodeThreading::default(),
+        // pictures ahead on every thread where that is faster — the
+        // choice `Auto` makes by codec.
+        Some(DecodeThreading::default()),
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,

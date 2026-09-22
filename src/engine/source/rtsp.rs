@@ -255,7 +255,7 @@ pub(in crate::engine) fn open(
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
     use media_pp::elements::{
-        D3d11VideoCompositorInput, DecodeLatency, DecodeTarget, DecodeThreading, VideoDecodeBin,
+        D3d11VideoCompositorInput, DecodeTarget, DecodeThreadKind, DecodeThreading, VideoDecodeBin,
     };
 
     use crate::engine::backend::RunningSource;
@@ -281,10 +281,10 @@ pub(in crate::engine) fn open(
         },
         // Live: a software decode must not hold pictures back to go
         // faster, which would be latency added to a camera's own.
-        DecodeThreading {
+        Some(DecodeThreading {
             threads: None,
-            latency: DecodeLatency::Low,
-        },
+            kind: DecodeThreadKind::Slice,
+        }),
     )?;
     // Bridged to BGRA only while there are filters, as a media file's is.
     let FilledRack { rack, filters } = super::filled_rack(
@@ -361,7 +361,7 @@ pub(in crate::engine) fn open(
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
     use media_pp::elements::{
-        CudaVideoCompositorInput, DecodeLatency, DecodeTarget, DecodeThreading, VideoDecodeBin,
+        CudaVideoCompositorInput, DecodeTarget, DecodeThreadKind, DecodeThreading, VideoDecodeBin,
     };
 
     use crate::engine::backend::RunningSource;
@@ -391,10 +391,10 @@ pub(in crate::engine) fn open(
         },
         // Live: a software decode must not hold pictures back to go
         // faster, which would be latency added to a camera's own.
-        DecodeThreading {
+        Some(DecodeThreading {
             threads: None,
-            latency: DecodeLatency::Low,
-        },
+            kind: DecodeThreadKind::Slice,
+        }),
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
