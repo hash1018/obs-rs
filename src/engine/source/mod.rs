@@ -182,6 +182,19 @@ pub(in crate::engine) fn rack_size(
     decoded.unwrap_or_else(|| hinted_size(item))
 }
 
+/// What a decoded picture's rack starts from: NV12, as a hardware decoder
+/// hands it over and as a software one is uploaded, or BGRA where the stream
+/// has an alpha channel to keep — a ProRes 4444 or an animation codec — or a
+/// side NV12 cannot have. See [`filters::ChainFormat`].
+pub(in crate::engine) fn decoded_chain_format(
+    decoder: &media_pp::elements::VideoDecodeBin,
+) -> filters::ChainFormat {
+    match decoder.output_format() {
+        Some(media_pp::ffmpeg::format::Pixel::BGRA) => filters::ChainFormat::Bgra,
+        _ => filters::ChainFormat::Nv12,
+    }
+}
+
 /// What a [`PushedSurface`] last put on the compositor.
 #[derive(PartialEq)]
 pub(in crate::engine) enum PushedContent {

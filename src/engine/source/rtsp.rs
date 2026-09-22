@@ -16,8 +16,8 @@
 //! # Shape
 //!
 //! ```text
-//! RtspSource ┬ video ─ Queue ─ hardware decoder ─ Queue ─ Pacer ─ compositor input
-//!            └ audio ─ SwDecoder ─ Queue ────────────────── Pacer ─ mixer input
+//! RtspSource ┬ video ─ Queue ─ VideoDecodeBin ─ Queue ─ Pacer ─ compositor input
+//!            └ audio ─ SwDecoder ─ Queue ────────────── Pacer ─ mixer input
 //! ```
 //!
 //! The same two branches off one source a media file has, and for the same
@@ -60,7 +60,7 @@ use crate::domain::RtspSourceSettings;
 use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
 use crate::engine::source::sound::{self, Sound, Track};
-use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, filters, input_name};
+use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Decoded frames held between the decoder and the `Pacer`.
@@ -254,7 +254,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{D3d11Decoder, D3d11VideoCompositorInput};
+    use media_pp::elements::{D3d11VideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -270,18 +270,20 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
-    let video_decoder = D3d11Decoder::new(
-        format!("{name}-video-decoder"),
+    let video_decoder = VideoDecodeBin::open(
+        format!("{name}-video"),
         chosen.video_params,
-        device,
-        HW_FRAME_BUDGET,
+        DecodeTarget::D3d11 {
+            device: device.clone(),
+            downstream_hw_frames: HW_FRAME_BUDGET,
+        },
     )?;
     // Bridged to BGRA only while there are filters, as a media file's is.
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,
         context,
-        filters::ChainFormat::Nv12,
+        super::decoded_chain_format(&video_decoder),
         super::rack_size(size, item),
         item,
     )?;
@@ -350,7 +352,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{CudaDecoder, CudaVideoCompositorInput};
+    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -363,22 +365,25 @@ pub(in crate::engine) fn open(
     };
     let chosen = choose(&source, &streams, mixer)?;
 
-    // NVDEC hands out NV12 in CUDA memory, which is one of the two the
-    // compositor draws from — so there is no `CudaConverter` here, unlike the
-    // Sources that upload BGRA of their own.
+    // NV12 in CUDA memory, from NVDEC or uploaded after a software decode,
+    // is one of the two the compositor draws from — so there is no
+    // `CudaConverter` here, unlike the Sources that upload BGRA of their own;
+    // a file with alpha arrives as BGRA, the other one.
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
-    let video_decoder = CudaDecoder::new(
-        format!("{name}-video-decoder"),
+    let video_decoder = VideoDecodeBin::open(
+        format!("{name}-video"),
         chosen.video_params,
-        device,
-        HW_FRAME_BUDGET,
+        DecodeTarget::Cuda {
+            device: media_pp::elements::CudaDevice::clone(device),
+            downstream_hw_frames: HW_FRAME_BUDGET,
+        },
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,
-        filters::ChainFormat::Nv12,
+        super::decoded_chain_format(&video_decoder),
         super::rack_size(size, item),
         item,
     )?;

@@ -15,8 +15,8 @@
 //! # Shape
 //!
 //! ```text
-//! FileDemuxer ┬ video ─ Queue ─ hardware decoder ─ Queue ─ Pacer ─ compositor input
-//!             └ audio ─ SwDecoder ─ Queue ──────────────── Pacer ─ mixer input
+//! FileDemuxer ┬ video ─ Queue ─ VideoDecodeBin ─ Queue ─ Pacer ─ compositor input
+//!             └ audio ─ SwDecoder ─ Queue ────────────── Pacer ─ mixer input
 //! ```
 //!
 //! One pipeline, two branches off one demuxer. That is what keeps the picture
@@ -26,11 +26,15 @@
 //! t=0 at whenever they happened to start, which is A/V drift built in.
 //!
 //! Neither branch decodes the same way. Video is decoded on the GPU straight
-//! into the surfaces the compositor draws from, so its frames never reach
-//! system memory; both compositors take NV12 device frames directly, so there
-//! is nothing to convert between the decoder and the layer — until the file
-//! has filters, whose rack sits just before the compositor input and bridges
-//! to BGRA for as long as it holds any. Audio has no such path and no reason
+//! into the surfaces the compositor draws from wherever the GPU takes the
+//! stream, so its frames never reach system memory; both compositors take NV12
+//! device frames directly, so there is nothing to convert between the decoder
+//! and the layer — until the file has filters, whose rack sits just before the
+//! compositor input and bridges to BGRA for as long as it holds any. What the
+//! GPU does not take — a codec it has no decoder for, 10-bit or 4:4:4, a
+//! profile it refuses once asked — `VideoDecodeBin` decodes in software and
+//! uploads, as NV12, or as BGRA where the file has alpha to keep, which then
+//! reaches the compositor as the transparency it was made with. Audio has no such path and no reason
 //! to want one.
 //!
 //! The `Queue` in each branch is where decode runs ahead: a `Pacer` sleeps
@@ -70,7 +74,7 @@ use crate::domain::MediaFileSettings;
 use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
 use crate::engine::source::sound::{self, Sound, Track};
-use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, filters, input_name};
+use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
 /// How much either branch may hold while the other is being read.
@@ -320,7 +324,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{D3d11Decoder, D3d11VideoCompositorInput};
+    use media_pp::elements::{D3d11VideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -345,11 +349,13 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
-    let video_decoder = D3d11Decoder::new(
-        format!("{name}-video-decoder"),
+    let video_decoder = VideoDecodeBin::open(
+        format!("{name}-video"),
         chosen.video_params,
-        device,
-        HW_FRAME_BUDGET,
+        DecodeTarget::D3d11 {
+            device: device.clone(),
+            downstream_hw_frames: HW_FRAME_BUDGET,
+        },
     )?;
     // NV12 from the decoder, bridged to BGRA only while there are filters —
     // the camera's arrangement, and the reason an unfiltered file still goes
@@ -358,7 +364,7 @@ pub(in crate::engine) fn open(
         &name,
         device,
         context,
-        filters::ChainFormat::Nv12,
+        super::decoded_chain_format(&video_decoder),
         super::rack_size(size, item),
         item,
     )?;
@@ -444,7 +450,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{CudaDecoder, CudaVideoCompositorInput};
+    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -460,22 +466,25 @@ pub(in crate::engine) fn open(
     let looping = demuxer.looping_handle();
     looping.set_looping(settings.looping);
 
-    // NVDEC hands out NV12 in CUDA memory, which is one of the two the
-    // compositor draws from — so there is no `CudaConverter` here, unlike the
-    // Sources that upload BGRA of their own.
+    // NV12 in CUDA memory, from NVDEC or uploaded after a software decode,
+    // is one of the two the compositor draws from — so there is no
+    // `CudaConverter` here, unlike the Sources that upload BGRA of their own;
+    // a file with alpha arrives as BGRA, the other one.
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
-    let video_decoder = CudaDecoder::new(
-        format!("{name}-video-decoder"),
+    let video_decoder = VideoDecodeBin::open(
+        format!("{name}-video"),
         chosen.video_params,
-        device,
-        HW_FRAME_BUDGET,
+        DecodeTarget::Cuda {
+            device: media_pp::elements::CudaDevice::clone(device),
+            downstream_hw_frames: HW_FRAME_BUDGET,
+        },
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,
-        filters::ChainFormat::Nv12,
+        super::decoded_chain_format(&video_decoder),
         super::rack_size(size, item),
         item,
     )?;
