@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 33;
+const SCHEMA_VERSION: i64 = 34;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -674,6 +674,26 @@ fn migrate(
             UPDATE color_source_settings SET alpha = 255;
 
             PRAGMA user_version = 33;",
+        )?;
+    }
+    if step(34) {
+        // How long one placement takes to come up when it is shown and to go
+        // when it is hidden, in milliseconds. Zero is at once, which is what
+        // every item did before this and what every existing one keeps: a
+        // camera toggled from a key mid-show should not start easing in
+        // because a version changed.
+        //
+        // On the item for the reason opacity is: the same overlay can fade in
+        // one Scene and cut in another.
+        transaction.execute_batch(
+            "ALTER TABLE scene_items
+                ADD COLUMN show_fade_ms INTEGER NOT NULL DEFAULT 0
+                CHECK (show_fade_ms >= 0);
+            ALTER TABLE scene_items
+                ADD COLUMN hide_fade_ms INTEGER NOT NULL DEFAULT 0
+                CHECK (hide_fade_ms >= 0);
+
+            PRAGMA user_version = 34;",
         )?;
     }
     transaction.commit()?;

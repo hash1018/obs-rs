@@ -14,6 +14,7 @@
 
 mod audio;
 mod backend;
+mod fades;
 pub(in crate::engine) mod load;
 mod output;
 mod preview;
@@ -994,6 +995,8 @@ fn run(
     let mut scene = SourcesSnapshot::default();
     // The Scene switch being drawn, while one is — see [`SceneTransition`].
     let mut transition: Option<SceneTransition> = None;
+    // Items coming up or going as they are shown and hidden — see `fades`.
+    let mut fades = fades::ItemFades::default();
     let mut looked_for_missing = Instant::now();
     // The reading the next one is measured against — see `engine::load`.
     let mut last_load = (Instant::now(), load::Load::default());
@@ -1017,6 +1020,7 @@ fn run(
                     &mut open,
                     &scene,
                     None,
+                    &mut fades,
                 );
                 Duration::from_millis(100)
             }
@@ -1029,8 +1033,28 @@ fn run(
                     &mut open,
                     &scene,
                     Some(running),
+                    &mut fades,
                 );
                 TRANSITION_TICK
+            }
+            // An item coming up or going is drawn on the same clock a
+            // transition is, and for as long: the pass that finds its fade
+            // finished is the one that finally hides a layer that was going.
+            None if fades.active() => {
+                reconcile(
+                    &engine,
+                    recording.mixer_handle(),
+                    recording.monitor_handle(),
+                    &mut open,
+                    &scene,
+                    None,
+                    &mut fades,
+                );
+                if fades.active() {
+                    TRANSITION_TICK
+                } else {
+                    Duration::from_millis(100)
+                }
             }
             None => Duration::from_millis(100),
         };
@@ -1043,6 +1067,7 @@ fn run(
                     &published,
                     &mut recording,
                     &mut transition,
+                    &mut fades,
                     command,
                 );
                 // Whatever else is already waiting, so a gesture's newer
@@ -1055,6 +1080,7 @@ fn run(
                         &published,
                         &mut recording,
                         &mut transition,
+                        &mut fades,
                         next,
                     );
                 }
@@ -1668,6 +1694,10 @@ fn stop_replay(engine: &Engine<'_>, state: &mut OutputState, published: &Publish
 
 /// Applies one change, reporting whether the running Sources may have moved
 /// on — a Scene change can start or stop them, a drag never does.
+// What the loop owns and a command can move — the Sources, the Scene, the
+// outputs, and the two things being animated. One struct for them would be a
+// name for "the loop's locals" rather than for anything.
+#[allow(clippy::too_many_arguments)]
 fn apply_command(
     engine: &Engine<'_>,
     open: &mut HashMap<SceneItemId, SourceState>,
@@ -1675,6 +1705,7 @@ fn apply_command(
     published: &Published,
     recording: &mut OutputState,
     transition: &mut Option<SceneTransition>,
+    fades: &mut fades::ItemFades,
     command: EngineCommand,
 ) -> bool {
     match command {
@@ -1695,6 +1726,7 @@ fn apply_command(
                 open,
                 scene,
                 transition.as_ref(),
+                fades,
             );
             true
         }
@@ -2647,7 +2679,10 @@ fn reconcile(
     open: &mut HashMap<SceneItemId, SourceState>,
     snapshot: &SourcesSnapshot,
     transition: Option<&SceneTransition>,
+    fades: &mut fades::ItemFades,
 ) {
+    let now = Instant::now();
+    fades.begin_pass();
     // Sources whose filter chain is no longer the one they were opened with.
     // Collected rather than reopened here: the arm that notices holds a
     // mutable borrow of `open`, and replacing an entry needs another.
@@ -2667,6 +2702,11 @@ fn reconcile(
             if let (Some(transition), Target::Canvas) = (transition, into) {
                 layer.opacity *= transition.arriving();
             }
+            // Coming up or going, where it has just been shown or hidden and
+            // asks to take its time about it — see `fades`.
+            let shown = fades.observe(item, now);
+            layer.visible = shown.visible;
+            layer.opacity *= shown.factor;
             match open.get_mut(&item.id) {
                 // Drawing into the wrong compositor: an item of a Scene that
                 // was being edited on its own was opened against the Canvas,
@@ -2683,7 +2723,18 @@ fn reconcile(
                 Some(SourceState::Open(source)) => {
                     let _ = source.layer.set_layer(layer);
                     refresh_pushed(source, item);
-                    refresh_media_file(source, item, monitor.as_ref());
+                    // A clip that is going keeps its sound until its picture
+                    // has gone, rather than falling silent the moment the
+                    // fade starts — hiding mutes it, and it is not hidden yet.
+                    if shown.visible && !item.visible {
+                        let going = SceneItemSnapshot {
+                            visible: true,
+                            ..item.clone()
+                        };
+                        refresh_media_file(source, &going, monitor.as_ref());
+                    } else {
+                        refresh_media_file(source, item, monitor.as_ref());
+                    }
                     if refresh_filters(source, item) {
                         rebuild.push(item.id);
                     }
@@ -2757,7 +2808,10 @@ fn reconcile(
                 page.set_shut_down_when_hidden(settings.shut_down_when_hidden);
                 page.set_refresh_when_shown(settings.refresh_when_shown);
             }
-            page.set_shown(running && item.is_some_and(|item| item.visible));
+            // Drawn while it goes as well as while it is shown: a page told
+            // it was hidden the moment a fade began would stop painting, or
+            // close altogether, under a picture still on screen.
+            page.set_shown(running && item.is_some_and(|item| fades.drawn(item)));
         }
         if showing != source.showing {
             if !showing {
@@ -2793,6 +2847,8 @@ fn reconcile(
         // `finish_open`.
         false
     });
+
+    fades.end_pass();
 }
 
 /// Where a SceneItem's layer sits on the Canvas, and in what order.
@@ -2991,6 +3047,7 @@ mod tests {
             transform: Transform::default(),
             crop: crate::domain::Crop::default(),
             opacity: 1.0,
+            fades: Default::default(),
             visible: true,
             locked: false,
         }

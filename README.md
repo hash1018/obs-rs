@@ -147,7 +147,9 @@ bottom.](docs/screenshot.png)
   the status bar says what was taken back, and where.
 - **Properties.** Selecting a source describes it in a dock of its own —
   where it sits, how large it is, and what it is actually capturing. A Color
-  source's colour is edited there.
+  source's colour is edited there, and so is how see-through each placement
+  is and how long it takes to fade in when shown and out when hidden — from
+  the eye in the Sources dock or a key. Zero, the default, is at once.
 - **A workspace that stays put.** Docks can be moved, resized and closed, and
   where they were is remembered along with the window and the Preview's zoom.
   Launching obs-rs while it is already running brings that window forward

@@ -242,6 +242,9 @@ pub enum SourceCommand {
     /// a Transform is; what is composited follows the drag through
     /// `EngineManager::set_item_opacity`.
     SetOpacity(SceneItemId, f32),
+    /// How long this placement takes to come up when shown and to go when
+    /// hidden — see [`crate::domain::VisibilityFades`].
+    SetVisibilityFades(SceneItemId, crate::domain::VisibilityFades),
     /// The font file to draw with, or `None` for this application's own.
     SetTextFont(SceneItemId, Option<std::path::PathBuf>),
     SetTextFontSize(SceneItemId, f32),

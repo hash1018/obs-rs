@@ -276,6 +276,9 @@ fn apply_source_command(
         SourceCommand::SetOpacity(item_id, opacity) => {
             SourceStore::set_opacity(transaction, item_id, opacity)
         }
+        SourceCommand::SetVisibilityFades(item_id, fades) => {
+            SourceStore::set_visibility_fades(transaction, item_id, fades)
+        }
         SourceCommand::SetText(item_id, text) => SourceStore::set_text(transaction, item_id, &text),
         SourceCommand::SetTextFont(item_id, font) => {
             SourceStore::set_text_font(transaction, item_id, font.as_deref())
@@ -573,6 +576,7 @@ fn scene_items(
                     transform,
                     crop,
                     opacity,
+                    fades,
                     z_index,
                     ..
                 } = item;
@@ -598,6 +602,7 @@ fn scene_items(
                     transform,
                     crop,
                     opacity,
+                    fades,
                     // Filled in later, from the engine — see
                     // `ObsApp::poll_media_levels`.
                     peak_db: None,
@@ -977,6 +982,62 @@ mod tests {
             ProjectCommand::Source(SourceCommand::AddText(SceneId(1))),
         );
         assert!(history.snapshot().redo.is_none());
+    }
+
+    /// How long an item takes to come up and to go is written down, held to
+    /// the longest a fade can be, and — with its opacity, which a duplicated
+    /// Scene used to lose — carried into a copy of its Scene.
+    #[test]
+    fn an_items_fades_and_opacity_survive_being_stored_and_duplicated() {
+        use crate::domain::{MAX_VISIBILITY_FADE_MS, SceneId, VisibilityFades};
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        handle_source_command(&mut database, SourceCommand::AddColor(SceneId(1))).unwrap();
+        let item = sources_snapshot(&database, &scene_snapshot(&database).unwrap())
+            .unwrap()
+            .items[0]
+            .id;
+        handle_source_command(&mut database, SourceCommand::SetOpacity(item, 0.4)).unwrap();
+        handle_source_command(
+            &mut database,
+            SourceCommand::SetVisibilityFades(
+                item,
+                VisibilityFades {
+                    show_ms: 250,
+                    hide_ms: MAX_VISIBILITY_FADE_MS + 5_000,
+                },
+            ),
+        )
+        .unwrap();
+
+        let stored = sources_snapshot(&database, &scene_snapshot(&database).unwrap())
+            .unwrap()
+            .items[0]
+            .clone();
+        assert_eq!(
+            stored.fades,
+            VisibilityFades {
+                show_ms: 250,
+                hide_ms: MAX_VISIBILITY_FADE_MS,
+            },
+            "the fade out held to the longest a fade can be"
+        );
+
+        handle_scene_command(&mut database, SceneCommand::Duplicate(SceneId(1))).unwrap();
+        let copy = scene_snapshot(&database)
+            .unwrap()
+            .items
+            .iter()
+            .map(|scene| scene.id)
+            .find(|scene| *scene != SceneId(1))
+            .expect("the copy");
+        let copied = scene_items(&database, copy, crate::domain::SceneCanvas::DEFAULT).unwrap();
+        assert_eq!(copied[0].fades, stored.fades);
+        assert!(
+            (copied[0].opacity - 0.4).abs() < 1e-6,
+            "and the opacity, which the copy used to drop: {}",
+            copied[0].opacity
+        );
     }
 
     /// The whole filter chain through the commands that make it: added,

@@ -67,6 +67,7 @@ pub(in crate::ui) fn show(
                 show_placement(ui, item, editor, i18n);
                 show_crop(ui, item, editor, i18n, actions);
                 show_opacity(ui, item, i18n, actions);
+                show_fades(ui, item, i18n, actions);
                 let ended = status.is_some_and(|status| *status == SourceStatus::Ended);
                 show_settings(ui, item, ended, &snapshot.addable_scenes, i18n, actions);
             });
@@ -895,6 +896,59 @@ fn show_opacity(
     ui.end_row();
 }
 
+/// How long the item takes to come up when it is shown and to go when it is
+/// hidden — see [`crate::domain::VisibilityFades`].
+///
+/// Beside opacity because a fade is that value moving. Two fields rather
+/// than one for the reason the domain type gives, and told to the project
+/// when a field is let go of rather than on every step of a drag: each is a
+/// step Edit → Undo takes back, and a drag across a range would otherwise
+/// leave a hundred of them.
+fn show_fades(
+    ui: &mut egui::Ui,
+    item: &SceneItemSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::domain::{MAX_VISIBILITY_FADE_MS, VisibilityFades};
+
+    let key = egui::Id::new(("item-fades", item.id));
+    let stored = item.fades;
+    let mut edited = ui
+        .data(|data| data.get_temp::<VisibilityFades>(key))
+        .unwrap_or(stored);
+    let mut let_go = false;
+
+    // A row each, as every other value here has one: two numbers side by
+    // side with their names on hover would not fit a narrow dock and would
+    // not say which was which without a pointer over them.
+    for (value, label) in [
+        (&mut edited.show_ms, TextKey::PropertiesFadeIn),
+        (&mut edited.hide_ms, TextKey::PropertiesFadeOut),
+    ] {
+        ui.label(i18n.text(label));
+        let field = ui.add(
+            egui::DragValue::new(value)
+                .range(0..=MAX_VISIBILITY_FADE_MS)
+                .speed(10.0)
+                .suffix(" ms"),
+        );
+        let_go |= field.drag_stopped() || field.lost_focus();
+        ui.end_row();
+    }
+    if edited != stored {
+        ui.data_mut(|data| data.insert_temp(key, edited));
+    }
+    if let_go {
+        ui.data_mut(|data| data.remove_temp::<VisibilityFades>(key));
+        if edited != stored {
+            actions.push(UiAction::Project(ProjectCommand::Source(
+                SourceCommand::SetVisibilityFades(item.id, edited),
+            )));
+        }
+    }
+}
+
 /// Everything a Text Source is, all of it editable.
 ///
 /// The one Source with nothing to report: a caption has no device that
@@ -1460,6 +1514,7 @@ mod tests {
             transform: Transform::default(),
             crop: Crop::default(),
             opacity: 1.0,
+            fades: Default::default(),
             peak_db: None,
             position: Some(std::time::Duration::from_secs(3)),
         }

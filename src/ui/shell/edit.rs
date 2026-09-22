@@ -24,6 +24,7 @@ pub(super) fn describe(label: &EditLabel, i18n: &LocalizationManager) -> String 
         EditVerb::Crop => TextKey::EditCrop,
         EditVerb::Opacity => TextKey::EditOpacity,
         EditVerb::Visibility => TextKey::EditVisibility,
+        EditVerb::Fade => TextKey::EditFade,
         EditVerb::Lock => TextKey::EditLock,
         EditVerb::Properties => TextKey::EditProperties,
         EditVerb::AddFilter => TextKey::EditAddFilter,

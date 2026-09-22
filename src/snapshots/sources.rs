@@ -146,6 +146,9 @@ pub struct SceneItemSnapshot {
     pub crop: Crop,
     /// How see-through this placement is — see [`crate::domain::SceneItem`].
     pub opacity: f32,
+    /// How long it takes to come up and to go — see
+    /// [`crate::domain::VisibilityFades`].
+    pub fades: crate::domain::VisibilityFades,
     /// The loudest sample this Source's own audio has reached since the last
     /// update, in decibels relative to full scale.
     ///
@@ -182,6 +185,7 @@ mod tests {
             transform: Transform::default(),
             crop,
             opacity: 1.0,
+            fades: crate::domain::VisibilityFades::default(),
             peak_db: None,
             position: None,
             visible: true,

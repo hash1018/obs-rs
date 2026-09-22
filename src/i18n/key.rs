@@ -67,6 +67,7 @@ text_keys! {
     EditCrop                      => "edit-crop";
     EditOpacity                   => "edit-opacity";
     EditVisibility                => "edit-visibility";
+    EditFade                      => "edit-fade";
     EditLock                      => "edit-lock";
     EditProperties                => "edit-properties";
     EditAddFilter                 => "edit-add-filter";
@@ -159,6 +160,8 @@ text_keys! {
     PropertiesNo                  => "properties-no";
     PropertiesColour              => "properties-colour";
     PropertiesOpacity             => "properties-opacity";
+    PropertiesFadeIn              => "properties-fade-in";
+    PropertiesFadeOut             => "properties-fade-out";
     PropertiesStrokes             => "properties-strokes";
     PropertiesSurface             => "properties-surface";
     PropertiesText                => "properties-text";

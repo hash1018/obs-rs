@@ -159,11 +159,13 @@ impl SceneStore {
                 (scene_id, source_id, visible, locked,
                  position_x, position_y, scale_x, scale_y, rotation_degrees,
                  anchor_x, anchor_y,
-                 crop_left, crop_top, crop_right, crop_bottom, z_index)
+                 crop_left, crop_top, crop_right, crop_bottom, z_index,
+                 opacity, show_fade_ms, hide_fade_ms)
              SELECT ?1, source_id, visible, locked,
                  position_x, position_y, scale_x, scale_y, rotation_degrees,
                  anchor_x, anchor_y,
-                 crop_left, crop_top, crop_right, crop_bottom, z_index
+                 crop_left, crop_top, crop_right, crop_bottom, z_index,
+                 opacity, show_fade_ms, hide_fade_ms
              FROM scene_items
              WHERE scene_id = ?2",
             params![copy_id.0, scene_id.0],

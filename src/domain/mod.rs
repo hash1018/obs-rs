@@ -70,7 +70,9 @@ pub use filter::{
     FilterSettings, LumaKeySettings,
 };
 pub use scene::{MAX_TRANSITION_MS, MIN_TRANSITION_MS, Scene, SceneId, Transition, TransitionKind};
-pub use scene_item::{Crop, SceneItem, SceneItemId, Transform};
+pub use scene_item::{
+    Crop, MAX_VISIBILITY_FADE_MS, SceneItem, SceneItemId, Transform, VisibilityFades,
+};
 pub use source::{
     BrowserSourceSettings, ClockFormat, ColorSourceSettings, DEFAULT_BROWSER_FPS,
     DEFAULT_BROWSER_SIZE, DEFAULT_FONT_SIZE, DisplayCaptureSettings, DisplayCaptureTarget,

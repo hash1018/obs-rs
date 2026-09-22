@@ -55,6 +55,9 @@ pub enum EditVerb {
     Crop,
     Opacity,
     Visibility,
+    /// How long showing and hiding take — see
+    /// [`crate::domain::VisibilityFades`].
+    Fade,
     Lock,
     Properties,
     AddFilter,

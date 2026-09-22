@@ -1503,6 +1503,7 @@ mod tests {
             },
             crop: Crop::default(),
             opacity: 1.0,
+            fades: Default::default(),
             peak_db: None,
             position: None,
         }
@@ -1759,6 +1760,7 @@ mod tests {
             },
             crop: Crop::default(),
             opacity: 1.0,
+            fades: Default::default(),
             peak_db: None,
             position: None,
         }

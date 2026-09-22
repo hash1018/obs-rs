@@ -46,5 +46,30 @@ pub struct SceneItem {
     /// it costs nothing — unlike a colour correction filter's own opacity,
     /// which is a pass over the picture and belongs to the Source.
     pub opacity: f32,
+    /// How long it takes to come up when shown and to go when hidden — see
+    /// [`VisibilityFades`].
+    pub fades: VisibilityFades,
     pub z_index: i64,
 }
+
+/// How long one placement takes to come up when it is shown, and to go when
+/// it is hidden.
+///
+/// Milliseconds, and zero is at once — what every item did before there was
+/// a choice, and what one still does until somebody asks otherwise. Two
+/// values rather than one, as OBS has them: an overlay that eases in and cuts
+/// out is a common enough wish that one number for both would be the wrong
+/// economy.
+///
+/// Only a fade. What moves is the layer's opacity, which the compositor
+/// already takes for free; a slide would be the layer's position, and is a
+/// different change.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VisibilityFades {
+    pub show_ms: u32,
+    pub hide_ms: u32,
+}
+
+/// The longest either fade can be, in milliseconds — the Scene transition's
+/// own limit, since both are the same kind of thing.
+pub const MAX_VISIBILITY_FADE_MS: u32 = crate::domain::MAX_TRANSITION_MS;

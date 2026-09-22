@@ -871,6 +871,7 @@ mod tests {
             transform: Transform::default(),
             crop: Crop::default(),
             opacity: 1.0,
+            fades: Default::default(),
             peak_db: None,
             position: None,
         }

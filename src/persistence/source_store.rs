@@ -10,7 +10,8 @@ use crate::domain::{
     MediaFileSettings, RtspSourceSettings, RtspTransport, Scene, SceneCanvas, SceneId, SceneItem,
     SceneItemId, SceneSourceSettings, Source, SourceId, SourceKind, SourceSettings, Stroke,
     TextAlignment, TextMode, TextSourceSettings, TextTimer, TimerFormat, Transform,
-    VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,
+    VideoCaptureMode, VideoCaptureSettings, VisibilityFades, WindowCaptureSettings,
+    WindowCaptureTarget,
 };
 
 use super::{AudioFilterStore, FilterStore, PersistenceResult, SceneStore};
@@ -93,6 +94,8 @@ impl SourceStore {
                 scene_items.crop_bottom AS item_crop_bottom,
                 scene_items.z_index AS item_z_index,
                 scene_items.opacity AS item_opacity,
+                scene_items.show_fade_ms AS item_show_fade_ms,
+                scene_items.hide_fade_ms AS item_hide_fade_ms,
                 sources.name AS source_name,
                 sources.kind AS source_kind,
                 color_source_settings.width AS color_width,
@@ -422,6 +425,10 @@ impl SourceStore {
                             bottom: row.get("item_crop_bottom")?,
                         },
                         opacity: row.get("item_opacity")?,
+                        fades: VisibilityFades {
+                            show_ms: row.get("item_show_fade_ms")?,
+                            hide_ms: row.get("item_hide_fade_ms")?,
+                        },
                         z_index: row.get("item_z_index")?,
                     },
                     Source {
@@ -614,6 +621,26 @@ impl SourceStore {
         transaction.execute(
             "UPDATE scene_items SET opacity = ?1 WHERE id = ?2",
             params![f64::from(opacity.clamp(0.0, 1.0)), scene_item_id.0],
+        )?;
+        Ok(())
+    }
+
+    /// How long one placement takes to come up and to go — see
+    /// [`VisibilityFades`]. Held to the longest a fade can be here, where
+    /// every way in lands, rather than trusted from the caller.
+    pub(crate) fn set_visibility_fades(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        fades: VisibilityFades,
+    ) -> PersistenceResult<()> {
+        let limit = crate::domain::MAX_VISIBILITY_FADE_MS;
+        transaction.execute(
+            "UPDATE scene_items SET show_fade_ms = ?1, hide_fade_ms = ?2 WHERE id = ?3",
+            params![
+                fades.show_ms.min(limit),
+                fades.hide_ms.min(limit),
+                scene_item_id.0
+            ],
         )?;
         Ok(())
     }

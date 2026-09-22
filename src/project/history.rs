@@ -109,6 +109,7 @@ fn classify(command: &ProjectCommand) -> Option<(EditVerb, Target)> {
             SourceCommand::SetTransform(item, _) => (V::Transform, Target::Item(*item)),
             SourceCommand::SetCrop(item, _) => (V::Crop, Target::Item(*item)),
             SourceCommand::SetOpacity(item, _) => (V::Opacity, Target::Item(*item)),
+            SourceCommand::SetVisibilityFades(item, _) => (V::Fade, Target::Item(*item)),
             SourceCommand::AddFilter { scene_item_id, .. }
             | SourceCommand::AddAudioFilter { scene_item_id, .. } => {
                 (V::AddFilter, Target::Item(*scene_item_id))
