@@ -239,7 +239,8 @@ pub(in crate::engine) fn open(
     let size = super::decoded_size(&chosen.video_params);
     // Live: a software decode must not hold pictures back to go faster,
     // which would be latency added to the camera's own.
-    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::Live);
+    let codec = chosen.video_params.id();
+    let threading = decode_policy::threading(codec, size, Playback::Live);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -249,6 +250,7 @@ pub(in crate::engine) fn open(
         },
         threading,
     )?;
+    decode_policy::log(&item.name, codec, size, threading, &video_decoder);
     // Bridged to BGRA only while there are filters, as a media file's is.
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
@@ -345,7 +347,8 @@ pub(in crate::engine) fn open(
     let size = super::decoded_size(&chosen.video_params);
     // Live: a software decode must not hold pictures back to go faster,
     // which would be latency added to the camera's own.
-    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::Live);
+    let codec = chosen.video_params.id();
+    let threading = decode_policy::threading(codec, size, Playback::Live);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -355,6 +358,7 @@ pub(in crate::engine) fn open(
         },
         threading,
     )?;
+    decode_policy::log(&item.name, codec, size, threading, &video_decoder);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,

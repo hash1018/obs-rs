@@ -315,7 +315,8 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = super::decoded_size(&chosen.video_params);
-    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::File);
+    let codec = chosen.video_params.id();
+    let threading = decode_policy::threading(codec, size, Playback::File);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -325,6 +326,7 @@ pub(in crate::engine) fn open(
         },
         threading,
     )?;
+    decode_policy::log(&item.name, codec, size, threading, &video_decoder);
     // NV12 from the decoder, bridged to BGRA only while there are filters —
     // the camera's arrangement, and the reason an unfiltered file still goes
     // to the compositor without a conversion.
@@ -441,7 +443,8 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = super::decoded_size(&chosen.video_params);
-    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::File);
+    let codec = chosen.video_params.id();
+    let threading = decode_policy::threading(codec, size, Playback::File);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -451,6 +454,7 @@ pub(in crate::engine) fn open(
         },
         threading,
     )?;
+    decode_policy::log(&item.name, codec, size, threading, &video_decoder);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,

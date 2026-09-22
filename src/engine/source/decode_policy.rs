@@ -40,7 +40,7 @@
 
 use std::num::NonZeroU32;
 
-use media_pp::elements::{DecodeThreadKind, DecodeThreading};
+use media_pp::elements::{DecodePath, DecodeThreadKind, DecodeThreading, VideoDecodeBin};
 use media_pp::ffmpeg::codec::Id;
 
 /// What a decoded stream is played as.
@@ -106,6 +106,37 @@ pub(in crate::engine) fn threading(
             },
         }),
     }
+}
+
+/// Says, once, when a Source's video turned out to be decoded in software,
+/// why, and what the table gave it to do that with — which is what to read
+/// when the table's numbers are being weighed against a real file. Nothing is
+/// said for a stream the GPU decodes, which the table does not touch; one the
+/// GPU refuses later is media-pp's to say, in its own log.
+pub(in crate::engine) fn log(
+    item: &str,
+    codec: Id,
+    size: Option<[u32; 2]>,
+    threading: Option<DecodeThreading>,
+    decoder: &VideoDecodeBin,
+) {
+    let DecodePath::Software(reason) = decoder.path() else {
+        return;
+    };
+    let size = size.map_or_else(|| "size unknown".to_owned(), |[w, h]| format!("{w}x{h}"));
+    let threads = match threading {
+        None => "one thread".to_owned(),
+        Some(threading) => format!(
+            "{:?} on {} threads",
+            threading.kind,
+            threading
+                .threads
+                .map_or_else(|| "all".to_owned(), |threads| threads.to_string())
+        ),
+    };
+    tracing::info!(
+        "\"{item}\" decodes its video in software ({reason:?}): {codec:?} {size}, {threads}"
+    );
 }
 
 #[cfg(test)]
