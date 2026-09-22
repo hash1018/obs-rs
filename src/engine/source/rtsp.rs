@@ -246,6 +246,7 @@ pub(in crate::engine) fn open(
         chosen.video_params,
         DecodeTarget::D3d11 {
             device: device.clone(),
+            context: context.clone(),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
         threading,

@@ -2,8 +2,9 @@
 //! work — by codec and picture size.
 //!
 //! Only a stream `VideoDecodeBin` decodes in software ever uses this: one
-//! whose codec the GPU has no decoder for, or with alpha, or 10-bit, or one
-//! the GPU refused. What the GPU decodes has no threads to give.
+//! whose codec the GPU has no decoder for, or with alpha, or 4:2:2 or 4:4:4,
+//! or one the GPU refused. What the GPU decodes — 10-bit 4:2:0 included,
+//! brought down to 8 bits on the GPU — has no threads to give.
 //!
 //! # Where the numbers come from
 //!
@@ -35,8 +36,8 @@
 //! A live stream always decodes within one picture, since several pictures
 //! at once would hold a picture per thread back from someone watching it
 //! now. For H.264 and HEVC, which are rarely split within a picture, that is
-//! no faster than one thread — a 4K 10-bit HEVC camera decoded in software
-//! may not keep up, which only decoding it on the GPU would solve.
+//! no faster than one thread — a 4K 10-bit HEVC camera the GPU refused may
+//! not keep up in software.
 
 use std::num::NonZeroU32;
 
