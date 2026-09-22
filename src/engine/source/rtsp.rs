@@ -168,38 +168,18 @@ fn choose(
     streams: &[StreamInfo],
     mixer: Option<&MixerHandle>,
 ) -> Result<Chosen, BackendError> {
-    let video = streams
-        .iter()
-        .find(|stream| stream.kind == ffmpeg::media::Type::Video)
-        .ok_or("the stream carries no video")?
-        .index;
-    let audio = mixer
-        .and(
-            streams
-                .iter()
-                .find(|stream| stream.kind == ffmpeg::media::Type::Audio),
-        )
-        .and_then(|stream| track(source, stream.index));
+    // FFmpeg's own pick rather than the first of a kind, as for a file.
+    let best = |kind| {
+        source
+            .best_stream(kind)
+            .and_then(|index| streams.iter().find(|stream| stream.index == index))
+    };
+    let video = best(ffmpeg::media::Type::Video).ok_or("the stream carries no video")?;
     Ok(Chosen {
-        video,
-        video_params: source
-            .stream_parameters(video)
-            .ok_or("the video stream disappeared")?,
-        video_time_base: source
-            .stream_time_base(video)
-            .ok_or("the video stream disappeared")?,
-        audio,
-    })
-}
-
-/// One stream's parameters and unit, or `None` for a stream that cannot
-/// describe itself — the audio half only, so a session whose sound cannot be
-/// read is still one worth showing.
-fn track(source: &RtspSource, index: usize) -> Option<Track> {
-    Some(Track {
-        index,
-        params: source.stream_parameters(index)?,
-        time_base: source.stream_time_base(index)?,
+        video: video.index,
+        video_params: video.parameters.clone(),
+        video_time_base: video.time_base,
+        audio: mixer.and(best(ffmpeg::media::Type::Audio)).map(Track::of),
     })
 }
 

@@ -69,6 +69,17 @@ pub(in crate::engine) struct Track {
     pub(in crate::engine) time_base: ffmpeg::Rational,
 }
 
+impl Track {
+    /// The stream `open` reported, as a branch for it is built from.
+    pub(in crate::engine) fn of(stream: &media_pp::elements::StreamInfo) -> Self {
+        Self {
+            index: stream.index,
+            params: stream.parameters.clone(),
+            time_base: stream.time_base,
+        }
+    }
+}
+
 /// What a Source hands its sound over as, and so what has to happen to it
 /// before the fader.
 enum Head {

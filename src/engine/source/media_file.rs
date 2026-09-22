@@ -34,8 +34,8 @@
 //! GPU does not take — a codec it has no decoder for, 10-bit or 4:4:4, a
 //! profile it refuses once asked — `VideoDecodeBin` decodes in software and
 //! uploads, as NV12, or as BGRA where the file has alpha to keep, which then
-//! reaches the compositor as the transparency it was made with. Audio has no such path and no reason
-//! to want one.
+//! reaches the compositor as the transparency it was made with. Audio has no
+//! such path and no reason to want one.
 //!
 //! The `Queue` in each branch is where decode runs ahead: a `Pacer` sleeps
 //! until a frame is due, and without a queue in front of it that sleep would
@@ -142,40 +142,19 @@ fn choose(
     streams: &[StreamInfo],
     mixer: Option<&MixerHandle>,
 ) -> Result<Chosen, BackendError> {
-    let video = streams
-        .iter()
-        .find(|stream| stream.kind == ffmpeg::media::Type::Video)
-        .ok_or("the file has no video stream")?
-        .index;
-    let audio = mixer
-        .and(
-            streams
-                .iter()
-                .find(|stream| stream.kind == ffmpeg::media::Type::Audio),
-        )
-        .and_then(|stream| track(demuxer, stream.index));
+    // FFmpeg's own pick rather than the first of a kind: a file can carry
+    // cover art as a still video stream ahead of the picture it is of.
+    let best = |kind| {
+        demuxer
+            .best_stream(kind)
+            .and_then(|index| streams.iter().find(|stream| stream.index == index))
+    };
+    let video = best(ffmpeg::media::Type::Video).ok_or("the file has no video stream")?;
     Ok(Chosen {
-        video,
-        video_params: demuxer
-            .stream_parameters(video)
-            .ok_or("the video stream disappeared")?,
-        video_time_base: demuxer
-            .stream_time_base(video)
-            .ok_or("the video stream disappeared")?,
-        audio,
-    })
-}
-
-/// One stream's parameters and unit, or `None` for a stream that cannot
-/// describe itself.
-///
-/// `None` rather than an error only because this is the audio half: a file
-/// whose sound cannot be read is still a file worth showing.
-fn track(demuxer: &FileDemuxer, index: usize) -> Option<Track> {
-    Some(Track {
-        index,
-        params: demuxer.stream_parameters(index)?,
-        time_base: demuxer.stream_time_base(index)?,
+        video: video.index,
+        video_params: video.parameters.clone(),
+        video_time_base: video.time_base,
+        audio: mixer.and(best(ffmpeg::media::Type::Audio)).map(Track::of),
     })
 }
 
