@@ -73,6 +73,7 @@ use media_pp::pipeline::Pipeline;
 use crate::domain::MediaFileSettings;
 use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
+use crate::engine::source::decode_policy::{self, Playback};
 use crate::engine::source::sound::{self, Sound, Track};
 use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, input_name};
 use crate::snapshots::SceneItemSnapshot;
@@ -324,9 +325,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{
-        D3d11VideoCompositorInput, DecodeTarget, DecodeThreading, VideoDecodeBin,
-    };
+    use media_pp::elements::{D3d11VideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -351,6 +350,7 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
+    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::File);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -358,10 +358,7 @@ pub(in crate::engine) fn open(
             device: device.clone(),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
-        // A file has no deadline, so a software decode may run whole
-        // pictures ahead on every thread where that is faster — the
-        // choice `Auto` makes by codec.
-        Some(DecodeThreading::default()),
+        threading,
     )?;
     // NV12 from the decoder, bridged to BGRA only while there are filters —
     // the camera's arrangement, and the reason an unfiltered file still goes
@@ -456,9 +453,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{
-        CudaVideoCompositorInput, DecodeTarget, DecodeThreading, VideoDecodeBin,
-    };
+    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -481,6 +476,7 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
+    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::File);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -488,10 +484,7 @@ pub(in crate::engine) fn open(
             device: media_pp::elements::CudaDevice::clone(device),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
-        // A file has no deadline, so a software decode may run whole
-        // pictures ahead on every thread where that is faster — the
-        // choice `Auto` makes by codec.
-        Some(DecodeThreading::default()),
+        threading,
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,

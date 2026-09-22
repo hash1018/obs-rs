@@ -59,6 +59,7 @@ use media_pp::pipeline::Pipeline;
 use crate::domain::RtspSourceSettings;
 use crate::engine::audio::MeterWake;
 use crate::engine::backend::BackendError;
+use crate::engine::source::decode_policy::{self, Playback};
 use crate::engine::source::sound::{self, Sound, Track};
 use crate::engine::source::{FilledRack, MediaMeters, PictureEnd, input_name};
 use crate::snapshots::SceneItemSnapshot;
@@ -254,9 +255,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{
-        D3d11VideoCompositorInput, DecodeTarget, DecodeThreadKind, DecodeThreading, VideoDecodeBin,
-    };
+    use media_pp::elements::{D3d11VideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -272,6 +271,9 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
+    // Live: a software decode must not hold pictures back to go faster,
+    // which would be latency added to the camera's own.
+    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::Live);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -279,12 +281,7 @@ pub(in crate::engine) fn open(
             device: device.clone(),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
-        // Live: a software decode must not hold pictures back to go
-        // faster, which would be latency added to a camera's own.
-        Some(DecodeThreading {
-            threads: None,
-            kind: DecodeThreadKind::Slice,
-        }),
+        threading,
     )?;
     // Bridged to BGRA only while there are filters, as a media file's is.
     let FilledRack { rack, filters } = super::filled_rack(
@@ -360,9 +357,7 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{
-        CudaVideoCompositorInput, DecodeTarget, DecodeThreadKind, DecodeThreading, VideoDecodeBin,
-    };
+    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -382,6 +377,9 @@ pub(in crate::engine) fn open(
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
     let size = decoded_size(&chosen.video_params);
+    // Live: a software decode must not hold pictures back to go faster,
+    // which would be latency added to the camera's own.
+    let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::Live);
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
@@ -389,12 +387,7 @@ pub(in crate::engine) fn open(
             device: media_pp::elements::CudaDevice::clone(device),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
-        // Live: a software decode must not hold pictures back to go
-        // faster, which would be latency added to a camera's own.
-        Some(DecodeThreading {
-            threads: None,
-            kind: DecodeThreadKind::Slice,
-        }),
+        threading,
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,

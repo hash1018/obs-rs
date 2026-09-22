@@ -12,6 +12,7 @@
 
 pub(in crate::engine) mod browser;
 pub(in crate::engine) mod color;
+pub(in crate::engine) mod decode_policy;
 pub(in crate::engine) mod display_capture;
 pub(in crate::engine) mod drawing;
 pub(in crate::engine) mod filters;
