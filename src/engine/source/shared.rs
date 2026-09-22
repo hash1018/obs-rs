@@ -464,7 +464,7 @@ mod tests {
     }
 
     fn a_sink() -> impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError> {
-        |builder, _| Ok(builder.to(Box::new(AppSink::new("sink", |_: MediaBuffer| Ok(()))))?)
+        |builder, _| Ok(builder.to(AppSink::new("sink", |_: MediaBuffer| Ok(())))?)
     }
 
     fn until(what: impl Fn() -> bool) -> bool {

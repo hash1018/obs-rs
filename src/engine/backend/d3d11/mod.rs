@@ -158,7 +158,7 @@ impl Backend {
         let preview = Pipeline::new("preview", compositor, |source, context| {
             // The counting branch is synchronous — it is how the calls stay
             // at the compositor's own rate — so its sink must stay trivial.
-            let count_branch = context.branch().to(Box::new(count))?;
+            let count_branch = context.branch().to(count)?;
             // The Preview must not set the compositor's pace, so the copy and
             // the repaint it asks for happen on this queue's worker, and the
             // queue drops whatever cannot keep up rather than making the
@@ -175,7 +175,7 @@ impl Backend {
                     "preview-changes",
                     Duration::from_secs_f32(1.0 / preview_fps as f32),
                 ))
-                .to(Box::new(renderer))?;
+                .to(renderer)?;
             // `build_dynamic` rather than `build`: the recording branch is
             // attached and detached while this is already running, and the
             // handle is the only way back to this `Tee` afterwards.

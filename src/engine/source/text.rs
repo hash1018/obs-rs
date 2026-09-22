@@ -681,7 +681,7 @@ mod tests {
             Ok(())
         });
         let composing = Pipeline::new("compose", compositor, move |source, context| {
-            let branch = context.branch().pipe(download).to(Box::new(sink))?;
+            let branch = context.branch().pipe(download).to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
         })
@@ -835,7 +835,7 @@ mod tests {
             Ok(())
         });
         let composing = Pipeline::new("compose", compositor, move |source, context| {
-            let branch = context.branch().pipe(download).to(Box::new(sink))?;
+            let branch = context.branch().pipe(download).to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
         })

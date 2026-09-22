@@ -707,7 +707,7 @@ fn attach_monitor_output(
             OverflowPolicy::DropNewest,
         )
         .pipe(resampler)
-        .to(Box::new(renderer))?;
+        .to(renderer)?;
     Ok(tee.attach(branch)?)
 }
 
@@ -773,7 +773,7 @@ fn open_source(
         // branch carries is what the fader let through — a meter that
         // measures the level rather than the one before it, and monitoring
         // that goes quiet when the channel is pulled down.
-        let meter_branch = context.branch().to(Box::new(meter))?;
+        let meter_branch = context.branch().to(meter)?;
         let mut tee = TeeBuilder::new(tee_name, context.clone())
             .branch(meter_branch)
             .branch(context.branch().to(mixer_input)?);
@@ -829,7 +829,7 @@ mod tests {
         let source = TestAudioSource::new(name, TestAudioOptions::default());
         let sink = AppSink::new(format!("{name}-sink"), |_| Ok(()));
         let pipeline = Pipeline::new(name, source, move |source, context| {
-            let branch = context.branch().to(Box::new(sink))?;
+            let branch = context.branch().to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
         })

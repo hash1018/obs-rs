@@ -1064,7 +1064,7 @@ mod tests {
             }),
         );
         let pipeline = Pipeline::new("test", compositor, |source, context| {
-            let branch = context.branch().to(Box::new(renderer))?;
+            let branch = context.branch().to(renderer)?;
             context.attach(source, 0, branch)?;
             Ok(())
         })
