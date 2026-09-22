@@ -254,7 +254,9 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{D3d11VideoCompositorInput, DecodeTarget, VideoDecodeBin};
+    use media_pp::elements::{
+        D3d11VideoCompositorInput, DecodeLatency, DecodeTarget, DecodeThreading, VideoDecodeBin,
+    };
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -276,6 +278,12 @@ pub(in crate::engine) fn open(
         DecodeTarget::D3d11 {
             device: device.clone(),
             downstream_hw_frames: HW_FRAME_BUDGET,
+        },
+        // Live: a software decode must not hold pictures back to go
+        // faster, which would be latency added to a camera's own.
+        DecodeThreading {
+            threads: None,
+            latency: DecodeLatency::Low,
         },
     )?;
     // Bridged to BGRA only while there are filters, as a media file's is.
@@ -352,7 +360,9 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
+    use media_pp::elements::{
+        CudaVideoCompositorInput, DecodeLatency, DecodeTarget, DecodeThreading, VideoDecodeBin,
+    };
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -378,6 +388,12 @@ pub(in crate::engine) fn open(
         DecodeTarget::Cuda {
             device: media_pp::elements::CudaDevice::clone(device),
             downstream_hw_frames: HW_FRAME_BUDGET,
+        },
+        // Live: a software decode must not hold pictures back to go
+        // faster, which would be latency added to a camera's own.
+        DecodeThreading {
+            threads: None,
+            latency: DecodeLatency::Low,
         },
     )?;
     let FilledRack { rack, filters } = super::filled_rack(

@@ -324,7 +324,9 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{D3d11VideoCompositorInput, DecodeTarget, VideoDecodeBin};
+    use media_pp::elements::{
+        D3d11VideoCompositorInput, DecodeTarget, DecodeThreading, VideoDecodeBin,
+    };
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -356,6 +358,9 @@ pub(in crate::engine) fn open(
             device: device.clone(),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
+        // A file has no deadline, so a software decode may run whole
+        // pictures ahead on every thread.
+        DecodeThreading::default(),
     )?;
     // NV12 from the decoder, bridged to BGRA only while there are filters —
     // the camera's arrangement, and the reason an unfiltered file still goes
@@ -450,7 +455,9 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
+    use media_pp::elements::{
+        CudaVideoCompositorInput, DecodeTarget, DecodeThreading, VideoDecodeBin,
+    };
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -480,6 +487,9 @@ pub(in crate::engine) fn open(
             device: media_pp::elements::CudaDevice::clone(device),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
+        // A file has no deadline, so a software decode may run whole
+        // pictures ahead on every thread.
+        DecodeThreading::default(),
     )?;
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
