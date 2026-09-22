@@ -174,6 +174,23 @@ pub(in crate::engine) fn hinted_size(item: &SceneItemSnapshot) -> [u32; 2] {
         .map(|side| (side.round().max(2.0) as u32) & !1)
 }
 
+/// The picture size a decoder for `params` is built for, which is what a
+/// decoded Source actually produces — see `OpenSource::negotiated_size`.
+/// `None` where the stream does not say.
+pub(in crate::engine) fn decoded_size(
+    params: &media_pp::ffmpeg::codec::Parameters,
+) -> Option<[u32; 2]> {
+    let video = media_pp::ffmpeg::codec::context::Context::from_parameters(params.clone())
+        .ok()?
+        .decoder()
+        .video()
+        .ok()?;
+    match (video.width(), video.height()) {
+        (0, _) | (_, 0) => None,
+        size => Some([size.0, size.1]),
+    }
+}
+
 /// What a decoded picture's rack is built for: the size the decoder was, or
 /// the stored hint where the stream's parameters did not say.
 pub(in crate::engine) fn rack_size(

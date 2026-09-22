@@ -211,20 +211,6 @@ fn attach_video(
     Ok(())
 }
 
-/// The picture size the decoder was built for, which is what this Source
-/// actually produces — see `OpenSource::negotiated_size`.
-fn decoded_size(params: &ffmpeg::codec::Parameters) -> Option<[u32; 2]> {
-    let video = ffmpeg::codec::context::Context::from_parameters(params.clone())
-        .ok()?
-        .decoder()
-        .video()
-        .ok()?;
-    match (video.width(), video.height()) {
-        (0, _) | (_, 0) => None,
-        size => Some([size.0, size.1]),
-    }
-}
-
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -250,7 +236,7 @@ pub(in crate::engine) fn open(
 
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
-    let size = decoded_size(&chosen.video_params);
+    let size = super::decoded_size(&chosen.video_params);
     // Live: a software decode must not hold pictures back to go faster,
     // which would be latency added to the camera's own.
     let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::Live);
@@ -356,7 +342,7 @@ pub(in crate::engine) fn open(
     // a file with alpha arrives as BGRA, the other one.
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
-    let size = decoded_size(&chosen.video_params);
+    let size = super::decoded_size(&chosen.video_params);
     // Live: a software decode must not hold pictures back to go faster,
     // which would be latency added to the camera's own.
     let threading = decode_policy::threading(chosen.video_params.id(), size, Playback::Live);
