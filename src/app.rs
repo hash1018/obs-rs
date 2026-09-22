@@ -271,10 +271,12 @@ impl ObsApp {
             match update {
                 ProjectUpdate::Snapshot {
                     scenes,
+                    history,
                     sources,
                     audio,
                 } => {
                     self.snapshots.scenes = scenes;
+                    self.snapshots.history = history;
                     self.snapshots.sources = *sources;
                     self.snapshots.audio = audio;
                     if let Some(manager) = &self.audio {

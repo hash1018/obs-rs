@@ -5,9 +5,16 @@ use eframe::egui;
 
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::resources::{GpuScope, GpuUsage, MemoryUsage};
-use crate::snapshots::{ReplayFailure, ReplayFill, ReplayReport, ScreenshotReport, StatusSnapshot};
+use crate::snapshots::{
+    HistorySnapshot, ReplayFailure, ReplayFill, ReplayReport, ScreenshotReport, StatusSnapshot,
+};
 
-pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
+pub fn show(
+    ui: &mut egui::Ui,
+    status: &StatusSnapshot,
+    history: &HistorySnapshot,
+    i18n: &LocalizationManager,
+) {
     egui::Panel::bottom("status_bar")
         .exact_size(26.0)
         .frame(
@@ -17,7 +24,7 @@ pub fn show(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManag
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                show_state(ui, status, i18n);
+                show_state(ui, status, history, i18n);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Tighter than the default 8, which spent 22 points on
                     // every divider — 8 before, the separator's own 6, 8 after
@@ -192,11 +199,17 @@ const SEGMENT_GAP: f32 = 3.0;
 /// Truncated to the width the bar has, with the whole of it on hover: the
 /// readings on the right are what this bar exists for, and a long message
 /// from a driver must not push them off the end.
-fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationManager) {
-    // A screenshot or a replay first while it is news: each is something
-    // someone has just asked for and is waiting to hear about. The newer of
-    // the two, where both have something to say.
+fn show_state(
+    ui: &mut egui::Ui,
+    status: &StatusSnapshot,
+    history: &HistorySnapshot,
+    i18n: &LocalizationManager,
+) {
+    // A screenshot, a replay or an undo first while it is news: each is
+    // something someone has just asked for and is waiting to hear about. The
+    // newest, where more than one has something to say.
     let now = Instant::now();
+    let moved = history_line(ui, history, now, i18n);
     let screenshot = status
         .screenshot
         .as_deref()
@@ -205,14 +218,11 @@ fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationMan
         .replay_report
         .as_deref()
         .and_then(|report| Some((report.at, replay_line(report, now)?)));
-    let line = match (screenshot, replay) {
-        (Some(screenshot), Some(replay)) => Some(if replay.0 > screenshot.0 {
-            replay.1
-        } else {
-            screenshot.1
-        }),
-        (one, other) => one.or(other).map(|(_, line)| line),
-    };
+    let line = [screenshot, replay, moved]
+        .into_iter()
+        .flatten()
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, line)| line);
     match line {
         Some(Notice::Saved {
             key,
@@ -240,6 +250,10 @@ fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationMan
             ui.label(i18n.text(key));
             ui.ctx().request_repaint_after(left);
         }
+        Some(Notice::Said { text, left }) => {
+            ui.label(text);
+            ui.ctx().request_repaint_after(left);
+        }
         None => match &status.recording_error {
             Some(error) => show_error(ui, TextKey::StatusRecordingFailed, error, i18n),
             None => {
@@ -247,6 +261,47 @@ fn show_state(ui: &mut egui::Ui, status: &StatusSnapshot, i18n: &LocalizationMan
             }
         },
     }
+}
+
+/// What Undo or Redo just did, while it is news.
+///
+/// The step names the Scene it was in, because an undo does not switch to
+/// that Scene — the one selected is the one on air — so a step taken back in
+/// a Scene nobody is looking at would otherwise change nothing anyone can
+/// see. When it happened is this bar's own record: the project thread counts
+/// moves rather than timing them, and the first pass to see a new one is
+/// when it happened as far as anyone looking is concerned.
+fn history_line(
+    ui: &egui::Ui,
+    history: &HistorySnapshot,
+    now: Instant,
+    i18n: &LocalizationManager,
+) -> Option<(Instant, Notice<'static>)> {
+    let moved = history.moved.as_ref()?;
+    let id = egui::Id::new("status_bar_history_move");
+    let seen: Option<(u64, Instant)> = ui.data(|data| data.get_temp(id));
+    let at = match seen {
+        Some((serial, at)) if serial == moved.serial => at,
+        _ => {
+            ui.data_mut(|data| data.insert_temp(id, (moved.serial, now)));
+            now
+        }
+    };
+    let left = still_news(at, now)?;
+    let mut args = fluent_bundle::FluentArgs::new();
+    args.set("action", super::edit::describe(&moved.label, i18n));
+    let key = if moved.undone {
+        TextKey::StatusUndone
+    } else {
+        TextKey::StatusRedone
+    };
+    Some((
+        at,
+        Notice::Said {
+            text: i18n.text_with(key, &args).into_owned(),
+            left,
+        },
+    ))
 }
 
 /// One failure, in the error colour and elided to its share of the bar.
@@ -285,6 +340,9 @@ enum Notice<'a> {
     /// anything to write. Said in the ordinary colour, and let go as a saved
     /// file is: it is only the answer to a press.
     Note { key: TextKey, left: Duration },
+    /// A sentence already put together — an undo naming the step it took
+    /// back — and let go as a note is.
+    Said { text: String, left: Duration },
 }
 
 /// How long "saved" stays in the bar. A file that was written needs no more

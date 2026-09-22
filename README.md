@@ -139,6 +139,12 @@ bottom.](docs/screenshot.png)
   switch is about your ears, not about the file. Desktop Audio has no such
   control: it is captured by listening to what your machine is already
   playing, so there is nothing there to play back.
+- **Undo and redo.** `Edit → Undo` takes back the last edit, naming it —
+  "Undo Move Scene 1 › Webcam" — and deleting a source comes back with its
+  filters, strokes and placement. What is *operated* rather than edited is
+  left alone: a fader, a mute button, a clip's play and pause, a timer.
+  So is the Scene on air. An undo in another Scene does not switch to it;
+  the status bar says what was taken back, and where.
 - **Properties.** Selecting a source describes it in a dock of its own —
   where it sits, how large it is, and what it is actually capturing. A Color
   source's colour is edited there.
@@ -215,8 +221,8 @@ writes what it holds to a file beside the recordings. It says how many
 seconds it is holding, and that it cannot save anything in its first second.
 
 Keys: `Ctrl+R` starts and stops recording, `Ctrl+P` pauses and resumes one,
-`Ctrl+1` … `Ctrl+9` switch to that Scene, `F11` goes fullscreen, and `Ctrl+,`
-opens Settings. Starting and stopping a broadcast, running the replay buffer
+`Ctrl+1` … `Ctrl+9` switch to that Scene, `F11` goes fullscreen, `Ctrl+,`
+opens Settings, and `Ctrl+Z` / `Ctrl+Y` undo and redo. Starting and stopping a broadcast, running the replay buffer
 and saving from it, the two screenshots, and opening and closing the
 projector have keys of their own, unbound to begin with. None of them fire
 while you are typing a name.

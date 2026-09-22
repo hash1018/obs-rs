@@ -60,6 +60,8 @@ pub(super) fn show_pen(
     pen: &mut PenState,
     item_id: SceneItemId,
     strokes: usize,
+    // Whether Edit → Undo has anything to take back — see the undo button.
+    can_undo: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -125,15 +127,15 @@ pub(super) fn show_pen(
     ui.separator();
     if icon_button(
         ui,
-        strokes > 0,
+        can_undo,
         i18n.text(TextKey::DrawingUndo).as_ref(),
         paint_undo,
     ) {
-        // Undo is the eraser's own command aimed at the last stroke: there is
-        // no separate history, because the strokes *are* the history.
-        actions.push(UiAction::Project(ProjectCommand::Source(
-            SourceCommand::RemoveStrokes(item_id, vec![strokes - 1]),
-        )));
+        // Edit → Undo itself, not a history of the Drawing's own: a stroke is
+        // a step like any other edit, so there is one Ctrl+Z and it means the
+        // same thing here as everywhere else. While drawing, the last step
+        // is the last stroke.
+        actions.push(UiAction::Project(ProjectCommand::Undo));
     }
     if icon_button(
         ui,

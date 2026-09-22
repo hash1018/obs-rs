@@ -893,6 +893,8 @@ mod portal {
                 HotkeyAction::Fullscreen => "fullscreen".to_owned(),
                 HotkeyAction::ToggleProjector => "toggle-projector".to_owned(),
                 HotkeyAction::OpenSettings => "open-settings".to_owned(),
+                HotkeyAction::Undo => "undo".to_owned(),
+                HotkeyAction::Redo => "redo".to_owned(),
             },
             Hotkey::PushToTalk(channel) => format!("push-to-talk-{}", channel.0),
             Hotkey::PushToMute(channel) => format!("push-to-mute-{}", channel.0),

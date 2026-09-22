@@ -1,10 +1,12 @@
 mod audio;
+mod history;
 mod scenes;
 mod sources;
 mod stats;
 mod status;
 
 pub use audio::{AudioSnapshot, AudioSourceSnapshot};
+pub use history::{EditLabel, EditVerb, HistoryMove, HistorySnapshot};
 pub use scenes::{SceneItemName, SceneSnapshot, ScenesSnapshot};
 pub use sources::{NestedScene, SceneItemSnapshot, SourcesSnapshot};
 pub use stats::{OutputStats, Rendering, Role, StatsRow, StatsSnapshot, Subject};
@@ -24,4 +26,5 @@ pub struct Snapshots {
     pub scenes: ScenesSnapshot,
     pub sources: SourcesSnapshot,
     pub status: StatusSnapshot,
+    pub history: HistorySnapshot,
 }

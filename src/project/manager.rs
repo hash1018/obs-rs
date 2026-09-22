@@ -1,26 +1,38 @@
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
+use rusqlite::Transaction;
+
 use crate::domain::{AudioFilterOwner, Scene, SceneId, SceneItem, Source};
 use crate::persistence::{
     AudioFilterStore, AudioStore, FilterNeighbour, FilterStore, PersistenceResult, ProjectDatabase,
     SceneStore, SourceStore,
 };
 use crate::snapshots::{
-    AudioSnapshot, AudioSourceSnapshot, NestedScene, SceneItemName, SceneItemSnapshot,
-    SceneSnapshot, ScenesSnapshot, SourcesSnapshot,
+    AudioSnapshot, AudioSourceSnapshot, HistorySnapshot, NestedScene, SceneItemName,
+    SceneItemSnapshot, SceneSnapshot, ScenesSnapshot, SourcesSnapshot,
 };
 
+use super::history::History;
 use super::{AudioCommand, ProjectCommand, SceneCommand, SourceCommand};
 
 enum ManagerMessage {
-    Execute(ProjectCommand),
+    /// A command, and whether it came from the interface — the only place an
+    /// edit worth undoing comes from. What the engine writes on its own is
+    /// never a step; see `project::history`.
+    Execute {
+        command: ProjectCommand,
+        from_interface: bool,
+    },
     Shutdown,
 }
 
 pub enum ProjectUpdate {
     Snapshot {
         scenes: ScenesSnapshot,
+        /// What Undo and Redo would do. Sent with every snapshot, since every
+        /// edit moves it.
+        history: HistorySnapshot,
         /// Boxed because it is much the largest thing sent here — every
         /// SceneItem in the selected Scene, and every Source name in the
         /// project — and an `Error` would otherwise be padded to its size.
@@ -42,7 +54,10 @@ pub struct ProjectDispatcher {
 
 impl ProjectDispatcher {
     pub fn dispatch(&self, command: ProjectCommand) {
-        let _ = self.command_tx.send(ManagerMessage::Execute(command));
+        let _ = self.command_tx.send(ManagerMessage::Execute {
+            command,
+            from_interface: false,
+        });
     }
 }
 
@@ -68,8 +83,13 @@ impl ProjectManager {
         })
     }
 
+    /// What the interface asks for — and so what can be undone, where it is
+    /// an edit.
     pub fn dispatch(&self, command: ProjectCommand) {
-        self.dispatcher().dispatch(command);
+        let _ = self.command_tx.send(ManagerMessage::Execute {
+            command,
+            from_interface: true,
+        });
     }
 
     pub fn dispatcher(&self) -> ProjectDispatcher {
@@ -104,14 +124,26 @@ fn run(
     update_tx: &Sender<ProjectUpdate>,
     wake_ui: &impl Fn(),
 ) {
-    publish_snapshot(&database, update_tx, wake_ui);
+    let mut history = History::default();
+    publish_snapshot(&database, &history, update_tx, wake_ui);
 
     while let Ok(message) = command_rx.recv() {
         match message {
-            ManagerMessage::Execute(command) => {
-                let result = handle_project_command(&mut database, command);
+            ManagerMessage::Execute {
+                command,
+                from_interface,
+            } => {
+                let result = match command {
+                    ProjectCommand::Undo => history.undo(&mut database),
+                    ProjectCommand::Redo => history.redo(&mut database),
+                    command if from_interface => {
+                        history.run(&mut database, command, apply_project_command)
+                    }
+                    command => database
+                        .transaction(|transaction| apply_project_command(transaction, command)),
+                };
                 match result {
-                    Ok(()) => publish_snapshot(&database, update_tx, wake_ui),
+                    Ok(()) => publish_snapshot(&database, &history, update_tx, wake_ui),
                     Err(error) => {
                         let _ = update_tx.send(ProjectUpdate::Error(error.to_string()));
                         wake_ui();
@@ -123,22 +155,35 @@ fn run(
     }
 }
 
-fn handle_project_command(
-    database: &mut ProjectDatabase,
+/// One command, inside a transaction somebody else opened — a plain one, or
+/// the recorded one an edit runs in (see `History::run`).
+fn apply_project_command(
+    transaction: &Transaction<'_>,
     command: ProjectCommand,
 ) -> PersistenceResult<()> {
     match command {
-        ProjectCommand::Scene(command) => handle_scene_command(database, command),
-        ProjectCommand::Source(command) => handle_source_command(database, command),
-        ProjectCommand::Audio(command) => handle_audio_command(database, command),
+        ProjectCommand::Scene(command) => apply_scene_command(transaction, command),
+        ProjectCommand::Source(command) => apply_source_command(transaction, command),
+        ProjectCommand::Audio(command) => apply_audio_command(transaction, command),
+        // Walked by the history, which the thread that owns it answers
+        // before anything reaches here — see `run`.
+        ProjectCommand::Undo | ProjectCommand::Redo => Ok(()),
     }
 }
 
+#[cfg(test)]
 fn handle_audio_command(
     database: &mut ProjectDatabase,
     command: AudioCommand,
 ) -> PersistenceResult<()> {
-    database.transaction(|transaction| match command {
+    database.transaction(|transaction| apply_audio_command(transaction, command))
+}
+
+fn apply_audio_command(
+    transaction: &Transaction<'_>,
+    command: AudioCommand,
+) -> PersistenceResult<()> {
+    match command {
         AudioCommand::AddApplication => AudioStore::add_application(transaction).map(|_| ()),
         AudioCommand::Remove(id) => AudioStore::remove(transaction, id),
         AudioCommand::SetGainDb(id, gain_db) => AudioStore::set_gain_db(transaction, id, gain_db),
@@ -171,14 +216,22 @@ fn handle_audio_command(
         AudioCommand::SetFilterSettings(id, settings) => {
             AudioFilterStore::set_settings(transaction, id, settings)
         }
-    })
+    }
 }
 
+#[cfg(test)]
 fn handle_source_command(
     database: &mut ProjectDatabase,
     command: SourceCommand,
 ) -> PersistenceResult<()> {
-    database.transaction(|transaction| match command {
+    database.transaction(|transaction| apply_source_command(transaction, command))
+}
+
+fn apply_source_command(
+    transaction: &Transaction<'_>,
+    command: SourceCommand,
+) -> PersistenceResult<()> {
+    match command {
         SourceCommand::AddColor(scene_id) => {
             SourceStore::add_color(transaction, scene_id)?;
             Ok(())
@@ -377,14 +430,22 @@ fn handle_source_command(
         SourceCommand::SetFilterSettings(filter_id, settings) => {
             FilterStore::set_settings(transaction, filter_id, settings)
         }
-    })
+    }
 }
 
+#[cfg(test)]
 fn handle_scene_command(
     database: &mut ProjectDatabase,
     command: SceneCommand,
 ) -> PersistenceResult<()> {
-    database.transaction(|transaction| match command {
+    database.transaction(|transaction| apply_scene_command(transaction, command))
+}
+
+fn apply_scene_command(
+    transaction: &Transaction<'_>,
+    command: SceneCommand,
+) -> PersistenceResult<()> {
+    match command {
         SceneCommand::Add => {
             SceneStore::add(transaction)?;
             Ok(())
@@ -398,7 +459,7 @@ fn handle_scene_command(
         SceneCommand::SetTransition(transition) => {
             SceneStore::set_transition(transaction, transition)
         }
-    })
+    }
 }
 
 fn scene_snapshot(database: &ProjectDatabase) -> PersistenceResult<ScenesSnapshot> {
@@ -585,12 +646,14 @@ fn audio_snapshot(database: &ProjectDatabase) -> PersistenceResult<AudioSnapshot
 
 fn publish_snapshot(
     database: &ProjectDatabase,
+    history: &History,
     update_tx: &Sender<ProjectUpdate>,
     wake_ui: &impl Fn(),
 ) {
     let update = match project_snapshot(database) {
         Ok((scenes, sources, audio)) => ProjectUpdate::Snapshot {
             scenes,
+            history: history.snapshot(),
             sources: Box::new(sources),
             audio,
         },
@@ -604,6 +667,317 @@ fn publish_snapshot(
 mod tests {
     use super::*;
     use crate::domain::{AudioFilterKind, SourceSettings, Stroke};
+
+    /// Everything the history tests do, from the interface's side: an edit
+    /// through `History::run`, the way the project thread runs one.
+    fn edit(database: &mut ProjectDatabase, history: &mut History, command: ProjectCommand) {
+        history
+            .run(database, command, apply_project_command)
+            .expect("the edit applies");
+    }
+
+    fn items(database: &ProjectDatabase) -> Vec<SceneItemSnapshot> {
+        sources_snapshot(database, &scene_snapshot(database).unwrap())
+            .unwrap()
+            .items
+    }
+
+    fn first_item(database: &ProjectDatabase) -> SceneItemSnapshot {
+        items(database)
+            .into_iter()
+            .next()
+            .expect("the Scene holds an item")
+    }
+
+    /// The whole round: an edit is a step, undo puts back what was there,
+    /// redo puts the edit back — and the menu names each on the way.
+    #[test]
+    fn an_edit_is_undone_and_redone() {
+        use crate::domain::{SceneId, Transform};
+        use crate::snapshots::EditVerb;
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mut history = History::default();
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddColor(SceneId(1))),
+        );
+        let item = first_item(&database);
+        let before = item.transform;
+        let moved = Transform {
+            position: [before.position[0] + 120.0, before.position[1] + 40.0],
+            ..before
+        };
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::SetTransform(item.id, moved)),
+        );
+        let label = history.snapshot().undo.expect("the move is a step");
+        assert_eq!(label.verb, EditVerb::Transform);
+        assert_eq!(label.target, format!("Scene 1 › {}", item.name));
+
+        history.undo(&mut database).unwrap();
+        assert_eq!(first_item(&database).transform, before, "undo puts it back");
+        let snapshot = history.snapshot();
+        assert_eq!(
+            snapshot.redo.map(|label| label.verb),
+            Some(EditVerb::Transform)
+        );
+        assert!(snapshot.moved.is_some_and(|moved| moved.undone));
+
+        history.redo(&mut database).unwrap();
+        assert_eq!(first_item(&database).transform, moved, "redo does it again");
+    }
+
+    /// Deleting a Source takes its filters with it through a cascade, which
+    /// is the case a hand-written inverse would most likely get wrong — and
+    /// which the session records like any other row.
+    #[test]
+    fn undoing_a_deletion_brings_back_what_went_with_it() {
+        use crate::domain::{FilterKind, SceneId};
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mut history = History::default();
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddColor(SceneId(1))),
+        );
+        let item = first_item(&database).id;
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddFilter {
+                scene_item_id: item,
+                kind: FilterKind::ChromaKey,
+            }),
+        );
+        let kept = first_item(&database);
+        assert_eq!(kept.filters.len(), 1);
+
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::Delete(item)),
+        );
+        assert!(items(&database).is_empty());
+
+        history.undo(&mut database).unwrap();
+        let back = first_item(&database);
+        assert_eq!(back.id, item, "the same item, not a new one like it");
+        assert_eq!(back.name, kept.name);
+        assert_eq!(
+            back.filters
+                .iter()
+                .map(|filter| filter.id)
+                .collect::<Vec<_>>(),
+            kept.filters
+                .iter()
+                .map(|filter| filter.id)
+                .collect::<Vec<_>>(),
+            "and the filter that cascaded away with it"
+        );
+    }
+
+    /// What the engine writes is outside the history: it is never a step,
+    /// and undoing the edit before it leaves it alone.
+    #[test]
+    fn what_the_engine_writes_is_never_a_step() {
+        use crate::domain::{SceneId, SourceKind, Transform};
+        use crate::snapshots::EditVerb;
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mut history = History::default();
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddColor(SceneId(1))),
+        );
+        let item = first_item(&database);
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::SetTransform(
+                item.id,
+                Transform {
+                    position: [
+                        item.transform.position[0] + 10.0,
+                        item.transform.position[1],
+                    ],
+                    ..item.transform
+                },
+            )),
+        );
+        // The engine's own write — a size it measured — through the plain
+        // path its dispatcher takes rather than the history.
+        database
+            .transaction(|transaction| {
+                apply_project_command(
+                    transaction,
+                    ProjectCommand::Source(SourceCommand::SetSourceSize(
+                        item.id,
+                        SourceKind::Color,
+                        [321, 123],
+                    )),
+                )
+            })
+            .unwrap();
+        let measured = first_item(&database).source_size;
+
+        history.undo(&mut database).unwrap();
+        let after = first_item(&database);
+        assert_eq!(after.transform, item.transform, "the move was undone");
+        assert_eq!(
+            after.source_size, measured,
+            "and what the engine wrote was not"
+        );
+        assert_eq!(
+            history.snapshot().undo.map(|label| label.verb),
+            Some(EditVerb::AddSource),
+            "the engine's write was never a step of its own"
+        );
+    }
+
+    /// Undo never changes what is on air, even for a step in another Scene.
+    /// Only where a step takes the Scene on air away is there nothing else
+    /// to keep.
+    #[test]
+    fn undo_leaves_the_selected_scene_where_it_is() {
+        use crate::persistence::SceneStore;
+
+        let selected = |database: &ProjectDatabase| {
+            SceneStore::selected_scene_id(database.connection()).unwrap()
+        };
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mut history = History::default();
+        let first = selected(&database).unwrap();
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Scene(SceneCommand::Add),
+        );
+        let second = scene_snapshot(&database)
+            .unwrap()
+            .items
+            .iter()
+            .map(|scene| scene.id)
+            .find(|scene| *scene != first)
+            .expect("a second Scene");
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Scene(SceneCommand::Select(second)),
+        );
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Scene(SceneCommand::Select(first)),
+        );
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Scene(SceneCommand::Rename(second, "Renamed".to_owned())),
+        );
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Scene(SceneCommand::Select(second)),
+        );
+
+        // The rename was of the Scene now on air; undoing it keeps it there.
+        history.undo(&mut database).unwrap();
+        assert_eq!(selected(&database), Some(second));
+
+        // Selecting was never a step, so the next undo is the Add itself —
+        // which takes away the Scene on air, leaving the step's own choice.
+        history.undo(&mut database).unwrap();
+        assert!(
+            scene_snapshot(&database)
+                .unwrap()
+                .items
+                .iter()
+                .all(|scene| scene.id != second)
+        );
+        assert_eq!(selected(&database), Some(first));
+
+        // Putting it back does not put it on air.
+        history.redo(&mut database).unwrap();
+        assert!(
+            scene_snapshot(&database)
+                .unwrap()
+                .items
+                .iter()
+                .any(|scene| scene.id == second)
+        );
+        assert_eq!(selected(&database), Some(first));
+    }
+
+    /// An edit that changes nothing is not a step, and what is operated — a
+    /// fader, a mute button — is not either.
+    #[test]
+    fn only_edits_that_change_something_are_steps() {
+        use crate::domain::{AudioSourceId, SceneId};
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mut history = History::default();
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddColor(SceneId(1))),
+        );
+        let item = first_item(&database).id;
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::MoveUp(item)),
+        );
+        let desktop = AudioSourceId(AudioStore::list(database.connection()).unwrap()[0].id.0);
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Audio(AudioCommand::SetMuted(desktop, true)),
+        );
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Audio(AudioCommand::SetGainDb(desktop, -6.0)),
+        );
+
+        history.undo(&mut database).unwrap();
+        assert!(
+            items(&database).is_empty(),
+            "the one step there was is the Add"
+        );
+        assert!(
+            AudioStore::list(database.connection()).unwrap()[0].muted,
+            "and the mute button stayed where it was put"
+        );
+        assert!(history.snapshot().undo.is_none());
+    }
+
+    /// A new edit after an undo drops what could have been redone.
+    #[test]
+    fn a_new_edit_forgets_what_was_undone() {
+        use crate::domain::SceneId;
+
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let mut history = History::default();
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddColor(SceneId(1))),
+        );
+        history.undo(&mut database).unwrap();
+        assert!(history.snapshot().redo.is_some());
+        edit(
+            &mut database,
+            &mut history,
+            ProjectCommand::Source(SourceCommand::AddText(SceneId(1))),
+        );
+        assert!(history.snapshot().redo.is_none());
+    }
 
     /// The whole filter chain through the commands that make it: added,
     /// ordered, retuned, turned off and removed, read back from the database

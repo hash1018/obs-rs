@@ -1,4 +1,5 @@
 mod command;
+mod history;
 mod manager;
 
 pub use command::{AudioCommand, ProjectCommand, SceneCommand, SourceCommand};

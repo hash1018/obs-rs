@@ -256,6 +256,8 @@ pub(crate) fn label(
                 HotkeyAction::Fullscreen => TextKey::HotkeyFullscreen,
                 HotkeyAction::ToggleProjector => TextKey::HotkeyToggleProjector,
                 HotkeyAction::OpenSettings => TextKey::HotkeyOpenSettings,
+                HotkeyAction::Undo => TextKey::HotkeyUndo,
+                HotkeyAction::Redo => TextKey::HotkeyRedo,
             })
             .into_owned(),
         Hotkey::PushToTalk(id) => named(TextKey::HotkeyPushToTalk, "channel", channel(id)),

@@ -1,3 +1,4 @@
+mod edit;
 pub(super) mod hotkeys;
 mod menu_bar;
 mod status_bar;
@@ -107,10 +108,17 @@ pub fn show(
         ui,
         state,
         &resources.snapshots.status,
+        &resources.snapshots.history,
+        &resources.settings.hotkeys,
         resources.i18n,
         actions,
     );
-    status_bar::show(ui, &resources.snapshots.status, resources.i18n);
+    status_bar::show(
+        ui,
+        &resources.snapshots.status,
+        &resources.snapshots.history,
+        resources.i18n,
+    );
     docking::show(
         ui,
         &mut state.dock_layout,

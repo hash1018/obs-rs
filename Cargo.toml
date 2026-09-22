@@ -50,7 +50,11 @@ wgpu = "30"
 # this hands over a pointer instead.
 arc-swap = "1"
 fluent-bundle = "0.16.0"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+# `session` is SQLite's own change recording, which is what Edit → Undo is
+# built on: every edit runs in one transaction, and the session hands back
+# exactly the rows it changed, as a changeset that can be inverted — see
+# `project::history`.
+rusqlite = { version = "0.40.2", features = ["bundled", "session"] }
 serde = { version = "1", features = ["derive"] }
 # Names a recording for the moment it started, in the user's own time zone.
 # The same crate `media-pp` stamps its log records with, so this is a

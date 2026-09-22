@@ -169,7 +169,15 @@ pub(super) fn show(
                     ui.set_min_width(band.wanted);
                     toolbar::show(ui, view_state, i18n);
                     if let Some((item_id, strokes)) = drawing {
-                        toolbar::show_pen(ui, &mut editor.pen, item_id, strokes, i18n, actions);
+                        toolbar::show_pen(
+                            ui,
+                            &mut editor.pen,
+                            item_id,
+                            strokes,
+                            resources.snapshots.history.undo.is_some(),
+                            i18n,
+                            actions,
+                        );
                     }
                     if let Some(item_id) = page {
                         toolbar::show_page(ui, editor, item_id, i18n, actions);

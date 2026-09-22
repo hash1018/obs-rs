@@ -176,7 +176,11 @@ fn pressed_action(
         }
         // The window's own, which never come through here — see `dispatch`.
         Hotkey::Action(
-            HotkeyAction::Fullscreen | HotkeyAction::ToggleProjector | HotkeyAction::OpenSettings,
+            HotkeyAction::Fullscreen
+            | HotkeyAction::ToggleProjector
+            | HotkeyAction::OpenSettings
+            | HotkeyAction::Undo
+            | HotkeyAction::Redo,
         ) => {}
         Hotkey::ToggleMute(id) => {
             // Against what the mute button shows now, as clicking it would
@@ -321,6 +325,14 @@ pub fn dispatch(
     }
     if bound(ctx, bindings, HotkeyAction::OpenSettings) {
         actions.push(UiAction::OpenSettings);
+    }
+    // After the typing check above, which is what leaves a text field's own
+    // Ctrl+Z to the text field.
+    if bound(ctx, bindings, HotkeyAction::Undo) {
+        actions.push(UiAction::Project(ProjectCommand::Undo));
+    }
+    if bound(ctx, bindings, HotkeyAction::Redo) {
+        actions.push(UiAction::Project(ProjectCommand::Redo));
     }
 }
 

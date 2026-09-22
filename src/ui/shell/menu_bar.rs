@@ -6,10 +6,13 @@ use crate::settings::Theme;
 use super::{UiAction, UiState, docking::DockPanel};
 use crate::ui::Projector;
 
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
     status: &crate::snapshots::StatusSnapshot,
+    history: &crate::snapshots::HistorySnapshot,
+    hotkeys: &crate::hotkey::HotkeySettings,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
@@ -74,6 +77,10 @@ pub fn show(
                         actions.push(UiAction::Exit);
                         ui.close();
                     }
+                });
+
+                ui.menu_button(i18n.text(TextKey::MenuEdit), |ui| {
+                    show_edit_menu(ui, history, hotkeys, i18n, actions);
                 });
 
                 ui.menu_button(i18n.text(TextKey::MenuView), |ui| {
@@ -247,5 +254,49 @@ fn show_projector_menu(
     {
         state.show_projector((!windowed).then_some(Projector::Window));
         ui.close();
+    }
+}
+
+/// Undo and Redo, each naming the step it would move, with the key that
+/// does the same.
+///
+/// The key is shown as it is bound rather than written in: it can be moved
+/// on the Hotkeys page, and a menu that went on saying Ctrl+Z afterwards
+/// would be telling somebody to press a key that no longer does it.
+fn show_edit_menu(
+    ui: &mut egui::Ui,
+    history: &crate::snapshots::HistorySnapshot,
+    hotkeys: &crate::hotkey::HotkeySettings,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    use crate::hotkey::HotkeyAction;
+    use crate::project::ProjectCommand;
+
+    for (label, with, without, action, command) in [
+        (
+            history.undo.as_ref(),
+            TextKey::MenuUndo,
+            TextKey::MenuUndoNothing,
+            HotkeyAction::Undo,
+            ProjectCommand::Undo,
+        ),
+        (
+            history.redo.as_ref(),
+            TextKey::MenuRedo,
+            TextKey::MenuRedoNothing,
+            HotkeyAction::Redo,
+            ProjectCommand::Redo,
+        ),
+    ] {
+        let text = super::edit::menu_item(label, with, without, i18n);
+        let mut button = egui::Button::new(text);
+        if let Some(chord) = hotkeys.binding(action) {
+            button = button.shortcut_text(chord.to_string());
+        }
+        if ui.add_enabled(label.is_some(), button).clicked() {
+            actions.push(UiAction::Project(command));
+            ui.close();
+        }
     }
 }

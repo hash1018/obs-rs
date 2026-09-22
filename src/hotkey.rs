@@ -228,11 +228,14 @@ pub enum HotkeyAction {
     /// View menu's projector, from a key.
     ToggleProjector,
     OpenSettings,
+    /// Edit → Undo and Redo — see `project::history`.
+    Undo,
+    Redo,
 }
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::ToggleRecording,
         Self::TogglePause,
         Self::ToggleStreaming,
@@ -243,6 +246,8 @@ impl HotkeyAction {
         Self::Fullscreen,
         Self::ToggleProjector,
         Self::OpenSettings,
+        Self::Undo,
+        Self::Redo,
     ];
 }
 
@@ -282,6 +287,8 @@ impl Hotkey {
                 HotkeyAction::Fullscreen
                     | HotkeyAction::ToggleProjector
                     | HotkeyAction::OpenSettings
+                    | HotkeyAction::Undo
+                    | HotkeyAction::Redo
             )
         )
     }
@@ -355,6 +362,8 @@ pub struct HotkeySettings {
     pub fullscreen: Binding,
     pub toggle_projector: Binding,
     pub open_settings: Binding,
+    pub undo: Binding,
+    pub redo: Binding,
     /// Only the channels, Scenes and items that have a key, so a file that
     /// binds none of them says nothing about them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -390,6 +399,10 @@ impl Default for HotkeySettings {
             // is on the other screen.
             toggle_projector: Binding(None),
             open_settings: Chord::ctrl(Key::Comma).into(),
+            // The keys every editor uses, and the window's own: an undo heard
+            // from inside a game would be taking back an edit nobody meant to.
+            undo: Chord::ctrl(Key::Z).into(),
+            redo: Chord::ctrl(Key::Y).into(),
             channels: Vec::new(),
             scenes: Vec::new(),
             items: Vec::new(),
@@ -411,6 +424,8 @@ impl HotkeySettings {
                 HotkeyAction::Fullscreen => self.fullscreen.0,
                 HotkeyAction::ToggleProjector => self.toggle_projector.0,
                 HotkeyAction::OpenSettings => self.open_settings.0,
+                HotkeyAction::Undo => self.undo.0,
+                HotkeyAction::Redo => self.redo.0,
             },
             Hotkey::PushToTalk(id) => self.channel(id).and_then(|keys| keys.push_to_talk.0),
             Hotkey::PushToMute(id) => self.channel(id).and_then(|keys| keys.push_to_mute.0),
@@ -442,6 +457,8 @@ impl HotkeySettings {
                 HotkeyAction::Fullscreen => self.fullscreen = binding,
                 HotkeyAction::ToggleProjector => self.toggle_projector = binding,
                 HotkeyAction::OpenSettings => self.open_settings = binding,
+                HotkeyAction::Undo => self.undo = binding,
+                HotkeyAction::Redo => self.redo = binding,
             },
             Hotkey::PushToTalk(id) => self.channel_mut(id).push_to_talk = binding,
             Hotkey::PushToMute(id) => self.channel_mut(id).push_to_mute = binding,

@@ -11,6 +11,11 @@ pub enum ProjectCommand {
     Scene(SceneCommand),
     Source(SourceCommand),
     Audio(AudioCommand),
+    /// Takes the last edit back — see `project::history` for what counts as
+    /// one. Nothing to undo is not an error.
+    Undo,
+    /// Puts back the last edit undone.
+    Redo,
 }
 
 /// A change to one of the mixer's audio sources.
