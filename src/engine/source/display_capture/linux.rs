@@ -86,13 +86,7 @@ pub(in crate::engine) fn open(
 
     // Capture gives BGRA and the compositor works in NV12; nothing between
     // them converts, so this element is not optional.
-    let converter = CudaConverter::new(
-        format!("{name}-convert"),
-        device,
-        CudaFrameFormat::Nv12,
-        format.width,
-        format.height,
-    )?;
+    let converter = CudaConverter::new(format!("{name}-convert"), device, CudaFrameFormat::Nv12)?;
 
     // After the converter, as a camera's rack is after its upload — see the
     // `filters` module for why a capture is not filtered before it.

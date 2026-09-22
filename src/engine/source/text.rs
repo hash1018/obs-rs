@@ -387,7 +387,7 @@ pub(in crate::engine) fn open(
     // matters, and a deeper queue would put the picture behind the field
     // being typed into.
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = D3d11Upload::new(format!("{name}-upload"), device, size[0], size[1]);
+    let upload = D3d11Upload::new(format!("{name}-upload"), device);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,
@@ -434,13 +434,7 @@ pub(in crate::engine) fn open(
     let name = input_name(item);
     let frame = text_bgra(size[0], size[1], &settings)?;
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        CudaFrameFormat::Bgra,
-        size[0],
-        size[1],
-    )?;
+    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
         super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
 
@@ -641,14 +635,8 @@ mod tests {
         let frame = text_bgra(width, height, &caption).expect("draw the caption");
 
         let (source, pusher) = AppSource::new("caption", 1);
-        let upload = CudaUpload::new(
-            "caption-upload",
-            &cuda,
-            CudaFrameFormat::Bgra,
-            width,
-            height,
-        )
-        .expect("upload");
+        let upload =
+            CudaUpload::new("caption-upload", &cuda, CudaFrameFormat::Bgra).expect("upload");
         let CudaVideoCompositorInput { sink, .. } = handle
             .add_source(
                 "caption",
@@ -665,7 +653,7 @@ mod tests {
         pusher.push(frame).expect("push the caption");
 
         let (composed, arrived) = mpsc::channel();
-        let download = CudaDownload::new("download", &cuda, CudaFrameFormat::Nv12, width, height);
+        let download = CudaDownload::new("download", &cuda, CudaFrameFormat::Nv12);
         let sink = AppSink::new("out", move |buffer: MediaBuffer| {
             if let MediaBuffer::Video(frame) = &buffer {
                 // The luma plane alone, which is all the two colours here
@@ -801,7 +789,7 @@ mod tests {
         let frame = text_bgra(width, height, &caption).expect("draw the caption");
 
         let (source, pusher) = AppSource::new("caption", 1);
-        let upload = D3d11Upload::new("caption-upload", &device, width, height);
+        let upload = D3d11Upload::new("caption-upload", &device);
         let D3d11VideoCompositorInput { sink, .. } = handle
             .add_source(
                 "caption",
@@ -819,8 +807,7 @@ mod tests {
         pusher.push(frame).expect("push the caption");
 
         let (composed, arrived) = mpsc::channel();
-        let download = D3d11Download::new("download", &device, context.clone(), width, height)
-            .expect("download");
+        let download = D3d11Download::new("download", &device, context.clone()).expect("download");
         let sink = AppSink::new("out", move |buffer: MediaBuffer| {
             if let MediaBuffer::Video(frame) = &buffer {
                 // Copied out because the frame goes back to its pool when

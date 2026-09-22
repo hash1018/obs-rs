@@ -555,13 +555,7 @@ pub(in crate::engine) fn open(
     let name = input_name(item);
 
     let (source, pusher) = AppSource::new(name.clone(), PICTURE_QUEUE_DEPTH);
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        CudaFrameFormat::Bgra,
-        size[0],
-        size[1],
-    )?;
+    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
         super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
 

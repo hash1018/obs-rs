@@ -231,7 +231,7 @@ pub(in crate::engine) fn open(
     // only the newest matters, so a deeper queue would only add latency
     // between the pointer and the picture.
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = D3d11Upload::new(format!("{name}-upload"), device, size[0], size[1]);
+    let upload = D3d11Upload::new(format!("{name}-upload"), device);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,
@@ -274,13 +274,7 @@ pub(in crate::engine) fn open(
     let (size, strokes) = surface(item)?;
     let name = input_name(item);
     let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        CudaFrameFormat::Bgra,
-        size[0],
-        size[1],
-    )?;
+    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
         super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
 

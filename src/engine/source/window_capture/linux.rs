@@ -74,13 +74,7 @@ pub(in crate::engine) fn open(
     // The size the portal negotiated, not the item's: a window is whatever
     // size it happens to be, and the converter has to be built for what
     // actually arrives.
-    let converter = CudaConverter::new(
-        format!("{name}-convert"),
-        device,
-        CudaFrameFormat::Nv12,
-        format.width,
-        format.height,
-    )?;
+    let converter = CudaConverter::new(format!("{name}-convert"), device, CudaFrameFormat::Nv12)?;
 
     // After the converter, as a camera's rack is after its upload — see the
     // `filters` module for why a capture is not filtered before it.

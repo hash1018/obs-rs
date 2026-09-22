@@ -185,8 +185,6 @@ impl Backend {
                     format!("{}-download", kind.prefix()),
                     &self.device,
                     Arc::clone(&self.context),
-                    width,
-                    height,
                 )?)
                 .pipe(SwScaler::new(
                     format!("{}-convert", kind.prefix()),
@@ -377,8 +375,6 @@ impl Backend {
                 "screenshot-download",
                 &self.device,
                 Arc::clone(&self.context),
-                width,
-                height,
             )?)
             .pipe(SwScaler::new(
                 "screenshot-convert",
@@ -422,8 +418,6 @@ impl Backend {
             "source-screenshot-download",
             &self.device,
             Arc::clone(&self.context),
-            width,
-            height,
         )?;
         let convert = SwScaler::new(
             "source-screenshot-convert",

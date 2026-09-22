@@ -124,7 +124,7 @@ pub(in crate::engine) fn open(
     let (source, pusher) = AppSource::new(name.clone(), 1);
     // BGRA in, BGRA composited: there is no colour-space conversion between
     // the upload and the compositor at all.
-    let upload = D3d11Upload::new(format!("{name}-upload"), device, size[0], size[1]);
+    let upload = D3d11Upload::new(format!("{name}-upload"), device);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
         device,
@@ -170,13 +170,7 @@ pub(in crate::engine) fn open(
     // BGRA all the way, as a Drawing's is: the compositor takes a BGRA layer
     // and blends it itself, and a converter to NV12 here would have been
     // where a key's alpha was lost.
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        CudaFrameFormat::Bgra,
-        size[0],
-        size[1],
-    )?;
+    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
         super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
 

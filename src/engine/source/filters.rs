@@ -403,24 +403,18 @@ mod linux {
         name: String,
         device: Arc<CudaDevice>,
         incoming: ChainFormat,
-        width: u32,
-        height: u32,
     }
 
     pub(in crate::engine) fn rack(
         name: &str,
         device: &Arc<CudaDevice>,
         incoming: ChainFormat,
-        width: u32,
-        height: u32,
     ) -> (Rack, FilterRack) {
         let (rack, handle) = super::new_rack(name, MemoryDomain::Cuda);
         let backend = Backend {
             name: name.to_owned(),
             device: device.clone(),
             incoming,
-            width,
-            height,
         };
         (
             rack,
@@ -440,8 +434,6 @@ mod linux {
             name,
             device,
             incoming,
-            width,
-            height,
         } = backend;
 
         let mut elements: Vec<Box<dyn PpFilter>> = Vec::with_capacity(filters.len() + 1);
@@ -449,14 +441,8 @@ mod linux {
         // — which is why `CudaConverter` grew the direction.
         if *incoming == ChainFormat::Nv12 {
             elements.push(Box::new(
-                CudaConverter::new(
-                    format!("{name}-to-bgra"),
-                    device,
-                    CudaFrameFormat::Bgra,
-                    *width,
-                    *height,
-                )
-                .map_err(|error| BackendError::from(error.to_string()))?,
+                CudaConverter::new(format!("{name}-to-bgra"), device, CudaFrameFormat::Bgra)
+                    .map_err(|error| BackendError::from(error.to_string()))?,
             ));
         }
 
@@ -466,8 +452,6 @@ mod linux {
                 let (element, handle) = CudaChromaKey::new(
                     format!("{name}-key-{}", filter.id.0),
                     device,
-                    *width,
-                    *height,
                     super::chroma_key_options(settings),
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?;
@@ -478,14 +462,9 @@ mod linux {
                     handle: FilterHandle::ChromaKey(handle),
                 });
             } else if let Some(effect) = super::video_effect(&filter.settings) {
-                let (element, handle) = CudaVideoEffect::new(
-                    format!("{name}-effect-{}", filter.id.0),
-                    device,
-                    *width,
-                    *height,
-                    effect,
-                )
-                .map_err(|error| BackendError::from(error.to_string()))?;
+                let (element, handle) =
+                    CudaVideoEffect::new(format!("{name}-effect-{}", filter.id.0), device, effect)
+                        .map_err(|error| BackendError::from(error.to_string()))?;
                 handle.set_enabled(filter.enabled);
                 elements.push(Box::new(element));
                 open.push(OpenFilter {

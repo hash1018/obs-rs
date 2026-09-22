@@ -169,8 +169,6 @@ impl Backend {
                     format!("{}-download", kind.prefix()),
                     &self.device,
                     CudaFrameFormat::Nv12,
-                    width,
-                    height,
                 ))
                 .pipe(SwScaler::new(
                     format!("{}-convert", kind.prefix()),
@@ -316,8 +314,6 @@ impl Backend {
                 "screenshot-download",
                 &self.device,
                 CudaFrameFormat::Nv12,
-                width,
-                height,
             ))
             .pipe(SwScaler::new(
                 "screenshot-convert",
@@ -346,13 +342,7 @@ impl Backend {
             crate::engine::source::filters::ChainFormat::Bgra => CudaFrameFormat::Bgra,
             crate::engine::source::filters::ChainFormat::Nv12 => CudaFrameFormat::Nv12,
         };
-        let download = CudaDownload::new(
-            "source-screenshot-download",
-            &self.device,
-            layout,
-            width,
-            height,
-        );
+        let download = CudaDownload::new("source-screenshot-download", &self.device, layout);
         let convert = SwScaler::new(
             "source-screenshot-convert",
             ffmpeg::format::Pixel::RGBA,

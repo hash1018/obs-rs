@@ -184,12 +184,7 @@ fn open_camera(
     // of them, and this is what the log and the Stats dock show it as.
     let name = format!("camera-{}", settings.device_name);
     let (source, format) = start(&name, settings, item_name)?;
-    let upload = D3d11Upload::new(
-        format!("{name}-upload"),
-        device,
-        format.width,
-        format.height,
-    );
+    let upload = D3d11Upload::new(format!("{name}-upload"), device);
 
     let mut handle = None;
     let pipeline = Pipeline::new(name.clone(), source, |source, context| {

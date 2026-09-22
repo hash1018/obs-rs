@@ -170,8 +170,6 @@ fn open_camera(
         format!("{name}-upload"),
         device,
         media_pp::elements::CudaFrameFormat::Nv12,
-        format.width,
-        format.height,
     )
     .map_err(|error| format!("the camera's upload could not be made: {error}"))?;
 

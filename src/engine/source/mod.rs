@@ -104,16 +104,18 @@ pub(in crate::engine) fn filled_rack(
     })
 }
 
-/// The same, on the CUDA backend.
+/// The same, on the CUDA backend. The size is taken for symmetry with the
+/// Windows twin, whose `D3d11Scaler` still needs one; nothing on this
+/// backend does, every CUDA element here taking its size from the frames.
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn filled_rack(
     name: &str,
     device: &Arc<media_pp::elements::CudaDevice>,
     incoming: filters::ChainFormat,
-    [width, height]: [u32; 2],
+    _size: [u32; 2],
     item: &SceneItemSnapshot,
 ) -> Result<FilledRack, BackendError> {
-    let (rack, filter_rack) = filters::rack(name, device, incoming, width, height);
+    let (rack, filter_rack) = filters::rack(name, device, incoming);
     let open = filter_rack.refill(&item.filters)?;
     Ok(FilledRack {
         rack,
