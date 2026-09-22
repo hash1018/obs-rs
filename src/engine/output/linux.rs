@@ -304,7 +304,6 @@ impl Backend {
         &self,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
-        let [width, height] = self.size;
         let branch = self
             .tee
             .branch()
@@ -315,11 +314,9 @@ impl Backend {
                 &self.device,
                 CudaFrameFormat::Nv12,
             ))
-            .pipe(SwScaler::new(
+            .pipe(SwScaler::to_format(
                 "screenshot-convert",
                 ffmpeg::format::Pixel::RGB24,
-                width,
-                height,
                 ffmpeg::software::scaling::Flags::BILINEAR,
             ))
             .to(sink)?;
@@ -337,17 +334,14 @@ impl Backend {
     ) -> Result<std::sync::Arc<media_pp::pipeline::Pipeline>, BackendError> {
         use media_pp::elements::AppSource;
 
-        let (width, height) = (frame.width(), frame.height());
         let layout = match format {
             crate::engine::source::filters::ChainFormat::Bgra => CudaFrameFormat::Bgra,
             crate::engine::source::filters::ChainFormat::Nv12 => CudaFrameFormat::Nv12,
         };
         let download = CudaDownload::new("source-screenshot-download", &self.device, layout);
-        let convert = SwScaler::new(
+        let convert = SwScaler::to_format(
             "source-screenshot-convert",
             ffmpeg::format::Pixel::RGBA,
-            width,
-            height,
             ffmpeg::software::scaling::Flags::BILINEAR,
         );
         let (source, pusher) = AppSource::new("source-screenshot", 1);

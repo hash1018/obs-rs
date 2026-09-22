@@ -365,7 +365,6 @@ impl Backend {
         &self,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
-        let [width, height] = self.size;
         let branch = self
             .tee
             .branch()
@@ -376,11 +375,9 @@ impl Backend {
                 &self.device,
                 Arc::clone(&self.context),
             )?)
-            .pipe(SwScaler::new(
+            .pipe(SwScaler::to_format(
                 "screenshot-convert",
                 ffmpeg::format::Pixel::RGB24,
-                width,
-                height,
                 ffmpeg::software::scaling::Flags::BILINEAR,
             ))
             .to(sink)?;
@@ -419,11 +416,9 @@ impl Backend {
             &self.device,
             Arc::clone(&self.context),
         )?;
-        let convert = SwScaler::new(
+        let convert = SwScaler::to_format(
             "source-screenshot-convert",
             ffmpeg::format::Pixel::RGBA,
-            width,
-            height,
             ffmpeg::software::scaling::Flags::BILINEAR,
         );
         let (source, pusher) = AppSource::new("source-screenshot", 1);
