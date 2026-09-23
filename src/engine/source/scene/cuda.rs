@@ -79,7 +79,7 @@ pub(in crate::engine) fn open(
     let (share, _) = scenes.open.attach(
         &key,
         || compose(&settings.scene_name, device, fps, canvas),
-        |builder, size| {
+        |builder, _size| {
             // No converter in front of it, as a Text Source has none: what
             // arrives is BGRA and the alpha is the point.
             let FilledRack { rack, filters } =

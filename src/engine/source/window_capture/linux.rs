@@ -78,13 +78,8 @@ pub(in crate::engine) fn open(
 
     // After the converter, as a camera's rack is after its upload — see the
     // `filters` module for why a capture is not filtered before it.
-    let FilledRack { rack, filters } = filled_rack(
-        &name,
-        device,
-        filters::ChainFormat::Nv12,
-        [format.width, format.height],
-        item,
-    )?;
+    let FilledRack { rack, filters } =
+        filled_rack(&name, device, filters::ChainFormat::Nv12, item)?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {

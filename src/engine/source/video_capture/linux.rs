@@ -94,7 +94,7 @@ pub(in crate::engine) fn open(
                 BackendError::from(absent)
             })
         },
-        |builder, size| {
+        |builder, _size| {
             // NV12 on the GPU, uploaded once for everything drawing this
             // camera. Filters work in BGRA, so a rack with any in it puts one
             // conversion at its head; an empty one leaves the picture NV12
