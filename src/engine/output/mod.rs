@@ -96,7 +96,6 @@ pub(super) fn available_audio_codecs(format: MixFormat) -> Vec<RecordingAudioCod
                     codec: media_codec(*codec),
                     sample_rate: format.sample_rate,
                     channels: format.channels,
-                    time_base: ffmpeg::Rational::new(1, format.sample_rate as i32),
                     bit_rate: DEFAULT_AUDIO_BIT_RATE_KBPS as usize * 1_000,
                 },
             )
@@ -359,7 +358,6 @@ impl Output {
         let mix = mixer
             .and_then(|(_, handle)| handle.mix_format())
             .unwrap_or(DEFAULT_MIX_FORMAT);
-        let audio_time_base = ffmpeg::Rational::new(1, mix.sample_rate as i32);
         let audio = mixer
             .map(|(tee, _)| tee)
             .map(|tee| -> Result<_, BackendError> {
@@ -371,7 +369,6 @@ impl Output {
                             codec: media_codec(encoding.audio_codec),
                             sample_rate: mix.sample_rate,
                             channels: mix.channels,
-                            time_base: audio_time_base,
                             bit_rate: encoding.audio_bit_rate_kbps.max(1) as usize * 1_000,
                         },
                     )?,
@@ -392,7 +389,7 @@ impl Output {
             audio: audio.as_ref().map(|(_, encoder)| TrackDef {
                 name: format!("{}-audio", kind.prefix()),
                 parameters: encoder.parameters(),
-                time_base: audio_time_base,
+                time_base: encoder.time_base(),
             }),
         };
         let Tracks {
@@ -510,14 +507,12 @@ mod tests {
     /// every FFmpeg; standing in for the picture is fine, since a muxer is
     /// told a track's parameters and nothing about what they are for.
     fn one_track() -> Tracks<TrackDef> {
-        let time_base = ffmpeg::Rational::new(1, 48_000);
         let encoder = SwAudioEncoder::new(
             "test-audio-encode",
             SwAudioEncoderOptions {
                 codec: AudioCodec::Aac,
                 sample_rate: 48_000,
                 channels: 2,
-                time_base,
                 bit_rate: 128_000,
             },
         )
@@ -526,7 +521,7 @@ mod tests {
             video: TrackDef {
                 name: String::from("test-track"),
                 parameters: encoder.parameters(),
-                time_base,
+                time_base: encoder.time_base(),
             },
             audio: None,
         }

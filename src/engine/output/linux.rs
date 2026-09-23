@@ -34,10 +34,6 @@ use super::{OutputEncoding, OutputKind};
 /// it needs, and the branch is built once the sink for it exists.
 pub(in crate::engine) struct PreparedOutput {
     encoder: RecordEncoder,
-    /// What the file's video track is stamped in — the reciprocal of the
-    /// rate the compositor is running at, which is the only rate frames can
-    /// arrive at.
-    time_base: ffmpeg::Rational,
     /// What the file is written at, which is the Scene Canvas unless the
     /// settings asked for less. The encoder was opened for it, so the branch
     /// has to deliver it.
@@ -53,8 +49,13 @@ impl PreparedOutput {
         }
     }
 
+    /// What the video track is stamped in: the encoder's own unit, which
+    /// it converts each frame's timestamp into.
     pub(in crate::engine) fn time_base(&self) -> ffmpeg::Rational {
-        self.time_base
+        match &self.encoder {
+            RecordEncoder::Hardware(encoder) => encoder.time_base(),
+            RecordEncoder::Software(encoder) => encoder.time_base(),
+        }
     }
 }
 
@@ -80,7 +81,6 @@ impl Backend {
         // cannot produce a file claiming frames nothing is making.
         Ok(PreparedOutput {
             encoder: self.open_encoder(kind, fps, encoding)?,
-            time_base: ffmpeg::Rational::new(1, fps as i32),
             size: encoding.size,
         })
     }
@@ -199,7 +199,6 @@ impl Backend {
         encoding: &OutputEncoding,
     ) -> Result<RecordEncoder, BackendError> {
         let [width, height] = encoding.size;
-        let time_base = ffmpeg::Rational::new(1, fps as i32);
         let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
         let bit_rate = encoding.bit_rate_bits;
         let gop_size = fps * encoding.keyframe_seconds.max(1);
@@ -219,7 +218,6 @@ impl Backend {
                     input_format: CudaFrameFormat::Nv12,
                     width,
                     height,
-                    time_base,
                     frame_rate,
                     bit_rate,
                     gop_size,
@@ -233,7 +231,6 @@ impl Backend {
                     codec: software_codec(other),
                     width,
                     height,
-                    time_base,
                     frame_rate,
                     bit_rate,
                     gop_size,
