@@ -12,15 +12,14 @@
 
 use std::sync::Arc;
 
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
+use media_pp::{buffer::MediaBuffer, ffmpeg};
 
 use crate::domain::SourceSettings;
 use crate::snapshots::SceneItemSnapshot;
 
-use super::super::backend::{BackendError, Layer, RunningSource};
-use super::{
-    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filters, input_name,
-};
+use super::super::backend::BackendError;
+use super::pushed::{self, Picture};
+use super::{OpenSource, PushedContent, input_name};
 
 /// One BGRA frame filled with a single colour, ready for a backend's upload
 /// element. Backend-independent: both compositors take their Color Source
@@ -62,46 +61,14 @@ fn size(item: &SceneItemSnapshot) -> Result<([u32; 2], [u8; 4]), BackendError> {
     ))
 }
 
-/// What both implementations return, so the difference between them stays the
-/// pipeline and nothing else.
-fn opened(
-    name: String,
-    source: RunningSource,
-    layer: Layer,
-    pusher: media_pp::elements::AppSourceHandle,
-    filters: SourceFilters,
-    size: [u32; 2],
-    rgba: [u8; 4],
-) -> Result<OpenSource, BackendError> {
-    let frame = flat_bgra(size[0], size[1], rgba);
-    pusher.push(frame.clone())?;
-    Ok(OpenSource {
-        media_file: None,
-        page: None,
-        // Its size is its own rather than something a device answered
-        // with, so there is nothing to correct.
-        negotiated_size: None,
-        source,
-        layer,
-        name,
-        refreshed_token: None,
-        filters: filters.open,
-        filter_rack: filters.filter_rack,
-        // Set by the engine where it is opened into a Scene's own
-        // composition — see `Target`.
-        nested_in: None,
-        showing: true,
-        running: true,
-        // Held, not dropped here: an `AppSource` runs only while a handle to
-        // it exists, and this one used to go out of scope in the same breath
-        // as its only frame.
-        pushed: Some(PushedSurface {
-            pusher,
-            size,
-            content: PushedContent::Color(rgba),
-            frame,
-        }),
-    })
+/// One flat colour, and the colour itself kept so that a filter change can
+/// push the same picture again rather than redraw it.
+fn picture(size: [u32; 2], rgba: [u8; 4]) -> Picture {
+    Picture {
+        size,
+        content: PushedContent::Color(rgba),
+        frame: flat_bgra(size[0], size[1], rgba),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -112,34 +79,10 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
-
     let (size, rgba) = size(item)?;
     let name = input_name(item);
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA in, BGRA composited: there is no colour-space conversion between
-    // the upload and the compositor at all.
-    let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
-
-    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
-        name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        size,
-        rgba,
-    )
+    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    pushed::opened(name, wired, picture(size, rgba))
 }
 
 #[cfg(target_os = "linux")]
@@ -149,33 +92,8 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
-
     let (size, rgba) = size(item)?;
     let name = input_name(item);
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA all the way, as a Drawing's is: the compositor takes a BGRA layer
-    // and blends it itself, and a converter to NV12 here would have been
-    // where a key's alpha was lost.
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
-
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
-        name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        size,
-        rgba,
-    )
+    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    pushed::opened(name, wired, picture(size, rgba))
 }

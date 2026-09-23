@@ -26,16 +26,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
+use media_pp::{buffer::MediaBuffer, ffmpeg};
 
 use crate::domain::SourceSettings;
 use crate::snapshots::SceneItemSnapshot;
 
-use super::super::backend::{BackendError, Layer, RunningSource};
-use super::{
-    FilledRack, OpenOutcome, OpenSource, PushedContent, PushedSurface, SourceFilters, filters,
-    input_name,
-};
+use super::super::backend::BackendError;
+use super::pushed::{self, Picture};
+use super::{OpenOutcome, PushedContent, input_name};
 
 /// The file this item names, or why it cannot be read right now.
 fn settings(item: &SceneItemSnapshot) -> Result<Result<&Path, String>, BackendError> {
@@ -102,54 +100,14 @@ fn decode(path: &Path) -> Result<(MediaBuffer, [u32; 2]), BackendError> {
     Ok((MediaBuffer::video(bgra), [width, height]))
 }
 
-/// The picture an Image Source opened with, and where it came from.
-struct Decoded<'a> {
-    frame: MediaBuffer,
-    size: [u32; 2],
-    path: &'a Path,
-}
-
-/// What both implementations return, so the difference between them stays the
-/// pipeline and nothing else. The picture is pushed here, once the pipeline
-/// is running.
-fn opened(
-    name: String,
-    source: RunningSource,
-    layer: Layer,
-    pusher: media_pp::elements::AppSourceHandle,
-    filters: SourceFilters,
-    decoded: Decoded<'_>,
-) -> Result<OpenSource, BackendError> {
-    pusher.push(decoded.frame.clone())?;
-    Ok(OpenSource {
-        media_file: None,
-        page: None,
-        // Its size is its own rather than something a device answered
-        // with, so there is nothing to correct.
-        negotiated_size: None,
-        source,
-        layer,
-        name,
-        refreshed_token: None,
-        filters: filters.open,
-        filter_rack: filters.filter_rack,
-        // Set by the engine where it is opened into a Scene's own
-        // composition — see `Target`.
-        nested_in: None,
-        showing: true,
-        running: true,
-        // Held rather than dropped: an `AppSource` runs only while a handle to
-        // it exists, and letting this one go would end the layer with the one
-        // frame it had just pushed.
-        pushed: Some(PushedSurface {
-            pusher,
-            size: decoded.size,
-            content: PushedContent::Image(decoded.path.to_path_buf()),
-            // Kept for pushing again when its filters change, since nothing
-            // else ever pushes an Image twice.
-            frame: decoded.frame,
-        }),
-    })
+/// The decoded file, and the path it came from kept so that a filter change
+/// can push the same picture again rather than decode it a second time.
+fn picture(frame: MediaBuffer, size: [u32; 2], path: &Path) -> Picture {
+    Picture {
+        size,
+        content: PushedContent::Image(path.to_path_buf()),
+        frame,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -160,38 +118,14 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenOutcome, BackendError> {
-    use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
-
     let path = match settings(item)? {
         Ok(path) => path,
         Err(absent) => return Ok(OpenOutcome::Absent(absent)),
     };
     let (frame, size) = decode(path)?;
     let name = input_name(item);
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA in, BGRA composited: as with a Color Source there is no
-    // colour-space conversion between the upload and the compositor.
-    let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
-
-    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
-        name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        Decoded { frame, size, path },
-    )
-    .map(OpenOutcome::Open)
+    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    pushed::opened(name, wired, picture(frame, size, path)).map(OpenOutcome::Open)
 }
 
 #[cfg(target_os = "linux")]
@@ -201,37 +135,12 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenOutcome, BackendError> {
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
-
     let path = match settings(item)? {
         Ok(path) => path,
         Err(absent) => return Ok(OpenOutcome::Absent(absent)),
     };
     let (frame, size) = decode(path)?;
     let name = input_name(item);
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    // BGRA all the way, as a Color Source's is now: the compositor blends a
-    // BGRA layer itself, and a converter to NV12 is where a key's alpha — or
-    // a PNG's own — would have been lost.
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
-
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
-        name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        Decoded { frame, size, path },
-    )
-    .map(OpenOutcome::Open)
+    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    pushed::opened(name, wired, picture(frame, size, path)).map(OpenOutcome::Open)
 }

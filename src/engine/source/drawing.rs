@@ -7,15 +7,14 @@
 
 use std::sync::Arc;
 
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
+use media_pp::{buffer::MediaBuffer, ffmpeg};
 
 use crate::domain::{SourceSettings, Stroke};
 use crate::snapshots::SceneItemSnapshot;
 
-use super::super::backend::{BackendError, Layer, RunningSource};
-use super::{
-    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filters, input_name,
-};
+use super::super::backend::BackendError;
+use super::pushed::{self, Picture};
+use super::{OpenSource, PushedContent, input_name};
 
 /// Draws a Drawing's strokes into a BGRA frame the compositor can take.
 ///
@@ -171,43 +170,14 @@ fn surface(item: &SceneItemSnapshot) -> Result<([u32; 2], Vec<Stroke>), BackendE
     ))
 }
 
-/// What both implementations return, so the difference between them stays the
-/// pipeline and nothing else.
-fn opened(
-    name: String,
-    source: RunningSource,
-    layer: Layer,
-    pusher: media_pp::elements::AppSourceHandle,
-    filters: SourceFilters,
-    size: [u32; 2],
-    strokes: Vec<Stroke>,
-) -> Result<OpenSource, BackendError> {
-    let frame = drawing_bgra(size[0], size[1], &strokes);
-    pusher.push(frame.clone())?;
-    Ok(OpenSource {
-        media_file: None,
-        page: None,
-        // Its size is its own rather than something a device answered
-        // with, so there is nothing to correct.
-        negotiated_size: None,
-        source,
-        layer,
-        name,
-        refreshed_token: None,
-        filters: filters.open,
-        filter_rack: filters.filter_rack,
-        // Set by the engine where it is opened into a Scene's own
-        // composition — see `Target`.
-        nested_in: None,
-        showing: true,
-        running: true,
-        pushed: Some(PushedSurface {
-            pusher,
-            size,
-            content: PushedContent::Drawing(strokes),
-            frame,
-        }),
-    })
+/// The strokes drawn into a frame, and the strokes themselves kept so that a
+/// filter change can push the same picture again rather than redraw it.
+fn picture(size: [u32; 2], strokes: Vec<Stroke>) -> Picture {
+    Picture {
+        size,
+        frame: drawing_bgra(size[0], size[1], &strokes),
+        content: PushedContent::Drawing(strokes),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -218,35 +188,10 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
-
     let (size, strokes) = surface(item)?;
     let name = input_name(item);
-    // One frame of capacity: a drawing gesture produces one per UI frame and
-    // only the newest matters, so a deeper queue would only add latency
-    // between the pointer and the picture.
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
-
-    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
-        name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        size,
-        strokes,
-    )
+    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    pushed::opened(name, wired, picture(size, strokes))
 }
 
 #[cfg(target_os = "linux")]
@@ -256,36 +201,10 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
-
     let (size, strokes) = surface(item)?;
     let name = input_name(item);
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
-
-    // No converter. A Drawing is an overlay: its alpha is the marks
-    // themselves, and NV12 has nowhere to keep one, so converting would put
-    // opaque black over everything nobody drew on. The compositor takes BGRA
-    // for exactly this and blends per pixel.
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
-        name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        size,
-        strokes,
-    )
+    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    pushed::opened(name, wired, picture(size, strokes))
 }
 #[cfg(test)]
 mod tests {

@@ -21,6 +21,9 @@ pub(in crate::engine) mod media_file;
 /// The one capture a Display Capture and a Window Capture both are on Linux.
 #[cfg(target_os = "linux")]
 pub(in crate::engine) mod portal_capture;
+/// What a Color, a Drawing, an Image and a Text Source all are: one picture,
+/// pushed.
+pub(in crate::engine) mod pushed;
 pub(in crate::engine) mod rtsp;
 pub(in crate::engine) mod scene;
 pub(in crate::engine) mod shared;

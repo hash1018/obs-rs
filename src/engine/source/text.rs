@@ -22,17 +22,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
+use media_pp::{buffer::MediaBuffer, ffmpeg};
 
 use crate::domain::{
     ClockFormat, SourceSettings, TextAlignment, TextMode, TextSourceSettings, TimerFormat,
 };
 use crate::snapshots::SceneItemSnapshot;
 
-use super::super::backend::{BackendError, Layer, RunningSource};
-use super::{
-    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filters, input_name,
-};
+use super::super::backend::BackendError;
+use super::pushed::{self, Picture};
+use super::{OpenSource, PushedContent, input_name};
 
 /// The most pixels one rasterized string is allowed to occupy.
 ///
@@ -327,84 +326,38 @@ struct Drawn {
     settings: TextSourceSettings,
 }
 
-/// What both implementations return, so the difference between them stays the
-/// pipeline and nothing else. The picture is pushed here, once the pipeline
-/// is running.
-fn opened(
-    name: String,
-    source: RunningSource,
-    layer: Layer,
-    pusher: media_pp::elements::AppSourceHandle,
-    filters: SourceFilters,
-    drawn: Drawn,
-) -> Result<OpenSource, BackendError> {
-    pusher.push(drawn.frame.clone())?;
-    Ok(OpenSource {
-        media_file: None,
-        page: None,
-        // Its box is its own rather than something a device answered with,
-        // so there is nothing to correct.
-        negotiated_size: None,
-        source,
-        layer,
-        name,
-        refreshed_token: None,
-        filters: filters.open,
-        filter_rack: filters.filter_rack,
-        // Set by the engine where it is opened into a Scene's own
-        // composition — see `Target`.
-        nested_in: None,
-        showing: true,
-        running: true,
-        pushed: Some(PushedSurface {
-            pusher,
-            size: drawn.size,
-            content: PushedContent::Text(drawn.settings),
-            frame: drawn.frame,
-        }),
-    })
+/// The text drawn into a frame, and everything it was drawn from kept so
+/// that a filter change can push the same picture again — see
+/// [`PushedContent::Text`] for why all of the settings and not the string
+/// alone.
+fn picture(drawn: Drawn) -> Picture {
+    Picture {
+        size: drawn.size,
+        content: PushedContent::Text(drawn.settings),
+        frame: drawn.frame,
+    }
 }
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, D3d11Upload, D3d11VideoCompositorInput};
-
     let (size, settings) = surface(item)?;
     let name = input_name(item);
     let frame = text_bgra(size[0], size[1], &settings)?;
-    // One frame of capacity, as a Drawing has: only the newest string
-    // matters, and a deeper queue would put the picture behind the field
-    // being typed into.
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
-
-    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
+    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    pushed::opened(
         name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        Drawn {
+        wired,
+        picture(Drawn {
             frame,
             size,
             settings,
-        },
+        }),
     )
 }
 
@@ -415,44 +368,26 @@ pub(in crate::engine) fn open(
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
-
     let (size, settings) = surface(item)?;
     let name = input_name(item);
     let frame = text_bgra(size[0], size[1], &settings)?;
-    let (source, pusher) = AppSource::new(name.clone(), 1);
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
-    let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
-
-    // No converter, for the reason a Drawing has none: the alpha *is* the
-    // text, and NV12 has nowhere to keep one. Converting first would put an
-    // opaque black rectangle behind every caption.
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        context.attach(source, 0, branch)?;
-        Ok(())
-    })?;
-    pipeline.run()?;
-
-    opened(
+    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    pushed::opened(
         name,
-        RunningSource::Owned(pipeline),
-        layer,
-        pusher,
-        filters,
-        Drawn {
+        wired,
+        picture(Drawn {
             frame,
             size,
             settings,
-        },
+        }),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use media_pp::pipeline::Pipeline;
 
     use super::*;
 
