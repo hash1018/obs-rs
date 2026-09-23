@@ -270,8 +270,8 @@ pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode>
         .map(|format| crate::domain::VideoCaptureMode {
             width: format.width,
             height: format.height,
-            framerate_numerator: format.framerate.numerator().max(0) as u32,
-            framerate_denominator: format.framerate.denominator().max(1) as u32,
+            framerate_numerator: format.frame_rate.numerator().max(0) as u32,
+            framerate_denominator: format.frame_rate.denominator().max(1) as u32,
         })
         .collect()
 }

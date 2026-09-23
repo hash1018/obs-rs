@@ -231,7 +231,7 @@ fn start(
     let requested = settings.mode.map(|mode| MfCaptureFormat {
         width: mode.width,
         height: mode.height,
-        framerate: ffmpeg::Rational::new(
+        frame_rate: ffmpeg::Rational::new(
             mode.framerate_numerator as i32,
             mode.framerate_denominator as i32,
         ),
