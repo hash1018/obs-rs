@@ -294,6 +294,7 @@ impl Backend {
                     codec: software_codec(other),
                     width,
                     height,
+                    pixel_format: ffmpeg::format::Pixel::YUV420P,
                     frame_rate,
                     bit_rate,
                     gop_size,
