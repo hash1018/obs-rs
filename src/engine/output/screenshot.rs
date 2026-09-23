@@ -181,7 +181,6 @@ mod tests {
     /// A small RGB24 frame whose every pixel says where it is, with its rows
     /// padded past their width the way a decoder's or a scaler's are.
     fn frame(width: u32, height: u32) -> ffmpeg::frame::Video {
-        media_pp::init().expect("ffmpeg initializes");
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGB24, width, height);
         let stride = frame.stride(0);
         assert!(stride >= width as usize * 3);
@@ -227,7 +226,6 @@ mod tests {
     #[test]
     fn an_rgba_frame_keeps_its_alpha() {
         let directory = scratch("alpha");
-        media_pp::init().expect("ffmpeg initializes");
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 2, 1);
         frame.data_mut(0)[..8].copy_from_slice(&[10, 20, 30, 0, 40, 50, 60, 255]);
 

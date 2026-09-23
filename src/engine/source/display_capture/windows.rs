@@ -304,7 +304,6 @@ mod tests {
     /// A device and the name of a display on its adapter, or why there are
     /// none — a CI runner has no monitor to duplicate.
     fn a_display() -> Result<(ID3D11Device, String), String> {
-        media_pp::init().map_err(|error| format!("ffmpeg would not initialize: {error}"))?;
         let (device, _) = crate::engine::backend::create_device()
             .map_err(|error| format!("no Direct3D 11 device: {error}"))?;
         // SAFETY: as in `resolve_output_index`.

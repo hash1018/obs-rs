@@ -1027,10 +1027,6 @@ mod tests {
             );
             return;
         };
-        if media_pp::init().is_err() {
-            eprintln!("skipped: ffmpeg would not initialize");
-            return;
-        }
         let Ok(cuda) = CudaDevice::new() else {
             eprintln!("skipped: no CUDA device on this machine");
             return;

@@ -89,7 +89,6 @@ impl Backend {
         on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
         meter_wake: MeterWake,
     ) -> Result<Self, BackendError> {
-        media_pp::init()?;
         let [width, height] = size;
 
         // One per process, not one per pipeline: creating or dropping a device

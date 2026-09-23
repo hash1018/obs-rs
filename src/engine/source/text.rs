@@ -590,10 +590,6 @@ mod tests {
             eprintln!("skipped: no font on this machine to draw with");
             return;
         }
-        if media_pp::init().is_err() {
-            eprintln!("skipped: ffmpeg would not initialize");
-            return;
-        }
         let Ok(cuda) = CudaDevice::new() else {
             eprintln!("skipped: no CUDA device on this machine");
             return;
@@ -741,10 +737,6 @@ mod tests {
 
         if a_font().is_none() {
             eprintln!("skipped: no font on this machine to draw with");
-            return;
-        }
-        if media_pp::init().is_err() {
-            eprintln!("skipped: ffmpeg would not initialize");
             return;
         }
         let Ok((device, context)) = crate::engine::backend::create_device() else {

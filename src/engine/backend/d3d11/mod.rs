@@ -86,7 +86,6 @@ impl Backend {
         on_frame: impl Fn(Option<egui::TextureId>) + Send + Sync + 'static,
         meter_wake: MeterWake,
     ) -> Result<Self, BackendError> {
-        media_pp::init()?;
         let [width, height] = size;
 
         // One device for the whole stack: capture textures, compositor input,
