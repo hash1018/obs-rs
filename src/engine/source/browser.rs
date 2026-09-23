@@ -393,23 +393,23 @@ pub(in crate::engine) fn open(
 
     let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let sound_name = name.clone();
-    let mut routing = None;
-    // By `&mut` rather than by value, as a stream's is: the closure has to
-    // be `move` for what it consumes, and the routing has to come back out
-    // to the engine loop that decides which mixes this page is in.
-    let routing_out = &mut routing;
-    let mut builder =
-        PipelineBuilder::new(name.clone()).add_source(source, move |source, context| {
-            let branch = context.branch().pipe(rack).to(sink)?;
-            context.attach(source, 0, branch)?;
-            Ok(())
-        })?;
-    if let Some(sound) = sound {
-        builder = builder.add_source(audio_source, move |source, context| {
-            *routing_out = Some(sound::attach(context, source, sound, &sound_name)?);
-            Ok(())
-        })?;
-    }
+    let builder = PipelineBuilder::new(name.clone());
+    let (builder, ()) = builder.add_source(source, move |source, context| {
+        let branch = context.branch().pipe(rack).to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    // The page's sound is a source of its own, there only when the page has
+    // sound to give.
+    let (builder, routing) = match sound {
+        Some(sound) => {
+            let (builder, routing) = builder.add_source(audio_source, move |source, context| {
+                sound::attach(context, source, sound, &sound_name)
+            })?;
+            (builder, Some(routing))
+        }
+        None => (builder, None),
+    };
     let pipeline = builder.build();
     pipeline.run()?;
 
@@ -583,20 +583,23 @@ pub(in crate::engine) fn open(
     // point, and NV12 has nowhere to keep it.
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let sound_name = name.clone();
-    let mut routing = None;
-    let routing_out = &mut routing;
-    let mut builder =
-        PipelineBuilder::new(name.clone()).add_source(source, move |source, context| {
-            let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-            context.attach(source, 0, branch)?;
-            Ok(())
-        })?;
-    if let Some(sound) = sound {
-        builder = builder.add_source(audio_source, move |source, context| {
-            *routing_out = Some(sound::attach(context, source, sound, &sound_name)?);
-            Ok(())
-        })?;
-    }
+    let builder = PipelineBuilder::new(name.clone());
+    let (builder, ()) = builder.add_source(source, move |source, context| {
+        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
+        context.attach(source, 0, branch)?;
+        Ok(())
+    })?;
+    // The page's sound is a source of its own, there only when the page has
+    // sound to give.
+    let (builder, routing) = match sound {
+        Some(sound) => {
+            let (builder, routing) = builder.add_source(audio_source, move |source, context| {
+                sound::attach(context, source, sound, &sound_name)
+            })?;
+            (builder, Some(routing))
+        }
+        None => (builder, None),
+    };
     let pipeline = builder.build();
     pipeline.run()?;
 
