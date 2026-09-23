@@ -151,31 +151,33 @@ fn choose(demuxer: &FileDemuxer, mixer: Option<&MixerHandle>) -> Result<Chosen, 
     })
 }
 
-/// Starts the pipeline, and stops it again where the Source is stored paused.
+/// Starts the pipeline — paused from the outset where the Source is stored
+/// paused, so not one frame plays before it stops.
 ///
 /// A Source that is paused the moment it opens has produced nothing, and a
 /// compositor layer with no frame draws nothing at all — so a clip paused
 /// before the application closed would come back as an empty rectangle. The
 /// seek is what fixes that: it costs a flush and a preroll, and a preroll is
 /// exactly "put one frame through every terminal", after which the pipeline
-/// restores the state that was asked for. The picture appears and stays
-/// where it is.
+/// stays paused. The picture appears and stays where it is.
 ///
 /// To the start rather than to where it was: where a clip is playing from is
 /// not written down — see `SourceCommand::SetMediaPaused` for what is.
 fn start(pipeline: &Arc<Pipeline>, paused: bool) -> Result<(), BackendError> {
-    pipeline.run()?;
     if paused {
         pipeline.pause();
-        if let Err(error) = pipeline.seek(
+    }
+    pipeline.run()?;
+    if paused
+        && let Err(error) = pipeline.seek(
             std::time::Duration::ZERO,
             media_pp::pipeline::SeekMode::Keyframe,
-        ) {
-            // Reported and carried on. What was lost is the first frame, so
-            // the layer stays empty until someone presses play — which is a
-            // Source that opened, not one that failed to.
-            tracing::warn!("could not show the first frame while paused: {error}");
-        }
+        )
+    {
+        // Reported and carried on. What was lost is the first frame, so
+        // the layer stays empty until someone presses play — which is a
+        // Source that opened, not one that failed to.
+        tracing::warn!("could not show the first frame while paused: {error}");
     }
     Ok(())
 }
