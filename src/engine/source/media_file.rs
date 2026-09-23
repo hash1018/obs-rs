@@ -64,7 +64,7 @@ use std::sync::atomic::Ordering;
 
 use media_pp::element::Context;
 use media_pp::element::Sink;
-use media_pp::elements::{AppSink, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer, TeeBuilder};
+use media_pp::elements::{AppSink, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer};
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
@@ -257,7 +257,8 @@ fn attach_video(
 ) -> media_pp::error::Result<()> {
     let draw = picture.branch(context)?;
     let record = context.branch().to(position)?;
-    let tee = TeeBuilder::new("video-tee", context.clone())
+    let tee = context
+        .tee("video-tee")
         .branch(draw)
         .branch(record)
         .build()?;

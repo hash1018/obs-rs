@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex};
 
 use media_pp::{
-    elements::{CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource, TeeBuilder},
+    elements::{CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource},
     ffmpeg,
     pipeline::{ChainBuilder, DetachedBranch, Pipeline},
     rate::FrameRateHandle,
@@ -131,8 +131,7 @@ fn open_capture(
     // those, so unlike the CUDA side nothing converts between them.
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
-        let (branch, tee) =
-            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
+        let (branch, tee) = context.tee(format!("{name}-tee")).build_dynamic()?;
         context.attach(source, 0, branch)?;
         handle = Some(tee);
         Ok(())

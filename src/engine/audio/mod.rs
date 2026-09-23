@@ -66,7 +66,7 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, AudioMixer, AudioMixerOptions, AudioResampler, AudioVolume, AudioVolumeHandle,
-        MixFormat, MixerHandle, TeeBuilder, TeeHandle,
+        MixFormat, MixerHandle, TeeHandle,
     },
     graph::BranchId,
     pipeline::Pipeline,
@@ -657,8 +657,7 @@ fn start_mixer(
     );
     let mut tee = None;
     let (pipeline, ()) = Pipeline::new(pipeline_name, mixer, |source, context| {
-        let (tee_branch, tee_handle) =
-            TeeBuilder::new(tee_name, context.clone()).build_dynamic()?;
+        let (tee_branch, tee_handle) = context.tee(tee_name).build_dynamic()?;
         context.attach(source, 0, tee_branch)?;
         tee = Some(tee_handle);
         Ok(())
@@ -750,7 +749,8 @@ fn open_source(
         // measures the level rather than the one before it, and monitoring
         // that goes quiet when the channel is pulled down.
         let meter_branch = context.branch().to(meter)?;
-        let mut tee = TeeBuilder::new(tee_name, context.clone())
+        let mut tee = context
+            .tee(tee_name)
             .branch(meter_branch)
             .branch(context.branch().to(mixer_input)?);
         if let Some(monitor_input) = monitor_input {

@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use media_pp::elements::{
     D3d11Upload, D3d11VideoCompositorHandle, D3d11VideoCompositorInput, MfCaptureFormat,
-    MfCaptureOptions, MfCaptureSource, MfDevice, TeeBuilder, VideoLayer,
+    MfCaptureOptions, MfCaptureSource, MfDevice, VideoLayer,
 };
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
@@ -180,8 +180,7 @@ fn open_camera(
 
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
-        let (tee, tee_handle) =
-            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
+        let (tee, tee_handle) = context.tee(format!("{name}-tee")).build_dynamic()?;
         let branch = context
             .branch()
             .queue("camera", QUEUE_DEPTH)

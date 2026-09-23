@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use media_pp::color::Color;
 use media_pp::elements::{
-    D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput, TeeBuilder,
+    D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput,
     VideoCompositorOptions, VideoLayer,
 };
 use media_pp::ffmpeg;
@@ -157,8 +157,7 @@ fn compose(
 
     let mut tee = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), compositor, |source, context| {
-        let (branch, tee_handle) =
-            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
+        let (branch, tee_handle) = context.tee(format!("{name}-tee")).build_dynamic()?;
         context.attach(source, 0, branch)?;
         tee = Some(tee_handle);
         Ok(())

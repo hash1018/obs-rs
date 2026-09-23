@@ -13,8 +13,8 @@ use media_pp::{
     buffer::MediaBuffer,
     elements::{
         AppSink, ChangeGate, CudaDevice, CudaRenderer, CudaVideoCompositor,
-        CudaVideoCompositorHandle, CudaVideoLayerHandle, TeeBuilder, TeeHandle,
-        VideoCompositorOptions, VideoLayer,
+        CudaVideoCompositorHandle, CudaVideoLayerHandle, TeeHandle, VideoCompositorOptions,
+        VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -185,7 +185,8 @@ impl Backend {
             // `build_dynamic` rather than `build`: the recording branch is
             // attached and detached while this is already running, and the
             // handle is the only way back to this `Tee` afterwards.
-            let (tee_branch, tee_handle) = TeeBuilder::new("output-tee", context.clone())
+            let (tee_branch, tee_handle) = context
+                .tee("output-tee")
                 .branch(count_branch)
                 .branch(draw_branch)
                 .build_dynamic()?;

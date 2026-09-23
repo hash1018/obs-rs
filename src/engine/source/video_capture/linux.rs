@@ -12,8 +12,8 @@
 //! item to open it asked for.
 
 use media_pp::elements::{
-    CudaDevice, CudaUpload, CudaVideoCompositorHandle, CudaVideoCompositorInput, TeeBuilder,
-    V4l2CaptureFormat, V4l2CaptureOptions, V4l2CaptureSource, V4l2Device, VideoLayer,
+    CudaDevice, CudaUpload, CudaVideoCompositorHandle, CudaVideoCompositorInput, V4l2CaptureFormat,
+    V4l2CaptureOptions, V4l2CaptureSource, V4l2Device, VideoLayer,
 };
 use std::sync::Arc;
 
@@ -175,8 +175,7 @@ fn open_camera(
 
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
-        let (tee, tee_handle) =
-            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
+        let (tee, tee_handle) = context.tee(format!("{name}-tee")).build_dynamic()?;
         let branch = context
             .branch()
             .queue("camera", QUEUE_DEPTH)

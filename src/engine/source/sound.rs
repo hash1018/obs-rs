@@ -42,7 +42,7 @@ use std::time::Duration;
 use media_pp::element::{Context, Sink, Source as SourceElement};
 use media_pp::elements::{
     AppSink, AudioFormat, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, Rack, SwDecoder,
-    TeeBuilder, TeeHandle,
+    TeeHandle,
 };
 use media_pp::ffmpeg;
 use media_pp::graph::BranchId;
@@ -409,7 +409,8 @@ pub(in crate::engine) fn attach<S: SourceElement>(
     // Dynamic although both of these are permanent, so that the monitor's
     // branch can be put on and taken off while the Source plays — see
     // [`SoundRouting`].
-    let (tee_branch, tee) = TeeBuilder::new("audio-tee", context.clone())
+    let (tee_branch, tee) = context
+        .tee("audio-tee")
         .branch(meter)
         .branch(mix)
         .build_dynamic()?;

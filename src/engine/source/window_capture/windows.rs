@@ -20,8 +20,8 @@
 use std::sync::{Arc, Mutex};
 
 use media_pp::elements::{
-    D3d11VideoCompositorHandle, D3d11VideoCompositorInput, TeeBuilder, VideoLayer,
-    WgcCaptureOptions, WgcCaptureSource,
+    D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer, WgcCaptureOptions,
+    WgcCaptureSource,
 };
 use media_pp::pipeline::Pipeline;
 use windows::Win32::Foundation::HWND;
@@ -167,8 +167,7 @@ fn open_window(
 
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
-        let (tee, tee_handle) =
-            TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
+        let (tee, tee_handle) = context.tee(format!("{name}-tee")).build_dynamic()?;
         context.attach(source, 0, tee)?;
         handle = Some(tee_handle);
         Ok(())

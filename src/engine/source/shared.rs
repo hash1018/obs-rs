@@ -439,7 +439,7 @@ mod tests {
 
     use media_pp::{
         buffer::MediaBuffer,
-        elements::{AppSink, AppSource, AppSourceHandle, TeeBuilder},
+        elements::{AppSink, AppSource, AppSourceHandle},
     };
 
     use super::*;
@@ -451,7 +451,7 @@ mod tests {
         let (source, pusher) = AppSource::new("capture", 4);
         let mut handle = None;
         let (pipeline, ()) = Pipeline::new("capture", source, |source, context| {
-            let (tee, tee_handle) = TeeBuilder::new("tee", context.clone()).build_dynamic()?;
+            let (tee, tee_handle) = context.tee("tee").build_dynamic()?;
             let branch = context.branch().queue("capture", 2).to_branch(tee)?;
             context.attach(source, 0, branch)?;
             handle = Some(tee_handle);
