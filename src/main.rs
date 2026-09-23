@@ -288,7 +288,7 @@ fn start_media_pp_log() -> Option<media_pp::log::LogGuard> {
         _ => Level::Info,
     };
     let directory = paths::logs_dir();
-    match media_pp::log::init("media-pp", &directory.to_string_lossy(), level, 7) {
+    match media_pp::log::init("media-pp", &directory, level, 7) {
         Ok(guard) => Some(guard),
         Err(error) => {
             tracing::warn!("media-pp logging is off: {error}");
