@@ -275,24 +275,19 @@ mod windows {
         device: ID3D11Device,
         context: Arc<Mutex<ID3D11DeviceContext>>,
         incoming: ChainFormat,
-        width: u32,
-        height: u32,
     }
 
     /// Creates a Source's rack, and the way back to it.
     ///
-    /// `width`/`height` are the picture the filters will see, which is the
-    /// Source's own — every filter here is a per-pixel transform and none of
-    /// them resizes. Only the bridge reads them: a D3D11 filter takes each
-    /// frame at whatever size it arrives, so a BGRA Source whose size is not
-    /// known until it runs — a window — can pass its stored hint.
+    /// No size is taken: every filter here is a per-pixel transform, and
+    /// the bridge that converts NV12 to BGRA in front of them takes each
+    /// frame at whatever size it arrives. So a Source whose size is not
+    /// known until it runs — a window — needs no stored hint for this.
     pub(in crate::engine) fn rack(
         name: &str,
         device: &ID3D11Device,
         context: Arc<Mutex<ID3D11DeviceContext>>,
         incoming: ChainFormat,
-        width: u32,
-        height: u32,
     ) -> (Rack, FilterRack) {
         let (rack, handle) = super::new_rack(name, MemoryDomain::D3d11);
         let backend = Backend {
@@ -300,8 +295,6 @@ mod windows {
             device: device.clone(),
             context,
             incoming,
-            width,
-            height,
         };
         (
             rack,
@@ -322,8 +315,6 @@ mod windows {
             device,
             context,
             incoming,
-            width,
-            height,
         } = backend;
 
         let mut elements: Vec<Box<dyn PpFilter>> = Vec::with_capacity(filters.len() + 1);
@@ -332,13 +323,11 @@ mod windows {
         // rather than one invented here.
         if *incoming == ChainFormat::Nv12 {
             elements.push(Box::new(
-                D3d11Scaler::new(
+                D3d11Scaler::to_format(
                     format!("{name}-to-bgra"),
                     device,
                     context.clone(),
                     D3d11ScalerFormat::Bgra,
-                    *width,
-                    *height,
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?,
             ));

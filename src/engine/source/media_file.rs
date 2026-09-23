@@ -336,7 +336,6 @@ pub(in crate::engine) fn open(
         device,
         context,
         super::decoded_chain_format(&video_decoder),
-        super::rack_size(size, item),
         item,
     )?;
     let meters = Arc::new(MediaMeters::default());
@@ -460,7 +459,6 @@ pub(in crate::engine) fn open(
         &name,
         device,
         super::decoded_chain_format(&video_decoder),
-        super::rack_size(size, item),
         item,
     )?;
     let meters = Arc::new(MediaMeters::default());

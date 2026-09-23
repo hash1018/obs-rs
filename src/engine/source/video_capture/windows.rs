@@ -110,20 +110,14 @@ pub(in crate::engine) fn open(
                 BackendError::from(absent)
             })
         },
-        |builder, size| {
+        |builder, _size| {
             // NV12 in, uploaded once for everything drawing this camera, and
             // the compositor converts it on the GPU exactly as it does for a
             // hardware-decoded video file. A branch with filters converts:
             // they work in BGRA, and the rack puts that at the head of what
             // it holds.
-            let FilledRack { rack, filters } = filled_rack(
-                &name,
-                device,
-                d3d_context,
-                filters::ChainFormat::Nv12,
-                size,
-                item,
-            )?;
+            let FilledRack { rack, filters } =
+                filled_rack(&name, device, d3d_context, filters::ChainFormat::Nv12, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },

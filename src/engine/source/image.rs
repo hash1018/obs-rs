@@ -178,14 +178,8 @@ pub(in crate::engine) fn open(
     // BGRA in, BGRA composited: as with a Color Source there is no
     // colour-space conversion between the upload and the compositor.
     let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } = super::filled_rack(
-        &name,
-        device,
-        context,
-        filters::ChainFormat::Bgra,
-        size,
-        item,
-    )?;
+    let FilledRack { rack, filters } =
+        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -229,7 +223,7 @@ pub(in crate::engine) fn open(
     // a PNG's own — would have been lost.
     let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
+        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let pipeline = Pipeline::new(name.clone(), source, move |source, context| {

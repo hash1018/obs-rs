@@ -83,7 +83,7 @@ pub(in crate::engine) fn open(
             // No converter in front of it, as a Text Source has none: what
             // arrives is BGRA and the alpha is the point.
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
+                filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },

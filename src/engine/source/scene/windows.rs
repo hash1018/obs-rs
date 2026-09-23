@@ -94,15 +94,9 @@ pub(in crate::engine) fn open(
     let (share, _) = scenes.open.attach(
         &key,
         || compose(&settings.scene_name, device, composing, fps, canvas),
-        |builder, size| {
-            let FilledRack { rack, filters } = filled_rack(
-                &name,
-                device,
-                context,
-                filters::ChainFormat::Bgra,
-                size,
-                item,
-            )?;
+        |builder, _size| {
+            let FilledRack { rack, filters } =
+                filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },

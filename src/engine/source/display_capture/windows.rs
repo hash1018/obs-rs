@@ -178,15 +178,9 @@ pub(in crate::engine) fn open(
     // are its filters, which sit in that branch and key one item's picture
     // without touching another's.
     let mut kept = None;
-    let (share, size) = captures.attach(monitor, device, fps, |builder, size| {
-        let FilledRack { rack, filters } = filled_rack(
-            &name,
-            device,
-            context,
-            filters::ChainFormat::Bgra,
-            size,
-            item,
-        )?;
+    let (share, size) = captures.attach(monitor, device, fps, |builder, _size| {
+        let FilledRack { rack, filters } =
+            filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
         kept = Some(filters);
         Ok(builder.pipe(rack).to(sink)?)
     })?;

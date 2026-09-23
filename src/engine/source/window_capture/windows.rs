@@ -32,7 +32,7 @@ use crate::domain::{SourceSettings, WindowCaptureTarget};
 use crate::engine::backend::{BackendError, RunningSource, pipeline_ended};
 use crate::engine::source::shared::{Registry, Share, Shared, SharedCapture};
 use crate::engine::source::{
-    FilledRack, OpenOutcome, OpenSource, filled_rack, filters, hinted_size, input_name,
+    FilledRack, OpenOutcome, OpenSource, filled_rack, filters, input_name,
 };
 use crate::snapshots::SceneItemSnapshot;
 
@@ -109,14 +109,8 @@ pub(in crate::engine) fn open(
             // the next, and a D3D11 filter takes each at the size it
             // arrives. The item's own stored hint is what its rack is told,
             // for want of anything better and with nothing relying on it.
-            let FilledRack { rack, filters } = filled_rack(
-                &name,
-                device,
-                context,
-                filters::ChainFormat::Bgra,
-                hinted_size(item),
-                item,
-            )?;
+            let FilledRack { rack, filters } =
+                filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },

@@ -399,16 +399,13 @@ impl Backend {
     ) -> Result<Arc<media_pp::pipeline::Pipeline>, BackendError> {
         use media_pp::elements::AppSource;
 
-        let (width, height) = (frame.width(), frame.height());
         let bridge = match format {
             crate::engine::source::filters::ChainFormat::Bgra => None,
-            crate::engine::source::filters::ChainFormat::Nv12 => Some(D3d11Scaler::new(
+            crate::engine::source::filters::ChainFormat::Nv12 => Some(D3d11Scaler::to_format(
                 "source-screenshot-to-bgra",
                 &self.device,
                 Arc::clone(&self.context),
                 D3d11ScalerFormat::Bgra,
-                width,
-                height,
             )?),
         };
         let download = D3d11Download::new(

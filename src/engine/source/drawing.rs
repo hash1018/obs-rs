@@ -232,14 +232,8 @@ pub(in crate::engine) fn open(
     // between the pointer and the picture.
     let (source, pusher) = AppSource::new(name.clone(), 1);
     let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } = super::filled_rack(
-        &name,
-        device,
-        context,
-        filters::ChainFormat::Bgra,
-        size,
-        item,
-    )?;
+    let FilledRack { rack, filters } =
+        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle
         .add_source(name.clone(), layer)?
@@ -276,7 +270,7 @@ pub(in crate::engine) fn open(
     let (source, pusher) = AppSource::new(name.clone(), 1);
     let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
+        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
 
     // No converter. A Drawing is an overlay: its alpha is the marks
     // themselves, and NV12 has nowhere to keep one, so converting would put

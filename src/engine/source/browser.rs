@@ -351,14 +351,8 @@ pub(in crate::engine) fn open(
         size[1],
         2,
     )?;
-    let FilledRack { rack, filters } = super::filled_rack(
-        &name,
-        device,
-        context,
-        filters::ChainFormat::Bgra,
-        size,
-        item,
-    )?;
+    let FilledRack { rack, filters } =
+        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
 
     // Whatever the page plays, as a channel in the mixer. Built before it
     // has played anything, and for a page that never does: CEF says nothing
@@ -557,7 +551,7 @@ pub(in crate::engine) fn open(
     let (source, pusher) = AppSource::new(name.clone(), PICTURE_QUEUE_DEPTH);
     let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
     let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, size, item)?;
+        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
 
     // The same channel a Windows page gets — see the twin for why it is
     // built before the page has played anything.

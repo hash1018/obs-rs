@@ -100,7 +100,7 @@ pub(in crate::engine) fn open(
             // conversion at its head; an empty one leaves the picture NV12
             // all the way to the compositor.
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, filters::ChainFormat::Nv12, size, item)?;
+                filled_rack(&name, device, filters::ChainFormat::Nv12, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },

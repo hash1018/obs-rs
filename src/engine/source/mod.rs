@@ -93,10 +93,9 @@ pub(in crate::engine) fn filled_rack(
     device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
     context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
     incoming: filters::ChainFormat,
-    [width, height]: [u32; 2],
     item: &SceneItemSnapshot,
 ) -> Result<FilledRack, BackendError> {
-    let (rack, filter_rack) = filters::rack(name, device, context, incoming, width, height);
+    let (rack, filter_rack) = filters::rack(name, device, context, incoming);
     let open = filter_rack.refill(&item.filters)?;
     Ok(FilledRack {
         rack,
@@ -104,15 +103,14 @@ pub(in crate::engine) fn filled_rack(
     })
 }
 
-/// The same, on the CUDA backend. The size is taken for symmetry with the
-/// Windows twin, whose `D3d11Scaler` still needs one; nothing on this
-/// backend does, every CUDA element here taking its size from the frames.
+/// The same, on the CUDA backend. Neither backend takes a size: every
+/// filter is per pixel and the bridge in front of them follows the
+/// frames.
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn filled_rack(
     name: &str,
     device: &Arc<media_pp::elements::CudaDevice>,
     incoming: filters::ChainFormat,
-    _size: [u32; 2],
     item: &SceneItemSnapshot,
 ) -> Result<FilledRack, BackendError> {
     let (rack, filter_rack) = filters::rack(name, device, incoming);
@@ -169,13 +167,6 @@ pub(in crate::engine) fn present_file(path: &std::path::Path) -> Result<(), Stri
     }
 }
 
-/// A stored size hint as whole, even pixels — what a Source whose size is not
-/// known until it runs builds its rack for.
-pub(in crate::engine) fn hinted_size(item: &SceneItemSnapshot) -> [u32; 2] {
-    item.source_size
-        .map(|side| (side.round().max(2.0) as u32) & !1)
-}
-
 /// The picture size a decoder for `params` is built for, which is what a
 /// decoded Source actually produces — see `OpenSource::negotiated_size`.
 /// `None` where the stream does not say.
@@ -191,15 +182,6 @@ pub(in crate::engine) fn decoded_size(
         (0, _) | (_, 0) => None,
         size => Some([size.0, size.1]),
     }
-}
-
-/// What a decoded picture's rack is built for: the size the decoder was, or
-/// the stored hint where the stream's parameters did not say.
-pub(in crate::engine) fn rack_size(
-    decoded: Option<[u32; 2]>,
-    item: &SceneItemSnapshot,
-) -> [u32; 2] {
-    decoded.unwrap_or_else(|| hinted_size(item))
 }
 
 /// What a decoded picture's rack starts from: NV12, as a hardware decoder
@@ -580,53 +562,4 @@ pub(in crate::engine) fn push_content(source: &mut OpenSource, wanted: PushedCon
         return;
     }
     surface.content = wanted;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{hinted_size, rack_size};
-    use crate::domain::{
-        ColorSourceSettings, Crop, SceneItemId, SourceKind, SourceSettings, Transform,
-    };
-    use crate::snapshots::SceneItemSnapshot;
-
-    fn item(source_size: [f32; 2]) -> SceneItemSnapshot {
-        SceneItemSnapshot {
-            filters: Vec::new(),
-            audio_filters: Vec::new(),
-            id: SceneItemId(1),
-            name: "Window".to_owned(),
-            kind: SourceKind::Color,
-            settings: SourceSettings::Color(ColorSourceSettings {
-                size: source_size,
-                rgba: [0, 0, 0, 255],
-            }),
-            source_size,
-            visible: true,
-            locked: false,
-            transform: Transform::default(),
-            crop: Crop::default(),
-            opacity: 1.0,
-            fades: Default::default(),
-            peak_db: None,
-            position: None,
-        }
-    }
-
-    /// A hint is whatever the picker reported, and a rack's bridge on the
-    /// CUDA backend converts to NV12 sizes: whole, even, and never zero.
-    #[test]
-    fn a_hinted_size_is_whole_even_pixels_and_never_empty() {
-        assert_eq!(hinted_size(&item([1279.6, 721.0])), [1280, 720]);
-        assert_eq!(hinted_size(&item([0.0, 1.0])), [2, 2]);
-    }
-
-    /// What the decoder said wins; the hint is only for when it said
-    /// nothing.
-    #[test]
-    fn a_decoded_size_is_preferred_to_the_hint() {
-        let item = item([640.0, 480.0]);
-        assert_eq!(rack_size(Some([1920, 1080]), &item), [1920, 1080]);
-        assert_eq!(rack_size(None, &item), [640, 480]);
-    }
 }
