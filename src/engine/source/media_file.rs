@@ -355,18 +355,11 @@ pub(in crate::engine) fn open(
         Arc::clone(&meters),
     );
 
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let video_index = chosen.video;
     let sound_name = name.clone();
-    let mut routing = None;
-    // By `&mut` rather than by value: the closure has to be `move` for what
-    // it consumes, and the routing has to come back out to the engine loop
-    // that decides which mixes this file is in.
-    let routing_out = &mut routing;
-    let pipeline = Pipeline::new(name.clone(), demuxer, move |source, context| {
+    let (pipeline, routing) = Pipeline::new(name.clone(), demuxer, move |source, context| {
         attach_video(
             context,
             source,
@@ -376,10 +369,9 @@ pub(in crate::engine) fn open(
             position,
         )?;
 
-        if let Some(audio) = audio {
-            *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
-        }
-        Ok(())
+        audio
+            .map(|audio| sound::attach(context, source, audio, &sound_name))
+            .transpose()
     })?;
     start(&pipeline, settings.paused)?;
 
@@ -482,12 +474,7 @@ pub(in crate::engine) fn open(
 
     let video_index = chosen.video;
     let sound_name = name.clone();
-    let mut routing = None;
-    // By `&mut` rather than by value, for the reason the Direct3D half gives:
-    // the closure is `move` for what it consumes, and the routing has to come
-    // back out to the engine loop that decides which mixes this file is in.
-    let routing_out = &mut routing;
-    let pipeline = Pipeline::new(name.clone(), demuxer, move |source, context| {
+    let (pipeline, routing) = Pipeline::new(name.clone(), demuxer, move |source, context| {
         attach_video(
             context,
             source,
@@ -497,10 +484,9 @@ pub(in crate::engine) fn open(
             position,
         )?;
 
-        if let Some(audio) = audio {
-            *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
-        }
-        Ok(())
+        audio
+            .map(|audio| sound::attach(context, source, audio, &sound_name))
+            .transpose()
     })?;
     start(&pipeline, settings.paused)?;
 

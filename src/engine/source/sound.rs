@@ -236,7 +236,7 @@ impl SoundRouting {
         let Some(monitor) = monitor else {
             return false;
         };
-        let Some(input) = monitor.add_source(name) else {
+        let Ok(input) = monitor.add_source(name) else {
             tracing::warn!("could not register {name} with the monitor mix: it is gone");
             return false;
         };
@@ -380,9 +380,7 @@ fn tail(
         }
     });
 
-    let mix = mixer
-        .add_source(mixer_name(name))
-        .ok_or("the audio mixer is gone")?;
+    let mix = mixer.add_source(mixer_name(name))?;
     Ok(Sound {
         head,
         rack,

@@ -162,7 +162,7 @@ impl Backend {
         // before returning, and the `Tee` it builds is the only way to attach
         // a recording later.
         let mut tee = None;
-        let preview = Pipeline::new("preview", compositor, |source, context| {
+        let (preview, ()) = Pipeline::new("preview", compositor, |source, context| {
             // The counting branch is synchronous — it is how the calls stay at
             // the compositor's own rate — so its sink must stay trivial.
             let count_branch = context.branch().to(count)?;

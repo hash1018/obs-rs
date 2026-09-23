@@ -128,10 +128,8 @@ pub(in crate::engine) fn open(
     let FilledRack { rack, filters } =
         super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
 
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
         let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
@@ -169,7 +167,7 @@ pub(in crate::engine) fn open(
         super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
         let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())

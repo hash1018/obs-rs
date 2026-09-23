@@ -92,9 +92,7 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     // The window it resolved to, not what was stored: that is what decides
     // whether two items are showing the same thing.
@@ -168,7 +166,7 @@ fn open_window(
     )?;
 
     let mut handle = None;
-    let pipeline = Pipeline::new(name.clone(), source, |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
         let (tee, tee_handle) =
             TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
         context.attach(source, 0, tee)?;

@@ -128,7 +128,7 @@ fn open_capture(
     // Capture gives BGRA D3D11 textures and the compositor takes exactly
     // those, so unlike the CUDA side nothing converts between them.
     let mut handle = None;
-    let pipeline = Pipeline::new(name.clone(), source, |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
         let (branch, tee) =
             TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
         context.attach(source, 0, branch)?;
@@ -169,9 +169,7 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     // The capture is shared, so what this item gets is a branch of it. Its
     // own compositor input is still its own: position, size and z-order stay
     // per item even when the pixels behind two of them are the same — and so

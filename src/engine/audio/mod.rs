@@ -660,7 +660,7 @@ fn start_mixer(
         },
     );
     let mut tee = None;
-    let pipeline = Pipeline::new(pipeline_name, mixer, |source, context| {
+    let (pipeline, ()) = Pipeline::new(pipeline_name, mixer, |source, context| {
         let (tee_branch, tee_handle) =
             TeeBuilder::new(tee_name, context.clone()).build_dynamic()?;
         context.attach(source, 0, tee_branch)?;
@@ -724,13 +724,9 @@ fn open_source(
     // against a process rather than an endpoint.
     processes: &[AudioProcessTarget],
 ) -> Result<(OpenAudioSource, Arc<AtomicU32>), BackendError> {
-    let mixer_input = mixer.add_source(name).ok_or("the audio mixer is gone")?;
+    let mixer_input = mixer.add_source(name)?;
     let monitor_input = match (monitored, monitor) {
-        (true, Some(monitor)) => Some(
-            monitor
-                .add_source(monitor_registration(name))
-                .ok_or("the monitor mix is gone")?,
-        ),
+        (true, Some(monitor)) => Some(monitor.add_source(monitor_registration(name))?),
         _ => None,
     };
     let (capture, capture_format) =
@@ -753,7 +749,7 @@ fn open_source(
     });
 
     let tee_name = format!("{name}-tee");
-    let pipeline = Pipeline::new(name, capture, move |source_element, context| {
+    let (pipeline, ()) = Pipeline::new(name, capture, move |source_element, context| {
         // The `Tee` hangs off the *fader*, not the capture, so what every
         // branch carries is what the fader let through — a meter that
         // measures the level rather than the one before it, and monitoring
@@ -814,7 +810,7 @@ mod tests {
 
         let source = TestAudioSource::new(name, TestAudioOptions::default());
         let sink = AppSink::new(format!("{name}-sink"), |_| Ok(()));
-        let pipeline = Pipeline::new(name, source, move |source, context| {
+        let (pipeline, ()) = Pipeline::new(name, source, move |source, context| {
             let branch = context.branch().to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())

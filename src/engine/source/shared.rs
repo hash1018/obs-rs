@@ -450,7 +450,7 @@ mod tests {
     fn a_capture() -> (Shared<()>, AppSourceHandle) {
         let (source, pusher) = AppSource::new("capture", 4);
         let mut handle = None;
-        let pipeline = Pipeline::new("capture", source, |source, context| {
+        let (pipeline, ()) = Pipeline::new("capture", source, |source, context| {
             let (tee, tee_handle) = TeeBuilder::new("tee", context.clone()).build_dynamic()?;
             let branch = context.branch().queue("capture", 2).to_branch(tee)?;
             context.attach(source, 0, branch)?;

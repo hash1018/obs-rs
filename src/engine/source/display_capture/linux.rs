@@ -99,7 +99,7 @@ pub(in crate::engine) fn open(
     )?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
         let branch = context.branch().pipe(converter).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())

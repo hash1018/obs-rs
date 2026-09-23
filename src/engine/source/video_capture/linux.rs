@@ -174,7 +174,7 @@ fn open_camera(
     .map_err(|error| format!("the camera's upload could not be made: {error}"))?;
 
     let mut handle = None;
-    let pipeline = Pipeline::new(name.clone(), source, |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
         let (tee, tee_handle) =
             TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
         let branch = context

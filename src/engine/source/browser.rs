@@ -391,9 +391,7 @@ pub(in crate::engine) fn open(
     )?;
     let volume = sound.as_ref().map(|sound| sound.volume.clone());
 
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let sound_name = name.clone();
     let mut routing = None;
     // By `&mut` rather than by value, as a stream's is: the closure has to

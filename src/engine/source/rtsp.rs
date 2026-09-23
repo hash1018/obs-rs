@@ -274,9 +274,7 @@ pub(in crate::engine) fn open(
     .map(|sound| sound.with_discontinuity_limit(TIMELINE_JUMP));
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
 
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let (pipeline, sound) = build(
         name.clone(),
@@ -423,17 +421,11 @@ fn build(
     audio: Option<Sound>,
 ) -> Result<(Arc<Pipeline>, Option<sound::SoundRouting>), BackendError> {
     let sound_name = name.clone();
-    let mut routing = None;
-    // By `&mut` rather than by value: the closure has to be `move` for what
-    // it consumes, and the routing has to come back out to the engine loop
-    // that decides which mixes this stream is in.
-    let routing_out = &mut routing;
-    let pipeline = Pipeline::new(name, source, move |source, context| {
+    let (pipeline, routing) = Pipeline::new(name, source, move |source, context| {
         attach_video(context, source, video_index, decoder, picture)?;
-        if let Some(audio) = audio {
-            *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
-        }
-        Ok(())
+        audio
+            .map(|audio| sound::attach(context, source, audio, &sound_name))
+            .transpose()
     })?;
     pipeline.run()?;
     Ok((pipeline, routing))

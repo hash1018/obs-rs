@@ -416,7 +416,7 @@ impl Backend {
             ffmpeg::software::scaling::Flags::BILINEAR,
         );
         let (source, pusher) = AppSource::new("source-screenshot", 1);
-        let pipeline = media_pp::pipeline::Pipeline::new(
+        let (pipeline, ()) = media_pp::pipeline::Pipeline::new(
             "source-screenshot",
             source,
             move |source, context| {

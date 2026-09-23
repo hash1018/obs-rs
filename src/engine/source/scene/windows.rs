@@ -84,9 +84,7 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let key = key(settings.scene_id);
     let composing = context.clone();
@@ -158,7 +156,7 @@ fn compose(
     )?;
 
     let mut tee = None;
-    let pipeline = Pipeline::new(name.clone(), compositor, |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), compositor, |source, context| {
         let (branch, tee_handle) =
             TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
         context.attach(source, 0, branch)?;

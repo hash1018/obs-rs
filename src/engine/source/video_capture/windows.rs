@@ -93,9 +93,7 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     // A camera that is not there is a state rather than a failure, and the
     // only way to find out is to open it — so what the attempt said is kept
@@ -181,7 +179,7 @@ fn open_camera(
     let upload = D3d11Upload::new(format!("{name}-upload"), device);
 
     let mut handle = None;
-    let pipeline = Pipeline::new(name.clone(), source, |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
         let (tee, tee_handle) =
             TeeBuilder::new(format!("{name}-tee"), context.clone()).build_dynamic()?;
         let branch = context

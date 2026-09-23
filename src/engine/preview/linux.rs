@@ -1063,7 +1063,7 @@ mod tests {
                 written,
             }),
         );
-        let pipeline = Pipeline::new("test", compositor, |source, context| {
+        let (pipeline, ()) = Pipeline::new("test", compositor, |source, context| {
             let branch = context.branch().to(renderer)?;
             context.attach(source, 0, branch)?;
             Ok(())

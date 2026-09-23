@@ -391,10 +391,8 @@ pub(in crate::engine) fn open(
     let FilledRack { rack, filters } =
         super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
 
-    let D3d11VideoCompositorInput { sink, layer } = handle
-        .add_source(name.clone(), layer)?
-        .ok_or("the compositor is no longer running")?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+    let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
         let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
@@ -436,7 +434,7 @@ pub(in crate::engine) fn open(
     // text, and NV12 has nowhere to keep one. Converting first would put an
     // opaque black rectangle behind every caption.
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
-    let pipeline = Pipeline::new(name.clone(), source, move |source, context| {
+    let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
         let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
@@ -637,7 +635,7 @@ mod tests {
                 VideoLayer::new(VideoRect::new(0, 0, width, height)),
             )
             .expect("add the caption layer");
-        let feeding = Pipeline::new("caption-in", source, move |source, context| {
+        let (feeding, ()) = Pipeline::new("caption-in", source, move |source, context| {
             let branch = context.branch().pipe(upload).to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
@@ -662,7 +660,7 @@ mod tests {
             }
             Ok(())
         });
-        let composing = Pipeline::new("compose", compositor, move |source, context| {
+        let (composing, ()) = Pipeline::new("compose", compositor, move |source, context| {
             let branch = context.branch().pipe(download).to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
@@ -789,9 +787,8 @@ mod tests {
                 "caption",
                 VideoLayer::new(VideoRect::new(0, 0, width, height)),
             )
-            .expect("add the caption layer")
-            .expect("the compositor is running");
-        let feeding = Pipeline::new("caption-in", source, move |source, context| {
+            .expect("add the caption layer");
+        let (feeding, ()) = Pipeline::new("caption-in", source, move |source, context| {
             let branch = context.branch().pipe(upload).to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
@@ -815,7 +812,7 @@ mod tests {
             }
             Ok(())
         });
-        let composing = Pipeline::new("compose", compositor, move |source, context| {
+        let (composing, ()) = Pipeline::new("compose", compositor, move |source, context| {
             let branch = context.branch().pipe(download).to(sink)?;
             context.attach(source, 0, branch)?;
             Ok(())
