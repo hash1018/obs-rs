@@ -233,6 +233,8 @@ impl Backend {
         self.captures.set_frame_rate(fps);
         self.compositor
             .set_frame_rate(ffmpeg::Rational::new(fps as i32, 1))
+            .inspect_err(|error| tracing::warn!("the compositor kept its rate: {error}"))
+            .is_ok()
     }
 
     /// What the compositor is actually emitting at, which is what a recording

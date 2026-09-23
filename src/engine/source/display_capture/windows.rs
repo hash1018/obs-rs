@@ -64,7 +64,9 @@ impl CaptureRegistry {
     pub(in crate::engine) fn set_frame_rate(&self, fps: u32) {
         let rate = ffmpeg::Rational::new(fps as i32, 1);
         self.open.each(|capture| {
-            capture.extra.set(rate);
+            if let Err(error) = capture.extra.set(rate) {
+                tracing::warn!("a capture kept its rate: {error}");
+            }
         });
     }
 }

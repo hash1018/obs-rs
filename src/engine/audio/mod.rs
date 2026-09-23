@@ -331,12 +331,8 @@ impl AudioEngine {
             if mixer.handle.mix_format() == Some(format) {
                 continue;
             }
-            if !mixer.handle.set_mix_format(format) {
-                tracing::warn!(
-                    "the {what} refused {}Hz, {} channel(s)",
-                    format.sample_rate,
-                    format.channels
-                );
+            if let Err(error) = mixer.handle.set_mix_format(format) {
+                tracing::warn!("the {what} kept its format: {error}");
             }
         }
         // The resampler in the monitor branch was given the mix's time base

@@ -162,22 +162,17 @@ fn connect(
 /// A video stream is required, as it is for a media file: this is a Scene
 /// Source and occupies a rectangle on the Canvas, so a session with only
 /// sound in it is not something that can be placed.
-fn choose(
-    source: &RtspSource,
-    streams: &[StreamInfo],
-    mixer: Option<&MixerHandle>,
-) -> Result<Chosen, BackendError> {
+fn choose(source: &RtspSource, mixer: Option<&MixerHandle>) -> Result<Chosen, BackendError> {
     // FFmpeg's own pick rather than the first of a kind, as for a file.
-    let best = |kind| {
-        source
-            .best_stream(kind)
-            .and_then(|index| streams.iter().find(|stream| stream.index == index))
-    };
-    let video = best(ffmpeg::media::Type::Video).ok_or("the stream carries no video")?;
+    let video = source
+        .best(ffmpeg::media::Type::Video)
+        .map_err(|_| "the stream carries no video")?;
     Ok(Chosen {
         video: video.index,
         video_params: video.parameters.clone(),
-        audio: mixer.and(best(ffmpeg::media::Type::Audio)).map(Track::of),
+        audio: mixer
+            .and(source.best(ffmpeg::media::Type::Audio).ok())
+            .map(|audio| Track::of(&audio)),
     })
 }
 
@@ -224,11 +219,11 @@ pub(in crate::engine) fn open(
 
     let settings = settings(item)?;
     let name = input_name(item);
-    let (source, streams) = match connect(&name, settings, &item.name) {
+    let (source, _) = match connect(&name, settings, &item.name) {
         Ok(connected) => connected,
         Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
-    let chosen = choose(&source, &streams, mixer)?;
+    let chosen = choose(&source, mixer)?;
 
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
@@ -325,11 +320,11 @@ pub(in crate::engine) fn open(
 
     let settings = settings(item)?;
     let name = input_name(item);
-    let (source, streams) = match connect(&name, settings, &item.name) {
+    let (source, _) = match connect(&name, settings, &item.name) {
         Ok(connected) => connected,
         Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
-    let chosen = choose(&source, &streams, mixer)?;
+    let chosen = choose(&source, mixer)?;
 
     // NV12 in CUDA memory, from NVDEC or uploaded after a software decode,
     // is one of the two the compositor draws from — so there is no

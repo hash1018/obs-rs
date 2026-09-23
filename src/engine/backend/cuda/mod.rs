@@ -264,9 +264,14 @@ impl Backend {
             .expect("capture rates poisoned")
             .values()
         {
-            capture.set(rate);
+            if let Err(error) = capture.set(rate) {
+                tracing::warn!("a capture kept its rate: {error}");
+            }
         }
-        self.compositor.set_frame_rate(rate)
+        self.compositor
+            .set_frame_rate(rate)
+            .inspect_err(|error| tracing::warn!("the compositor kept its rate: {error}"))
+            .is_ok()
     }
 
     /// Opens one Scene item's Source, leaving nothing behind if it fails.

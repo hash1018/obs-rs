@@ -64,9 +64,7 @@ use std::sync::atomic::Ordering;
 
 use media_pp::element::Context;
 use media_pp::element::Sink;
-use media_pp::elements::{
-    AppSink, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer, StreamInfo, TeeBuilder,
-};
+use media_pp::elements::{AppSink, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer, TeeBuilder};
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
@@ -137,24 +135,19 @@ fn settings(item: &SceneItemSnapshot) -> Result<Result<&MediaFileSettings, Strin
 /// A video stream is required. This is a Scene Source — it occupies a
 /// rectangle on the Canvas — so a file with only sound in it is not something
 /// that can be placed, and saying so is better than composing nothing.
-fn choose(
-    demuxer: &FileDemuxer,
-    streams: &[StreamInfo],
-    mixer: Option<&MixerHandle>,
-) -> Result<Chosen, BackendError> {
+fn choose(demuxer: &FileDemuxer, mixer: Option<&MixerHandle>) -> Result<Chosen, BackendError> {
     // FFmpeg's own pick rather than the first of a kind: a file can carry
     // cover art as a still video stream ahead of the picture it is of.
-    let best = |kind| {
-        demuxer
-            .best_stream(kind)
-            .and_then(|index| streams.iter().find(|stream| stream.index == index))
-    };
-    let video = best(ffmpeg::media::Type::Video).ok_or("the file has no video stream")?;
+    let video = demuxer
+        .best(ffmpeg::media::Type::Video)
+        .map_err(|_| "the file has no video stream")?;
     Ok(Chosen {
         video: video.index,
         video_params: video.parameters.clone(),
         video_time_base: video.time_base,
-        audio: mixer.and(best(ffmpeg::media::Type::Audio)).map(Track::of),
+        audio: mixer
+            .and(demuxer.best(ffmpeg::media::Type::Audio).ok())
+            .map(|audio| Track::of(&audio)),
     })
 }
 
@@ -299,8 +292,8 @@ pub(in crate::engine) fn open(
         Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
     let name = input_name(item);
-    let (demuxer, streams) = FileDemuxer::open(name.clone(), &settings.path)?;
-    let chosen = choose(&demuxer, &streams, mixer)?;
+    let (demuxer, _) = FileDemuxer::open(name.clone(), &settings.path)?;
+    let chosen = choose(&demuxer, mixer)?;
 
     // Set before the pipeline runs, so a file stored as looping never plays
     // its end once without it.
@@ -419,8 +412,8 @@ pub(in crate::engine) fn open(
         Err(absent) => return Ok(super::OpenOutcome::Absent(absent)),
     };
     let name = input_name(item);
-    let (demuxer, streams) = FileDemuxer::open(name.clone(), &settings.path)?;
-    let chosen = choose(&demuxer, &streams, mixer)?;
+    let (demuxer, _) = FileDemuxer::open(name.clone(), &settings.path)?;
+    let chosen = choose(&demuxer, mixer)?;
 
     let looping = demuxer.looping_handle();
     looping.set_looping(settings.looping);
