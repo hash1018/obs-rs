@@ -18,6 +18,9 @@ pub(in crate::engine) mod drawing;
 pub(in crate::engine) mod filters;
 pub(in crate::engine) mod image;
 pub(in crate::engine) mod media_file;
+/// The one capture a Display Capture and a Window Capture both are on Linux.
+#[cfg(target_os = "linux")]
+pub(in crate::engine) mod portal_capture;
 pub(in crate::engine) mod rtsp;
 pub(in crate::engine) mod scene;
 pub(in crate::engine) mod shared;
@@ -357,7 +360,7 @@ pub(in crate::engine) struct MediaMeters {
 }
 
 /// The name a SceneItem's compositor input is registered under.
-#[allow(dead_code)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(in crate::engine) fn input_name(item: &SceneItemSnapshot) -> String {
     format!("scene-item-{}", item.id.0)
 }
@@ -367,7 +370,7 @@ pub(in crate::engine) fn input_name(item: &SceneItemSnapshot) -> String {
 /// Unused on Windows, where the D3D11 backend now opens every kind there is —
 /// which is why its own match has no fallback arm any more, and why adding a
 /// ninth kind will stop that build until somebody decides what it does.
-#[allow(dead_code)]
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendError {
     format!("{:?} is not connected to the compositor yet", item.kind).into()
 }
