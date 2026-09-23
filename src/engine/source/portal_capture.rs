@@ -54,7 +54,7 @@ pub(in crate::engine) fn open(
     let (source, format, refreshed_token) = PipeWireScreenCaptureSource::open_gpu(
         name.clone(),
         PipeWireScreenCaptureOptions {
-            fps,
+            frame_rate: media_pp::ffmpeg::Rational::new(fps as i32, 1),
             source_kind: kind,
             include_cursor: false,
             restore_token: restore_token.clone(),

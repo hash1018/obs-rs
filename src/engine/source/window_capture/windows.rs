@@ -156,7 +156,7 @@ fn open_window(
         name.clone(),
         HWND(target.handle as *mut std::ffi::c_void),
         WgcCaptureOptions {
-            fps,
+            frame_rate: media_pp::ffmpeg::Rational::new(fps as i32, 1),
             // The pointer belongs to whoever is using the window, and a
             // recording of it is usually about what the window shows rather
             // than where its user's mouse was.

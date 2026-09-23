@@ -112,7 +112,7 @@ fn open_capture(
         name.clone(),
         DxgiCaptureOptions {
             area: CaptureArea::Output { output_index },
-            fps,
+            frame_rate: ffmpeg::Rational::new(fps as i32, 1),
             capture_mode: CaptureMode::Gpu,
         },
         device,
