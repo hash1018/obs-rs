@@ -64,9 +64,8 @@ use media_pp::{
     elements::{
         AudioCodec, FileMuxer, HlsMode, HlsMuxer, HlsOptions, HlsSegmentFormat, MixFormat,
         MixerHandle, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer, SwAudioEncoder,
-        SwAudioEncoderOptions, TeeHandle, TimestampOrigin,
+        SwAudioEncoderOptions, TeeHandle, TimestampOrigin, TrackFormat,
     },
-    ffmpeg,
     graph::BranchId,
     queue::OverflowPolicy,
 };
@@ -172,13 +171,12 @@ pub struct OutputEncoding {
 
 /// One track an output will carry, as the muxer has to be told about it.
 ///
-/// Every muxer here takes the same `add_stream(name, parameters, time_base)`,
-/// so the tracks are described once and the choice below is only about which
-/// muxer hears them.
+/// Every muxer here takes the same `add_stream(name, format)`, so the tracks
+/// are described once and the choice below is only about which muxer hears
+/// them.
 pub(in crate::engine) struct TrackDef {
     pub(in crate::engine) name: String,
-    pub(in crate::engine) parameters: ffmpeg::codec::Parameters,
-    pub(in crate::engine) time_base: ffmpeg::Rational,
+    pub(in crate::engine) format: TrackFormat,
 }
 
 /// An output's tracks by what they carry: always a picture, and sound when
@@ -241,8 +239,7 @@ fn open_muxer(
     };
     let Some(policy) = policy else {
         let mut muxer = FileMuxer::create(path)?;
-        let added = tracks
-            .try_map(|track| muxer.add_stream(track.name, track.parameters, track.time_base))?;
+        let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
         let mut sinks = muxer.open()?;
         return Ok(added.try_map(|track| sinks.take(track))?);
     };
@@ -261,7 +258,7 @@ fn open_muxer(
     let mut muxer = SegmentedFileMuxer::create(policy, move |index| {
         directory.join(format!("{stem}_{index:03}.{extension}"))
     });
-    let added = tracks.map(|track| muxer.add_stream(track.name, track.parameters, track.time_base));
+    let added = tracks.map(|track| muxer.add_stream(track.name, track.format));
     let mut sinks = muxer.open()?;
     Ok(added.try_map(|track| sinks.take(track))?)
 }
@@ -292,8 +289,7 @@ fn open_hls_muxer(
         init_filename: String::from("init.mp4"),
         base_url: None,
     })?;
-    let added =
-        tracks.try_map(|track| muxer.add_stream(track.name, track.parameters, track.time_base))?;
+    let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
     let mut sinks = muxer.open()?;
     Ok(added.try_map(|track| sinks.take(track))?)
 }
@@ -383,13 +379,11 @@ impl Output {
         let tracks = Tracks {
             video: TrackDef {
                 name: format!("{}-video", kind.prefix()),
-                parameters: video.parameters(),
-                time_base: video.time_base(),
+                format: TrackFormat::new(video.parameters(), video.time_base()),
             },
             audio: audio.as_ref().map(|(_, encoder)| TrackDef {
                 name: format!("{}-audio", kind.prefix()),
-                parameters: encoder.parameters(),
-                time_base: encoder.time_base(),
+                format: TrackFormat::from(encoder),
             }),
         };
         let Tracks {
@@ -519,8 +513,7 @@ mod tests {
         Tracks {
             video: TrackDef {
                 name: String::from("test-track"),
-                parameters: encoder.parameters(),
-                time_base: encoder.time_base(),
+                format: TrackFormat::from(&encoder),
             },
             audio: None,
         }

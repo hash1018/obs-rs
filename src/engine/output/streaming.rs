@@ -111,8 +111,7 @@ fn open_rtmp_muxer(
     tracks: Tracks<TrackDef>,
 ) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
     let mut muxer = RtmpMuxer::create(url)?;
-    let added =
-        tracks.try_map(|track| muxer.add_stream(track.name, track.parameters, track.time_base))?;
+    let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
     let mut sinks = muxer.open()?;
     Ok(added.try_map(|track| sinks.take(track))?)
 }

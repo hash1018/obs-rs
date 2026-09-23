@@ -61,8 +61,7 @@ impl Replay {
             &settings.encoding(backend.size),
             |tracks| {
                 let mut buffer = ReplayBuffer::create(length);
-                let added = tracks
-                    .map(|track| buffer.add_stream(track.name, track.parameters, track.time_base));
+                let added = tracks.map(|track| buffer.add_stream(track.name, track.format));
                 let (mut sinks, handle) = buffer.open()?;
                 opened = Some(handle);
                 Ok(added.try_map(|track| sinks.take(track))?)
