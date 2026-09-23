@@ -68,7 +68,6 @@ use media_pp::{
         AppSink, AudioMixer, AudioMixerOptions, AudioResampler, AudioVolume, AudioVolumeHandle,
         MixFormat, MixerHandle, TeeBuilder, TeeHandle,
     },
-    ffmpeg,
     graph::BranchId,
     pipeline::Pipeline,
     queue::OverflowPolicy,
@@ -391,7 +390,7 @@ impl AudioEngine {
             tracing::warn!("the monitor mix never started, so there is nothing to play");
             return;
         };
-        match attach_monitor_output(&monitor.tee, device, format) {
+        match attach_monitor_output(&monitor.tee, device) {
             Ok(branch) => {
                 self.monitor_output = Some(MonitorOutput {
                     branch,
@@ -683,17 +682,9 @@ fn start_mixer(
 /// to already be in the endpoint's own format and refuse anything else, since
 /// neither converts. The mix runs at whatever the settings say, so something
 /// has to.
-fn attach_monitor_output(
-    tee: &TeeHandle,
-    device: &str,
-    format: MixFormat,
-) -> Result<BranchId, BackendError> {
+fn attach_monitor_output(tee: &TeeHandle, device: &str) -> Result<BranchId, BackendError> {
     let (renderer, endpoint_format) = device::open_renderer("monitor-renderer", device)?;
-    let resampler = AudioResampler::new(
-        "monitor-resampler",
-        endpoint_format,
-        ffmpeg::Rational::new(1, format.sample_rate as i32),
-    )?;
+    let resampler = AudioResampler::new("monitor-resampler", endpoint_format);
     let branch = tee
         .branch()
         .ok_or("the monitor mix's Tee is gone")?
@@ -744,13 +735,7 @@ fn open_source(
     };
     let (capture, capture_format) =
         device::open_capture(name, source.kind, source.device.as_deref(), processes)?;
-    // Both captures count their `pts` in samples at their own rate — see
-    // `time_base` on either.
-    let (rack, mut filter_rack) = filters::rack(
-        name,
-        capture_format,
-        ffmpeg::Rational::new(1, capture_format.sample_rate as i32),
-    );
+    let (rack, mut filter_rack) = filters::rack(name, capture_format);
 
     let (volume, volume_handle) = AudioVolume::new(format!("{name}-volume"));
     let _ = volume_handle.set_gain_db(source.gain_db);
@@ -817,6 +802,7 @@ fn open_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use media_pp::ffmpeg;
 
     /// A pipeline standing in for one source's capture, so the engine can be
     /// asked about a capture that stopped without opening a real device.
@@ -860,7 +846,6 @@ mod tests {
                 48_000,
                 2,
             ),
-            ffmpeg::Rational::new(1, 48_000),
         );
         OpenAudioSource {
             pipeline,

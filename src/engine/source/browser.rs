@@ -279,6 +279,12 @@ impl SampleClock {
         }
         audio.set_rate(crate::browser::AUDIO_RATE);
         audio.set_pts(Some(self.samples));
+        // Counted in samples, and saying so: what reads it downstream — a
+        // filter's format bridge — takes the unit off the frame.
+        media_pp::buffer::set_time_base(
+            &mut audio,
+            media_pp::ffmpeg::Rational::new(1, crate::browser::AUDIO_RATE as i32),
+        );
         for (index, plane) in heard.planes.iter().enumerate() {
             // Plane by plane and sample by sample rather than as bytes:
             // `data_mut` reads `linesize[index]`, and planar audio sets only

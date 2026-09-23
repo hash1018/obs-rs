@@ -71,9 +71,6 @@ pub(in crate::engine) struct AudioFilterRack {
     /// What the capture delivers, which is what the rack is handed and so
     /// what a bridge would convert from.
     capture: AudioFormat,
-    /// What the `pts` of what it is handed count in, which a bridge needs to
-    /// carry them across.
-    time_base: ffmpeg::Rational,
     /// What is in the rack now: the filters that are on, in order.
     running: Vec<(AudioFilterId, AudioFilterKind)>,
     /// The ones among them with settings, which change without a refill.
@@ -86,11 +83,7 @@ pub(in crate::engine) struct AudioFilterRack {
 /// Its contracts are declared rather than derived — what is in it changes —
 /// and say the one thing true whatever it holds: decoded audio in system
 /// memory.
-pub(in crate::engine) fn rack(
-    name: &str,
-    capture: AudioFormat,
-    time_base: ffmpeg::Rational,
-) -> (Rack, AudioFilterRack) {
+pub(in crate::engine) fn rack(name: &str, capture: AudioFormat) -> (Rack, AudioFilterRack) {
     let port = PortContract::frame(MediaKind::AudioFrame, MemoryDomain::System);
     let (rack, handle) = Rack::new(
         format!("{name}-filters"),
@@ -103,7 +96,6 @@ pub(in crate::engine) fn rack(
             handle,
             name: name.to_owned(),
             capture,
-            time_base,
             running: Vec::new(),
             tuners: HashMap::new(),
         },
@@ -157,14 +149,10 @@ impl AudioFilterRack {
         let on: Vec<&AudioFilter> = filters.iter().filter(|filter| filter.enabled).collect();
         let mut elements: Vec<Box<dyn PpFilter>> = Vec::with_capacity(on.len() + 1);
         if let Some(target) = bridge(self.capture, &on) {
-            elements.push(Box::new(
-                AudioResampler::new(
-                    format!("{}-filter-format", self.name),
-                    target,
-                    self.time_base,
-                )
-                .map_err(|error| BackendError::from(error.to_string()))?,
-            ));
+            elements.push(Box::new(AudioResampler::new(
+                format!("{}-filter-format", self.name),
+                target,
+            )));
         }
         let mut tuners = HashMap::new();
         let refused = |error: &dyn std::fmt::Display| BackendError::from(error.to_string());

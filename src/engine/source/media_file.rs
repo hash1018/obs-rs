@@ -258,7 +258,6 @@ fn attach_video(
     context: &Arc<Context>,
     source: &mut FileDemuxer,
     index: usize,
-    time_base: ffmpeg::Rational,
     decoder: impl media_pp::element::Filter + 'static,
     picture: PictureEnd,
     position: Box<dyn Sink>,
@@ -274,7 +273,7 @@ fn attach_video(
         .queue("video-packets", PACKET_LOOKAHEAD)
         .pipe(decoder)
         .queue("video", QUEUE_DEPTH)
-        .pipe(Pacer::new("video-pacer", time_base)?)
+        .pipe(Pacer::new("video-pacer"))
         .to_branch(tee)?;
     context.attach(source, index, paced)?;
     Ok(())
@@ -360,7 +359,6 @@ pub(in crate::engine) fn open(
         .add_source(name.clone(), layer)?
         .ok_or("the compositor is no longer running")?;
 
-    let video_time_base = chosen.video_time_base;
     let video_index = chosen.video;
     let sound_name = name.clone();
     let mut routing = None;
@@ -373,7 +371,6 @@ pub(in crate::engine) fn open(
             context,
             source,
             video_index,
-            video_time_base,
             video_decoder,
             PictureEnd { rack, sink },
             position,
@@ -483,7 +480,6 @@ pub(in crate::engine) fn open(
     // answers with the input itself or with an error.
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
-    let video_time_base = chosen.video_time_base;
     let video_index = chosen.video;
     let sound_name = name.clone();
     let mut routing = None;
@@ -496,7 +492,6 @@ pub(in crate::engine) fn open(
             context,
             source,
             video_index,
-            video_time_base,
             video_decoder,
             PictureEnd { rack, sink },
             position,

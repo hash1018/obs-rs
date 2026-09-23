@@ -66,7 +66,6 @@ pub(in crate::engine) const QUEUE_DEPTH: usize = 64;
 pub(in crate::engine) struct Track {
     pub(in crate::engine) index: usize,
     pub(in crate::engine) params: ffmpeg::codec::Parameters,
-    pub(in crate::engine) time_base: ffmpeg::Rational,
 }
 
 impl Track {
@@ -75,7 +74,6 @@ impl Track {
         Self {
             index: stream.index,
             params: stream.parameters.clone(),
-            time_base: stream.time_base,
         }
     }
 }
@@ -101,7 +99,6 @@ enum Head {
 /// What decoding a Source's own packets takes.
 struct Packets {
     index: usize,
-    time_base: ffmpeg::Rational,
     decoder: SwDecoder,
     /// Set for a live sender, whose timeline can restart under it — see
     /// [`Sound::with_discontinuity_limit`].
@@ -290,14 +287,9 @@ pub(in crate::engine) fn build(
         return Ok(None);
     };
     // Read before the parameters are moved into the decoder.
-    let (rack, filters) = filters::rack(
-        &mixer_name(name),
-        declared_format(&track.params),
-        track.time_base,
-    );
+    let (rack, filters) = filters::rack(&mixer_name(name), declared_format(&track.params));
     let head = Head::Packets(Box::new(Packets {
         index: track.index,
-        time_base: track.time_base,
         decoder: SwDecoder::new(format!("{name}-audio-decoder"), track.params)?,
         discontinuity_limit: None,
     }));
@@ -339,11 +331,7 @@ pub(in crate::engine) fn build_pushed(
     let Some(mixer) = mixer else {
         return Ok(None);
     };
-    let (rack, filters) = filters::rack(
-        &mixer_name(name),
-        format,
-        ffmpeg::Rational::new(1, format.sample_rate as i32),
-    );
+    let (rack, filters) = filters::rack(&mixer_name(name), format);
     tail(
         name,
         Head::Frames,
@@ -434,7 +422,6 @@ pub(in crate::engine) fn attach<S: SourceElement>(
         Head::Packets(packets) => {
             let Packets {
                 index,
-                time_base,
                 decoder,
                 discontinuity_limit,
             } = *packets;
@@ -445,10 +432,8 @@ pub(in crate::engine) fn attach<S: SourceElement>(
                     .pipe(decoder)
                     .queue("audio", QUEUE_DEPTH)
                     .pipe(match discontinuity_limit {
-                        Some(limit) => {
-                            Pacer::with_discontinuity_limit("audio-pacer", time_base, limit)?
-                        }
-                        None => Pacer::new("audio-pacer", time_base)?,
+                        Some(limit) => Pacer::with_discontinuity_limit("audio-pacer", limit),
+                        None => Pacer::new("audio-pacer"),
                     }),
             )
         }

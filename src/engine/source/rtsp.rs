@@ -113,7 +113,6 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 struct Chosen {
     video: usize,
     video_params: ffmpeg::codec::Parameters,
-    video_time_base: ffmpeg::Rational,
     /// `None` for a stream with no sound, and for a machine whose mixer never
     /// started — the picture is worth showing either way.
     audio: Option<Track>,
@@ -178,7 +177,6 @@ fn choose(
     Ok(Chosen {
         video: video.index,
         video_params: video.parameters.clone(),
-        video_time_base: video.time_base,
         audio: mixer.and(best(ffmpeg::media::Type::Audio)).map(Track::of),
     })
 }
@@ -191,7 +189,6 @@ fn attach_video(
     context: &Arc<Context>,
     source: &mut RtspSource,
     index: usize,
-    time_base: ffmpeg::Rational,
     decoder: impl media_pp::element::Filter + 'static,
     picture: PictureEnd,
 ) -> media_pp::error::Result<()> {
@@ -202,9 +199,8 @@ fn attach_video(
         .queue("video", QUEUE_DEPTH)
         .pipe(Pacer::with_discontinuity_limit(
             "video-pacer",
-            time_base,
             TIMELINE_JUMP,
-        )?)
+        ))
         .pipe(picture.rack)
         .to(picture.sink)?;
     context.attach(source, index, paced)?;
@@ -286,7 +282,6 @@ pub(in crate::engine) fn open(
         name.clone(),
         source,
         chosen.video,
-        chosen.video_time_base,
         video_decoder,
         PictureEnd { rack, sink },
         audio,
@@ -389,7 +384,6 @@ pub(in crate::engine) fn open(
         name.clone(),
         source,
         chosen.video,
-        chosen.video_time_base,
         video_decoder,
         PictureEnd { rack, sink },
         audio,
@@ -424,7 +418,6 @@ fn build(
     name: String,
     source: RtspSource,
     video_index: usize,
-    video_time_base: ffmpeg::Rational,
     decoder: impl media_pp::element::Filter + 'static,
     picture: PictureEnd,
     audio: Option<Sound>,
@@ -436,14 +429,7 @@ fn build(
     // that decides which mixes this stream is in.
     let routing_out = &mut routing;
     let pipeline = Pipeline::new(name, source, move |source, context| {
-        attach_video(
-            context,
-            source,
-            video_index,
-            video_time_base,
-            decoder,
-            picture,
-        )?;
+        attach_video(context, source, video_index, decoder, picture)?;
         if let Some(audio) = audio {
             *routing_out = Some(sound::attach(context, source, audio, &sound_name)?);
         }
