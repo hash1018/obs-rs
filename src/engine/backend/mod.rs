@@ -87,7 +87,7 @@ pub(in crate::engine) type BackendError = Box<dyn Error + Send + Sync>;
 ///
 /// Shared by both backends because a pipeline is a pipeline; the two differ
 /// in what else a `RunningSource` can be, not in this.
-#[allow(dead_code)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(in crate::engine) fn pipeline_ended(pipeline: &media_pp::pipeline::Pipeline) -> bool {
     !pipeline.is_running()
 }
@@ -96,7 +96,7 @@ pub(in crate::engine) fn pipeline_ended(pipeline: &media_pp::pipeline::Pipeline)
 ///
 /// Part of what this module offers a backend rather than something every
 /// backend must take, which is why it can be unused on one.
-#[allow(dead_code)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(super) const BACKGROUND: Color = Color::BLACK;
 
 /// Which of `VideoCodec`'s H.264 entries a software choice maps to.
@@ -126,7 +126,7 @@ pub(super) const PROBE_FPS: u32 = 60;
 /// Frames the recording branch may fall behind by before the compositor is
 /// made to wait — at 60 fps, about an eighth of a second of slack for an
 /// encoder that hiccups.
-#[allow(dead_code)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(super) const OUTPUT_QUEUE_DEPTH: usize = 8;
 
 /// How long the compositor waits for room in that queue before giving up on
@@ -139,7 +139,7 @@ pub(super) const OUTPUT_QUEUE_DEPTH: usize = 8;
 /// other branch. A timeout arrives on the bus as an error naming this
 /// branch, which is what makes an overloaded encoder visible instead of
 /// silent.
-#[allow(dead_code)]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(super) const OUTPUT_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The recording's video branch while one is running.
