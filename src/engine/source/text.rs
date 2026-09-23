@@ -553,8 +553,7 @@ mod tests {
         let frame = text_bgra(width, height, &caption).expect("draw the caption");
 
         let (source, pusher) = AppSource::new("caption", 1);
-        let upload =
-            CudaUpload::new("caption-upload", &cuda, CudaFrameFormat::Bgra).expect("upload");
+        let upload = CudaUpload::new("caption-upload", &cuda, CudaFrameFormat::Bgra);
         let CudaVideoCompositorInput { sink, .. } = handle
             .add_source(
                 "caption",

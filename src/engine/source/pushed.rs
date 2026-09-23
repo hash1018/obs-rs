@@ -101,7 +101,7 @@ pub(in crate::engine) fn wire(
     use media_pp::pipeline::Pipeline;
 
     let (source, pusher) = AppSource::new(name.to_owned(), 1);
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra)?;
+    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra);
     let FilledRack { rack, filters } = filled_rack(name, device, filters::ChainFormat::Bgra, item)?;
 
     let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.to_owned(), layer)?;

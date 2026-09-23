@@ -170,8 +170,7 @@ fn open_camera(
         format!("{name}-upload"),
         device,
         media_pp::elements::CudaFrameFormat::Nv12,
-    )
-    .map_err(|error| format!("the camera's upload could not be made: {error}"))?;
+    );
 
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {
