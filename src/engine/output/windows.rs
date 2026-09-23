@@ -139,15 +139,11 @@ impl Backend {
         let PreparedOutput { encoder, size, .. } = prepared;
         let [width, height] = size;
 
-        let mut branch = self
-            .tee
-            .branch()
-            .ok_or("the compositor's Tee is gone")?
-            .queue_with_policy(
-                format!("{}-queue", kind.prefix()),
-                OUTPUT_QUEUE_DEPTH,
-                OverflowPolicy::Block(OUTPUT_SEND_TIMEOUT),
-            );
+        let mut branch = self.tee.branch()?.queue_with_policy(
+            format!("{}-queue", kind.prefix()),
+            OUTPUT_QUEUE_DEPTH,
+            OverflowPolicy::Block(OUTPUT_SEND_TIMEOUT),
+        );
         // The gate first, so a paused span is gone before anything downstream
         // has to reason about it.
         let (gate, pause) = PauseGate::new(format!("{}-pause", kind.prefix()));
@@ -364,8 +360,7 @@ impl Backend {
     ) -> Result<media_pp::graph::BranchId, BackendError> {
         let branch = self
             .tee
-            .branch()
-            .ok_or("the compositor's Tee is gone")?
+            .branch()?
             .queue_with_policy("screenshot-queue", 1, OverflowPolicy::DropNewest)
             .pipe(D3d11Download::new(
                 "screenshot-download",

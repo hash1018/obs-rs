@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline, pool::UnboundObjectPool};
+use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
 
 use crate::domain::{
     ClockFormat, SourceSettings, TextAlignment, TextMode, TextSourceSettings, TimerFormat,
@@ -297,12 +297,7 @@ pub(in crate::engine) fn text_bgra(
         }
     }
 
-    // As `drawing_bgra` explains: this frame has no pool behind it and never
-    // returns to one, which an unbound pool of zero expresses.
-    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
-    let mut slot = pool.get();
-    *slot = frame;
-    Ok(MediaBuffer::Video(Arc::new(slot)))
+    Ok(MediaBuffer::video(frame))
 }
 
 /// The box this Source draws into, and what it draws.

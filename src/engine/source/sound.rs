@@ -243,7 +243,7 @@ impl SoundRouting {
         let attached = self
             .tee
             .branch()
-            .ok_or_else(|| "the Source's Tee is gone".to_owned())
+            .map_err(|error| error.to_string())
             .and_then(|branch| branch.to(input).map_err(|error| error.to_string()))
             .and_then(|branch| self.tee.attach(branch).map_err(|error| error.to_string()));
         match attached {

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline, pool::UnboundObjectPool};
+use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
 
 use crate::domain::{SourceSettings, Stroke};
 use crate::snapshots::SceneItemSnapshot;
@@ -127,12 +127,7 @@ pub(in crate::engine) fn drawing_bgra(width: u32, height: u32, strokes: &[Stroke
         }
     }
 
-    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
-    // it and never returns to one, which an unbound pool of zero expresses.
-    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
-    let mut slot = pool.get();
-    *slot = frame;
-    MediaBuffer::Video(Arc::new(slot))
+    MediaBuffer::video(frame)
 }
 
 /// Composites one RGBA colour over one BGRA pixel, both straight-alpha.

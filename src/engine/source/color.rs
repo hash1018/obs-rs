@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline, pool::UnboundObjectPool};
+use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
 
 use crate::domain::SourceSettings;
 use crate::snapshots::SceneItemSnapshot;
@@ -43,12 +43,7 @@ pub(in crate::engine) fn flat_bgra(width: u32, height: u32, rgba: [u8; 4]) -> Me
         data[line * stride..line * stride + row.len()].copy_from_slice(&row);
     }
 
-    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
-    // it and never returns to one, which an unbound pool of zero expresses.
-    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
-    let mut slot = pool.get();
-    *slot = frame;
-    MediaBuffer::Video(Arc::new(slot))
+    MediaBuffer::video(frame)
 }
 
 /// The size the frame is made at, which is the source's own rather than the

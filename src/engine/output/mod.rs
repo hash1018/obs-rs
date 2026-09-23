@@ -401,8 +401,7 @@ impl Output {
             (Some((tee, encoder)), Some(sink)) => {
                 let (gate, pause) = PauseGate::for_audio(format!("{}-audio-pause", kind.prefix()));
                 let branch = tee
-                    .branch()
-                    .ok_or("the mixer's Tee is gone")?
+                    .branch()?
                     // The same thread boundary the video branch has, and for
                     // the same reason: encoding and muxing must not be done
                     // on the mixer's own thread, where a slow write would

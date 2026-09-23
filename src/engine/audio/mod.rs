@@ -686,8 +686,7 @@ fn attach_monitor_output(tee: &TeeHandle, device: &str) -> Result<BranchId, Back
     let (renderer, endpoint_format) = device::open_renderer("monitor-renderer", device)?;
     let resampler = AudioResampler::new("monitor-resampler", endpoint_format);
     let branch = tee
-        .branch()
-        .ok_or("the monitor mix's Tee is gone")?
+        .branch()?
         // A thread boundary, like the recording branch has, and for a
         // sharper version of the same reason: a render endpoint is paced by
         // the sound card, so writing to it from the mixer's own thread would

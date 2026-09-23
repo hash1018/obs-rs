@@ -151,7 +151,7 @@ impl<E> Shared<E> {
     /// Whether another item can still join this capture: not once it has
     /// ended, when its `Tee` is gone.
     fn joinable(&self) -> bool {
-        self.tee.branch().is_some()
+        self.tee.branch().is_ok()
     }
 }
 
@@ -272,7 +272,7 @@ impl<E> Registry<E> {
         // Every branch is attached at runtime, the first one included: a
         // branch handed to `TeeBuilder` is fixed and has no id, and this one
         // has to be removable when its item goes away.
-        let builder = capture.tee.branch().ok_or(CaptureEnded)?;
+        let builder = capture.tee.branch()?;
         let branch = finish(builder, capture.size)?;
         let branch = capture
             .tee

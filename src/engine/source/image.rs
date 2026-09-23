@@ -26,7 +26,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline, pool::UnboundObjectPool};
+use media_pp::{buffer::MediaBuffer, ffmpeg, pipeline::Pipeline};
 
 use crate::domain::SourceSettings;
 use crate::snapshots::SceneItemSnapshot;
@@ -99,13 +99,7 @@ fn decode(path: &Path) -> Result<(MediaBuffer, [u32; 2]), BackendError> {
     )?
     .run(&decoded, &mut bgra)?;
 
-    // `MediaBuffer::Video` carries pooled frames; this one has no pool behind
-    // it and never returns to one, which an unbound pool of zero expresses —
-    // the same as a Color Source's single frame.
-    let pool = UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
-    let mut slot = pool.get();
-    *slot = bgra;
-    Ok((MediaBuffer::Video(Arc::new(slot)), [width, height]))
+    Ok((MediaBuffer::video(bgra), [width, height]))
 }
 
 /// The picture an Image Source opened with, and where it came from.
