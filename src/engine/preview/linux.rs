@@ -949,6 +949,9 @@ impl CudaFrameRenderer for PreviewRenderer {
         uv_pitch: usize,
         width: u32,
         height: u32,
+        // Not read: the Canvas is `CudaConverter`'s BT.709 limited range,
+        // what `nv12.rs`'s shader converts from, whatever it says.
+        _color: media_pp::color::ColorDescription,
     ) -> Result<(), SubmitError> {
         // Everything that arrives is drawn. The rate this is held to, and
         // the frames carrying a picture already on screen, are both the
@@ -1127,6 +1130,7 @@ mod tests {
             uv_pitch: usize,
             width: u32,
             height: u32,
+            _color: media_pp::color::ColorDescription,
         ) -> Result<(), SubmitError> {
             // SAFETY: `CudaRenderer` validated the frame these came from
             // before calling, which is this method's own contract.

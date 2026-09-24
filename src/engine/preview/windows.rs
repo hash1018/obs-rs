@@ -411,6 +411,7 @@ impl D3d11FrameRenderer for PreviewRenderer {
         _array_index: u32,
         _width: u32,
         _height: u32,
+        _color: media_pp::color::ColorDescription,
     ) -> Result<(), SubmitError> {
         // `D3d11VideoCompositor` emits BGRA and nothing else feeds this
         // renderer, so an NV12 frame arriving here is a graph that was not
