@@ -2357,7 +2357,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "media-pp"
 version = "0.2.0"
-source = "git+https://github.com/hash1018/media-pp#f2074ae0360c7fb3074f7266048f498ecc654c9f"
+source = "git+https://github.com/hash1018/media-pp#de43b9a6418efcc53b84c39a557e4c917562b49a"
 dependencies = [
  "ab_glyph",
  "arc-swap",
@@ -2373,6 +2373,7 @@ dependencies = [
  "nnnoiseless",
  "pipewire",
  "pollster 1.0.1",
+ "raw-window-handle",
  "thiserror 2.0.20",
  "time",
  "tracing-appender",
