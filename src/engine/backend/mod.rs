@@ -81,14 +81,25 @@ pub(in crate::engine) type BackendError = Box<dyn Error + Send + Sync>;
 /// Asked of the pipeline rather than read off its bus, because the endings
 /// are not alike there and the caller does not care which one happened: a
 /// window capture whose window closes ends as a source *error* — WGC has
-/// nothing left to capture — while a file source ends with `Eos`. Both mean
+/// nothing left to capture — while a file source plays to its end. Both mean
 /// the same thing to whoever might reopen it. `media-pp` has already written
 /// the reason to the log by the time this reads false.
+///
+/// The one ending the pipeline does not reach by itself is a file's: its
+/// source waits at the end, where a seek could take it back, and the
+/// pipeline says `Finished` once everything read has been drawn and heard.
+/// So the bus is read for that — nothing else reads a Source's — and the
+/// pipeline stopped on it, after which it reads as ended like the rest.
 ///
 /// Shared by both backends because a pipeline is a pipeline; the two differ
 /// in what else a `RunningSource` can be, not in this.
 #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(in crate::engine) fn pipeline_ended(pipeline: &media_pp::pipeline::Pipeline) -> bool {
+    while let Some(message) = pipeline.bus().try_recv_message() {
+        if matches!(message.event, media_pp::bus::BusEvent::Finished) {
+            pipeline.stop();
+        }
+    }
     !pipeline.is_running()
 }
 
