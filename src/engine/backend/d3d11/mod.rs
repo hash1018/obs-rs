@@ -2,8 +2,8 @@
 //! a BGRA compositor, and a shared texture to reach wgpu without a readback.
 
 use crate::engine::TARGET_FPS;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
@@ -11,8 +11,9 @@ use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
     elements::{
-        AppSink, ChangeGate, D3d11Renderer, D3d11VideoCompositor, D3d11VideoCompositorHandle,
-        D3d11VideoLayerHandle, TeeHandle, VideoCompositorOptions, VideoLayer,
+        AppSink, ChangeGate, D3d11Gpu, D3d11Renderer, D3d11VideoCompositor,
+        D3d11VideoCompositorHandle, D3d11VideoLayerHandle, TeeHandle, VideoCompositorOptions,
+        VideoLayer,
     },
     ffmpeg,
     pipeline::Pipeline,
@@ -22,10 +23,7 @@ use windows::Win32::Graphics::{
     Direct3D::{
         D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
     },
-    Direct3D11::{
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
-        ID3D11DeviceContext,
-    },
+    Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice},
 };
 
 use crate::domain::SourceKind;
@@ -55,10 +53,10 @@ pub(in crate::engine) struct Backend {
     pub(in crate::engine) cameras: Arc<CameraRegistry>,
     /// And the windows, likewise — see [`WindowRegistry`].
     pub(in crate::engine) windows: Arc<WindowRegistry>,
-    pub(in crate::engine) device: ID3D11Device,
-    /// The one shared immediate context, kept because the encoder a recording
-    /// builds has to be on it like everything else here.
-    pub(in crate::engine) context: Arc<Mutex<ID3D11DeviceContext>>,
+    /// The one device and shared immediate context, kept because every Source
+    /// opened later and the encoder a recording builds have to be on it like
+    /// everything else here.
+    pub(in crate::engine) gpu: D3d11Gpu,
     pub(in crate::engine) size: [u32; 2],
     pub(in crate::engine) compositor: D3d11VideoCompositorHandle,
     /// Every Scene being composited for another Scene — see
@@ -88,20 +86,19 @@ impl Backend {
     ) -> Result<Self, BackendError> {
         let [width, height] = size;
 
-        // One device for the whole stack: capture textures, compositor input,
-        // and the download all have to live on it — and the compositor and
-        // download must further share the immediate context's own `Arc`, not
-        // merely the device behind it; see `D3d11VideoCompositor::new`.
+        // One GPU for the whole stack: capture textures, compositor input,
+        // and the download all have to live on its device — and share its
+        // immediate context's one lock, which a `D3d11Gpu` is; see
+        // `D3d11VideoCompositor::new`.
         // Created on the default adapter, which is where the primary
         // display's duplication lands; a monitor on another adapter is
         // rejected by `open_with_device` rather than silently bridged
         // through system memory.
-        let (device, context) = create_device()?;
+        let gpu = create_device()?;
 
         let (compositor, handle) = D3d11VideoCompositor::new(
             "preview-compositor",
-            &device,
-            context.clone(),
+            &gpu,
             VideoCompositorOptions {
                 width,
                 height,
@@ -117,7 +114,7 @@ impl Backend {
         // whole branch costs almost nothing, which is the point — the
         // `D3d11Download` it replaces measured as nearly this application's
         // entire GPU cost.
-        let shared = SharedTarget::new(&device, render_state, width, height)?;
+        let shared = SharedTarget::new(gpu.device(), render_state, width, height)?;
         let texture_id = shared.texture_id();
 
         // `on_frame` is not called from the rendering branch: that branch sits
@@ -144,10 +141,13 @@ impl Backend {
             })
         };
 
-        let surface = PreviewSurface::new(context.clone(), shared, drawn_flag);
+        let surface = PreviewSurface::new(gpu.context(), shared, drawn_flag);
         let renderer = D3d11Renderer::new(
             "preview-out",
-            Box::new(PreviewRenderer::new(device.clone(), Arc::clone(&surface))),
+            Box::new(PreviewRenderer::new(
+                gpu.device().clone(),
+                Arc::clone(&surface),
+            )),
         );
 
         // Taken back out of the builder below: `Pipeline::new` runs it once,
@@ -194,8 +194,7 @@ impl Backend {
             scenes: Arc::new(SceneRegistry::default()),
             cameras: Arc::new(CameraRegistry::default()),
             windows: Arc::new(WindowRegistry::default()),
-            device,
-            context: context.clone(),
+            gpu,
             size,
             compositor: handle,
             preview,
@@ -316,87 +315,42 @@ impl Backend {
         mixer: Option<&media_pp::elements::MixerHandle>,
         compositor: &D3d11VideoCompositorHandle,
     ) -> Result<OpenOutcome, BackendError> {
-        // Every kind takes the context as well as the device: each one's
-        // filters are built on it, whatever the kind does without them.
-        let context = self.context.clone();
+        // Every kind takes the GPU: each one's filters are built on it,
+        // whatever the kind does without them.
+        let gpu = &self.gpu;
         match item.kind {
-            SourceKind::DisplayCapture => display_capture::open(
-                &self.device,
-                context,
-                compositor,
-                &self.captures,
-                item,
-                layer,
-                fps,
-            )
-            .map(OpenOutcome::Open),
-            SourceKind::WindowCapture => source::window_capture::open(
-                &self.device,
-                context,
-                compositor,
-                &self.windows,
-                item,
-                layer,
-                fps,
-            ),
-            SourceKind::MediaFile => source::media_file::open(
-                &self.device,
-                context,
-                compositor,
-                mixer,
-                &self.meter_wake,
-                item,
-                layer,
-            ),
-            SourceKind::Rtsp => source::rtsp::open(
-                &self.device,
-                context,
-                compositor,
-                mixer,
-                &self.meter_wake,
-                item,
-                layer,
-            ),
-            SourceKind::VideoCapture => source::video_capture::open(
-                &self.device,
-                context,
-                compositor,
-                &self.cameras,
-                item,
-                layer,
-            ),
-            SourceKind::Image => {
-                source::image::open(&self.device, context, compositor, item, layer)
-            }
-            SourceKind::Color => {
-                source::color::open(&self.device, context, compositor, item, layer)
+            SourceKind::DisplayCapture => {
+                display_capture::open(gpu, compositor, &self.captures, item, layer, fps)
                     .map(OpenOutcome::Open)
+            }
+            SourceKind::WindowCapture => {
+                source::window_capture::open(gpu, compositor, &self.windows, item, layer, fps)
+            }
+            SourceKind::MediaFile => {
+                source::media_file::open(gpu, compositor, mixer, &self.meter_wake, item, layer)
+            }
+            SourceKind::Rtsp => {
+                source::rtsp::open(gpu, compositor, mixer, &self.meter_wake, item, layer)
+            }
+            SourceKind::VideoCapture => {
+                source::video_capture::open(gpu, compositor, &self.cameras, item, layer)
+            }
+            SourceKind::Image => source::image::open(gpu, compositor, item, layer),
+            SourceKind::Color => {
+                source::color::open(gpu, compositor, item, layer).map(OpenOutcome::Open)
             }
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, context, compositor, item, layer)
-                    .map(OpenOutcome::Open)
+                source::drawing::open(gpu, compositor, item, layer).map(OpenOutcome::Open)
             }
-            SourceKind::Text => source::text::open(&self.device, context, compositor, item, layer)
-                .map(OpenOutcome::Open),
-            SourceKind::Browser => source::browser::open(
-                &self.device,
-                context,
-                compositor,
-                mixer,
-                &self.meter_wake,
-                item,
-                layer,
-            ),
-            SourceKind::Scene => source::scene::open(
-                &self.device,
-                context,
-                compositor,
-                &self.scenes,
-                item,
-                layer,
-                fps,
-                self.size,
-            ),
+            SourceKind::Text => {
+                source::text::open(gpu, compositor, item, layer).map(OpenOutcome::Open)
+            }
+            SourceKind::Browser => {
+                source::browser::open(gpu, compositor, mixer, &self.meter_wake, item, layer)
+            }
+            SourceKind::Scene => {
+                source::scene::open(gpu, compositor, &self.scenes, item, layer, fps, self.size)
+            }
         }
     }
 }
@@ -417,9 +371,9 @@ const FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 2] = [D3D_FEATURE_LEVEL_11_1, D3D_FEAT
 ///
 /// `BGRA_SUPPORT` because everything this backend touches is BGRA: the
 /// desktop duplication's own format, the compositor's working format, and
-/// what the Preview download hands back. `media-pp` enables the context's
-/// runtime multithread protection itself the moment the device reaches its
-/// first element, so nothing more is done here.
+/// what the Preview download hands back. `D3d11Gpu::from_device` enables the
+/// context's runtime multithread protection and wraps it in the one lock
+/// every element shares, so nothing more is done here.
 ///
 /// Nothing about this is vendor-specific — `D3D_DRIVER_TYPE_HARDWARE` takes
 /// whichever adapter the machine has, and desktop duplication is a Windows
@@ -428,13 +382,10 @@ const FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 2] = [D3D_FEATURE_LEVEL_11_1, D3D_FEAT
 /// `source::text`'s composition test has to compose on the same kind of
 /// device the application does — one with BGRA support at feature level
 /// 11_0, which is exactly what this settles.
-pub(in crate::engine) fn create_device()
--> Result<(ID3D11Device, Arc<Mutex<ID3D11DeviceContext>>), BackendError> {
+pub(in crate::engine) fn create_device() -> Result<D3d11Gpu, BackendError> {
     let mut device = None;
-    let mut context = None;
-    // SAFETY: creates the documented device and context on the default
-    // hardware adapter, reading `FEATURE_LEVELS` and writing only the two
-    // out-parameters above.
+    // SAFETY: creates the documented device on the default hardware adapter,
+    // reading `FEATURE_LEVELS` and writing only the out-parameter above.
     unsafe {
         D3D11CreateDevice(
             None,
@@ -445,7 +396,7 @@ pub(in crate::engine) fn create_device()
             D3D11_SDK_VERSION,
             Some(&mut device),
             None,
-            Some(&mut context),
+            None,
         )
     }
     .map_err(|error| -> BackendError {
@@ -456,8 +407,7 @@ pub(in crate::engine) fn create_device()
         .into()
     })?;
     let device = device.expect("D3D11CreateDevice succeeded with a device out-parameter");
-    let context = context.expect("D3D11CreateDevice succeeded with a context out-parameter");
-    Ok((device, Arc::new(Mutex::new(context))))
+    Ok(D3d11Gpu::from_device(device)?)
 }
 
 /// One SceneItem's share of whatever is producing its frames.

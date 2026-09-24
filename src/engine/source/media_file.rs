@@ -277,8 +277,7 @@ fn attach_video(
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
@@ -316,8 +315,7 @@ pub(in crate::engine) fn open(
         format!("{name}-video"),
         chosen.video_params,
         DecodeTarget::D3d11 {
-            device: device.clone(),
-            context: context.clone(),
+            gpu: gpu.clone(),
             downstream_hw_frames: HW_FRAME_BUDGET,
         },
         threading,
@@ -328,8 +326,7 @@ pub(in crate::engine) fn open(
     // to the compositor without a conversion.
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
-        device,
-        context,
+        gpu,
         super::decoded_chain_format(&video_decoder),
         item,
     )?;

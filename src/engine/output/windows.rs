@@ -163,8 +163,7 @@ impl Backend {
         if let Some(format) = scale {
             branch = branch.pipe(D3d11Scaler::new(
                 format!("{}-scale", kind.prefix()),
-                &self.device,
-                Arc::clone(&self.context),
+                &self.gpu,
                 format,
                 width,
                 height,
@@ -179,8 +178,7 @@ impl Backend {
             RecordEncoder::Software(encoder) => branch
                 .pipe(D3d11Download::new(
                     format!("{}-download", kind.prefix()),
-                    &self.device,
-                    Arc::clone(&self.context),
+                    &self.gpu,
                 )?)
                 .pipe(SwScaler::new(
                     format!("{}-convert", kind.prefix()),
@@ -274,14 +272,12 @@ impl Backend {
                     max_b_frames: None,
                 };
                 let name = format!("{}-encode", kind.prefix());
-                let context = Arc::clone(&self.context);
                 let encoder = if nvenc {
-                    D3d11VideoEncoder::new(name, &self.device, context, options)?
+                    D3d11VideoEncoder::new(name, &self.gpu, options)?
                 } else {
                     D3d11VideoEncoder::with_color(
                         name,
-                        &self.device,
-                        context,
+                        &self.gpu,
                         options,
                         ColorDescription::BT709_LIMITED,
                     )?
@@ -363,11 +359,7 @@ impl Backend {
             .tee
             .branch()?
             .queue_with_policy("screenshot-queue", 1, OverflowPolicy::DropNewest)
-            .pipe(D3d11Download::new(
-                "screenshot-download",
-                &self.device,
-                Arc::clone(&self.context),
-            )?)
+            .pipe(D3d11Download::new("screenshot-download", &self.gpu)?)
             .pipe(SwScaler::to_format(
                 "screenshot-convert",
                 ffmpeg::format::Pixel::RGB24,
@@ -396,16 +388,11 @@ impl Backend {
             crate::engine::source::filters::ChainFormat::Bgra => None,
             crate::engine::source::filters::ChainFormat::Nv12 => Some(D3d11Scaler::to_format(
                 "source-screenshot-to-bgra",
-                &self.device,
-                Arc::clone(&self.context),
+                &self.gpu,
                 D3d11ScalerFormat::Bgra,
             )?),
         };
-        let download = D3d11Download::new(
-            "source-screenshot-download",
-            &self.device,
-            Arc::clone(&self.context),
-        )?;
+        let download = D3d11Download::new("source-screenshot-download", &self.gpu)?;
         let convert = SwScaler::to_format(
             "source-screenshot-convert",
             ffmpeg::format::Pixel::RGBA,

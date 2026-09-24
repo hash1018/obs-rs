@@ -252,14 +252,11 @@ pub(in crate::engine) use linux::rack;
 
 #[cfg(target_os = "windows")]
 mod windows {
-    use std::sync::{Arc, Mutex};
-
     use media_pp::contract::MemoryDomain;
     use media_pp::element::Filter as PpFilter;
     use media_pp::elements::{
-        D3d11ChromaKey, D3d11Scaler, D3d11ScalerFormat, D3d11VideoEffect, Rack,
+        D3d11ChromaKey, D3d11Gpu, D3d11Scaler, D3d11ScalerFormat, D3d11VideoEffect, Rack,
     };
-    use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
     use super::{
         BackendError, ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter,
@@ -267,13 +264,12 @@ mod windows {
 
     /// What a refill needs and the rack cannot hold for it.
     ///
-    /// The device is owned rather than borrowed: this outlives the call that
-    /// opened the Source, and a `windows-rs` interface is a refcounted
-    /// pointer, so keeping one is a clone rather than a lifetime.
+    /// The GPU is owned rather than borrowed: this outlives the call that
+    /// opened the Source, and a `D3d11Gpu` is a refcounted device and an
+    /// `Arc`, so keeping one is a clone rather than a lifetime.
     pub(super) struct Backend {
         name: String,
-        device: ID3D11Device,
-        context: Arc<Mutex<ID3D11DeviceContext>>,
+        gpu: D3d11Gpu,
         incoming: ChainFormat,
     }
 
@@ -285,15 +281,13 @@ mod windows {
     /// known until it runs — a window — needs no stored hint for this.
     pub(in crate::engine) fn rack(
         name: &str,
-        device: &ID3D11Device,
-        context: Arc<Mutex<ID3D11DeviceContext>>,
+        gpu: &D3d11Gpu,
         incoming: ChainFormat,
     ) -> (Rack, FilterRack) {
         let (rack, handle) = super::new_rack(name, MemoryDomain::D3d11);
         let backend = Backend {
             name: name.to_owned(),
-            device: device.clone(),
-            context,
+            gpu: gpu.clone(),
             incoming,
         };
         (
@@ -312,8 +306,7 @@ mod windows {
         }
         let Backend {
             name,
-            device,
-            context,
+            gpu,
             incoming,
         } = backend;
 
@@ -323,13 +316,8 @@ mod windows {
         // rather than one invented here.
         if *incoming == ChainFormat::Nv12 {
             elements.push(Box::new(
-                D3d11Scaler::to_format(
-                    format!("{name}-to-bgra"),
-                    device,
-                    context.clone(),
-                    D3d11ScalerFormat::Bgra,
-                )
-                .map_err(|error| BackendError::from(error.to_string()))?,
+                D3d11Scaler::to_format(format!("{name}-to-bgra"), gpu, D3d11ScalerFormat::Bgra)
+                    .map_err(|error| BackendError::from(error.to_string()))?,
             ));
         }
 
@@ -338,8 +326,7 @@ mod windows {
             if let FilterSettings::ChromaKey(settings) = &filter.settings {
                 let (element, handle) = D3d11ChromaKey::new(
                     format!("{name}-key-{}", filter.id.0),
-                    device,
-                    context.clone(),
+                    gpu,
                     super::chroma_key_options(settings),
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?;
@@ -350,13 +337,9 @@ mod windows {
                     handle: FilterHandle::ChromaKey(handle),
                 });
             } else if let Some(effect) = super::video_effect(&filter.settings) {
-                let (element, handle) = D3d11VideoEffect::new(
-                    format!("{name}-effect-{}", filter.id.0),
-                    device,
-                    context.clone(),
-                    effect,
-                )
-                .map_err(|error| BackendError::from(error.to_string()))?;
+                let (element, handle) =
+                    D3d11VideoEffect::new(format!("{name}-effect-{}", filter.id.0), gpu, effect)
+                        .map_err(|error| BackendError::from(error.to_string()))?;
                 handle.set_enabled(filter.enabled);
                 elements.push(Box::new(element));
                 open.push(OpenFilter {

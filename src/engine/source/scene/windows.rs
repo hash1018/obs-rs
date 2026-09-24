@@ -17,16 +17,15 @@
 //! reason here: two compositions of one Scene would be two of every Source in
 //! it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use media_pp::color::Color;
 use media_pp::elements::{
-    D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput,
+    D3d11Gpu, D3d11VideoCompositor, D3d11VideoCompositorHandle, D3d11VideoCompositorInput,
     VideoCompositorOptions, VideoLayer,
 };
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::domain::{SceneId, SourceSettings};
 use crate::engine::backend::{BackendError, RunningSource};
@@ -68,10 +67,8 @@ pub(in crate::engine) fn key(scene: SceneId) -> String {
     scene.0.to_string()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(in crate::engine) fn open(
-    device: &ID3D11Device,
-    context: Arc<Mutex<ID3D11DeviceContext>>,
+    gpu: &D3d11Gpu,
     handle: &D3d11VideoCompositorHandle,
     scenes: &Arc<SceneRegistry>,
     item: &SceneItemSnapshot,
@@ -87,14 +84,13 @@ pub(in crate::engine) fn open(
     let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let key = key(settings.scene_id);
-    let composing = context.clone();
     let mut kept = None;
     let (share, _) = scenes.open.attach(
         &key,
-        || compose(&settings.scene_name, device, composing, fps, canvas),
+        || compose(&settings.scene_name, gpu, fps, canvas),
         |builder, _size| {
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
+                filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },
@@ -133,16 +129,14 @@ pub(in crate::engine) fn open(
 /// blacked out whatever it was laid on would be no use as one.
 fn compose(
     scene_name: &str,
-    device: &ID3D11Device,
-    context: Arc<Mutex<ID3D11DeviceContext>>,
+    gpu: &D3d11Gpu,
     fps: u32,
     canvas: [u32; 2],
 ) -> Result<Shared<D3d11VideoCompositorHandle>, BackendError> {
     let name = format!("scene-{scene_name}");
     let (compositor, handle) = D3d11VideoCompositor::new(
         name.clone(),
-        device,
-        context,
+        gpu,
         VideoCompositorOptions {
             width: canvas[0],
             height: canvas[1],

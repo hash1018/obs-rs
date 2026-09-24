@@ -19,15 +19,14 @@
 //! every Source of that camera, so each one's Properties dock says the same
 //! thing — the mode belongs to the camera rather than to the Source.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use media_pp::elements::{
-    D3d11Upload, D3d11VideoCompositorHandle, D3d11VideoCompositorInput, MfCaptureFormat,
+    D3d11Gpu, D3d11Upload, D3d11VideoCompositorHandle, D3d11VideoCompositorInput, MfCaptureFormat,
     MfCaptureOptions, MfCaptureSource, MfDevice, VideoLayer,
 };
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
 use crate::engine::backend::pipeline_ended;
@@ -81,8 +80,7 @@ impl SharedCapture for CameraRegistry {
 
 /// `Absent` when the camera is not there to open — see this module's parent.
 pub(in crate::engine) fn open(
-    device: &ID3D11Device,
-    d3d_context: Arc<Mutex<ID3D11DeviceContext>>,
+    gpu: &D3d11Gpu,
     handle: &D3d11VideoCompositorHandle,
     cameras: &Arc<CameraRegistry>,
     item: &SceneItemSnapshot,
@@ -103,7 +101,7 @@ pub(in crate::engine) fn open(
     let attached = cameras.open.attach(
         &settings.device,
         || {
-            open_camera(settings, &item.name, device).map_err(|absent| {
+            open_camera(settings, &item.name, gpu).map_err(|absent| {
                 unavailable = Some(absent.clone());
                 BackendError::from(absent)
             })
@@ -115,7 +113,7 @@ pub(in crate::engine) fn open(
             // they work in BGRA, and the rack puts that at the head of what
             // it holds.
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, d3d_context, filters::ChainFormat::Nv12, item)?;
+                filled_rack(&name, gpu, filters::ChainFormat::Nv12, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },
@@ -170,13 +168,13 @@ pub(in crate::engine) fn open(
 fn open_camera(
     settings: &VideoCaptureSettings,
     item_name: &str,
-    device: &ID3D11Device,
+    gpu: &D3d11Gpu,
 ) -> Result<Shared<()>, String> {
     // The camera's own name rather than any item's: the capture outlives each
     // of them, and this is what the log and the Stats dock show it as.
     let name = format!("camera-{}", settings.device_name);
     let (source, format) = start(&name, settings, item_name)?;
-    let upload = D3d11Upload::new(format!("{name}-upload"), device);
+    let upload = D3d11Upload::new(format!("{name}-upload"), gpu);
 
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {

@@ -321,10 +321,8 @@ fn page_size(settings: &crate::domain::BrowserSourceSettings) -> [u32; 2] {
 }
 
 #[cfg(target_os = "windows")]
-#[allow(clippy::too_many_arguments)]
 pub(in crate::engine) fn open(
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     mixer: Option<&media_pp::elements::MixerHandle>,
     meter_wake: &crate::engine::audio::MeterWake,
@@ -349,16 +347,9 @@ pub(in crate::engine) fn open(
     // compositor takes what it is given, so a deeper queue would only hold
     // pictures the compositor has already replaced — and a shallower one
     // would make the browser wait on a compositor tick.
-    let (source, pusher) = D3d11SharedTextureSource::new(
-        name.clone(),
-        device,
-        Arc::clone(&context),
-        size[0],
-        size[1],
-        2,
-    )?;
+    let (source, pusher) = D3d11SharedTextureSource::new(name.clone(), gpu, size[0], size[1], 2)?;
     let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
+        super::filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
 
     // Whatever the page plays, as a channel in the mixer. Built before it
     // has played anything, and for a page that never does: CEF says nothing

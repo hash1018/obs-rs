@@ -96,12 +96,11 @@ pub(in crate::engine) fn repush(source: &OpenSource) {
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn filled_rack(
     name: &str,
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     incoming: filters::ChainFormat,
     item: &SceneItemSnapshot,
 ) -> Result<FilledRack, BackendError> {
-    let (rack, filter_rack) = filters::rack(name, device, context, incoming);
+    let (rack, filter_rack) = filters::rack(name, gpu, incoming);
     let open = filter_rack.refill(&item.filters)?;
     Ok(FilledRack {
         rack,

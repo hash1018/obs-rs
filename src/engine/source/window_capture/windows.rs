@@ -17,15 +17,14 @@
 //! share it, and a window that is closed and opened again is a new capture
 //! — which it has to be, since the old one ended with the window.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use media_pp::elements::{
-    D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer, WgcCaptureOptions,
+    D3d11Gpu, D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer, WgcCaptureOptions,
     WgcCaptureSource,
 };
 use media_pp::pipeline::Pipeline;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 
 use crate::capture::WindowTarget;
 use crate::domain::{SourceSettings, WindowCaptureTarget};
@@ -71,8 +70,7 @@ impl SharedCapture for WindowRegistry {
 
 /// `Absent` when the window is not on screen — see this module's parent.
 pub(in crate::engine) fn open(
-    device: &ID3D11Device,
-    context: Arc<Mutex<ID3D11DeviceContext>>,
+    gpu: &D3d11Gpu,
     handle: &D3d11VideoCompositorHandle,
     windows: &Arc<WindowRegistry>,
     item: &SceneItemSnapshot,
@@ -100,7 +98,7 @@ pub(in crate::engine) fn open(
     let mut kept = None;
     let (share, _) = windows.open.attach(
         &key,
-        || open_window(&target, device, fps),
+        || open_window(&target, gpu, fps),
         |builder, _| {
             // BGRA already, so nothing is bridged and the capture's size is
             // never read: a window is whatever size it is from one frame to
@@ -108,7 +106,7 @@ pub(in crate::engine) fn open(
             // arrives. The item's own stored hint is what its rack is told,
             // for want of anything better and with nothing relying on it.
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
+                filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },
@@ -146,7 +144,7 @@ pub(in crate::engine) fn open(
 /// Starts capturing one window into a `Tee` nothing is attached to yet.
 fn open_window(
     target: &WindowTarget,
-    device: &ID3D11Device,
+    gpu: &D3d11Gpu,
     fps: u32,
 ) -> Result<Shared<()>, BackendError> {
     // The window's own name rather than any item's: the capture outlives
@@ -162,7 +160,7 @@ fn open_window(
             // than where its user's mouse was.
             include_cursor: false,
         },
-        device,
+        gpu,
     )?;
 
     let mut handle = None;

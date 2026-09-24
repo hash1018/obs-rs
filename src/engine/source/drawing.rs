@@ -5,6 +5,7 @@
 //! beneath it through — which is also why the two backends differ only in
 //! which element uploads it: neither converts.
 
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use media_pp::{buffer::MediaBuffer, ffmpeg};
@@ -182,15 +183,14 @@ fn picture(size: [u32; 2], strokes: Vec<Stroke>) -> Picture {
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     let (size, strokes) = surface(item)?;
     let name = input_name(item);
-    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    let wired = pushed::wire(&name, gpu, handle, item, layer)?;
     pushed::opened(name, wired, picture(size, strokes))
 }
 

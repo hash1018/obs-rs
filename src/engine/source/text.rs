@@ -19,7 +19,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use media_pp::{buffer::MediaBuffer, ffmpeg};
@@ -340,8 +342,7 @@ fn picture(drawn: Drawn) -> Picture {
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
@@ -349,7 +350,7 @@ pub(in crate::engine) fn open(
     let (size, settings) = surface(item)?;
     let name = input_name(item);
     let frame = text_bgra(size[0], size[1], &settings)?;
-    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    let wired = pushed::wire(&name, gpu, handle, item, layer)?;
     pushed::opened(
         name,
         wired,
@@ -673,7 +674,7 @@ mod tests {
             eprintln!("skipped: no font on this machine to draw with");
             return;
         }
-        let Ok((device, context)) = crate::engine::backend::create_device() else {
+        let Ok(gpu) = crate::engine::backend::create_device() else {
             eprintln!("skipped: no Direct3D 11 device on this machine");
             return;
         };
@@ -684,8 +685,7 @@ mod tests {
         // hide exactly the defect this is here for.
         let (compositor, handle) = D3d11VideoCompositor::new(
             "text-test",
-            &device,
-            context.clone(),
+            &gpu,
             VideoCompositorOptions {
                 width,
                 height,
@@ -702,7 +702,7 @@ mod tests {
         let frame = text_bgra(width, height, &caption).expect("draw the caption");
 
         let (source, pusher) = AppSource::new("caption", 1);
-        let upload = D3d11Upload::new("caption-upload", &device);
+        let upload = D3d11Upload::new("caption-upload", &gpu);
         let D3d11VideoCompositorInput { sink, .. } = handle
             .add_source(
                 "caption",
@@ -719,7 +719,7 @@ mod tests {
         pusher.push(frame).expect("push the caption");
 
         let (composed, arrived) = mpsc::channel();
-        let download = D3d11Download::new("download", &device, context.clone()).expect("download");
+        let download = D3d11Download::new("download", &gpu).expect("download");
         let sink = AppSink::new("out", move |buffer: MediaBuffer| {
             if let MediaBuffer::Video(frame) = &buffer {
                 // Copied out because the frame goes back to its pool when

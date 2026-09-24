@@ -18,6 +18,7 @@
 //!
 //! [`AppSource`]: media_pp::elements::AppSource
 
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use media_pp::elements::AppSourceHandle;
@@ -54,8 +55,7 @@ pub(in crate::engine) struct Picture {
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn wire(
     name: &str,
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
@@ -67,9 +67,8 @@ pub(in crate::engine) fn wire(
     // queue would put what is on the compositor behind the field being typed
     // into.
     let (source, pusher) = AppSource::new(name.to_owned(), 1);
-    let upload = D3d11Upload::new(format!("{name}-upload"), device);
-    let FilledRack { rack, filters } =
-        filled_rack(name, device, context, filters::ChainFormat::Bgra, item)?;
+    let upload = D3d11Upload::new(format!("{name}-upload"), gpu);
+    let FilledRack { rack, filters } = filled_rack(name, gpu, filters::ChainFormat::Bgra, item)?;
 
     let D3d11VideoCompositorInput { sink, layer } = handle.add_source(name.to_owned(), layer)?;
     let (pipeline, ()) = Pipeline::new(name.to_owned(), source, move |source, context| {

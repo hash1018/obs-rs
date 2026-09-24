@@ -10,6 +10,7 @@
 //! convert to NV12 on the way, which a key's alpha could not have survived,
 //! and which a flat colour pushed once never needed.
 
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use media_pp::{buffer::MediaBuffer, ffmpeg};
@@ -73,15 +74,14 @@ fn picture(size: [u32; 2], rgba: [u8; 4]) -> Picture {
 
 #[cfg(target_os = "windows")]
 pub(in crate::engine) fn open(
-    device: &windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    context: Arc<std::sync::Mutex<windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext>>,
+    gpu: &media_pp::elements::D3d11Gpu,
     handle: &media_pp::elements::D3d11VideoCompositorHandle,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     let (size, rgba) = size(item)?;
     let name = input_name(item);
-    let wired = pushed::wire(&name, device, context, handle, item, layer)?;
+    let wired = pushed::wire(&name, gpu, handle, item, layer)?;
     pushed::opened(name, wired, picture(size, rgba))
 }
 

@@ -11,15 +11,14 @@
 //! They share one capture instead. Each display gets a pipeline whose `Tee`
 //! grows a branch per item, and the capture lives as long as any branch does.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use media_pp::{
-    elements::{CaptureArea, CaptureMode, DxgiCaptureOptions, DxgiCaptureSource},
+    elements::{CaptureArea, CaptureMode, D3d11Gpu, DxgiCaptureOptions, DxgiCaptureSource},
     ffmpeg,
     pipeline::{ChainBuilder, DetachedBranch, Pipeline},
     rate::FrameRateHandle,
 };
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 
 use media_pp::elements::{D3d11VideoCompositorHandle, D3d11VideoCompositorInput, VideoLayer};
@@ -48,12 +47,12 @@ impl CaptureRegistry {
     pub(in crate::engine) fn attach(
         &self,
         monitor: &str,
-        device: &ID3D11Device,
+        gpu: &D3d11Gpu,
         fps: u32,
         finish: impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError>,
     ) -> Result<(Share, [u32; 2]), BackendError> {
         self.open
-            .attach(monitor, || open_capture(monitor, device, fps), finish)
+            .attach(monitor, || open_capture(monitor, gpu, fps), finish)
     }
 
     /// Tells every open duplication to emit at `fps`.
@@ -99,7 +98,7 @@ impl SharedCapture for CaptureRegistry {
 /// Starts duplicating one display into a `Tee` nothing is attached to yet.
 fn open_capture(
     monitor: &str,
-    device: &ID3D11Device,
+    gpu: &D3d11Gpu,
     fps: u32,
 ) -> Result<Shared<FrameRateHandle>, BackendError> {
     let output_index = resolve_output_index(monitor)?;
@@ -115,7 +114,7 @@ fn open_capture(
             frame_rate: ffmpeg::Rational::new(fps as i32, 1),
             capture_mode: CaptureMode::Gpu,
         },
-        device,
+        gpu,
     )?;
     tracing::info!(
         "opened {monitor} as output {output_index} ({}x{})",
@@ -150,8 +149,7 @@ fn open_capture(
 /// Points one SceneItem at a display's capture, opening it if this is the
 /// first item to want it.
 pub(in crate::engine) fn open(
-    device: &ID3D11Device,
-    context: Arc<Mutex<ID3D11DeviceContext>>,
+    gpu: &D3d11Gpu,
     handle: &D3d11VideoCompositorHandle,
     captures: &Arc<CaptureRegistry>,
     item: &SceneItemSnapshot,
@@ -177,9 +175,9 @@ pub(in crate::engine) fn open(
     // are its filters, which sit in that branch and key one item's picture
     // without touching another's.
     let mut kept = None;
-    let (share, size) = captures.attach(monitor, device, fps, |builder, _size| {
+    let (share, size) = captures.attach(monitor, gpu, fps, |builder, _size| {
         let FilledRack { rack, filters } =
-            filled_rack(&name, device, context, filters::ChainFormat::Bgra, item)?;
+            filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
         kept = Some(filters);
         Ok(builder.pipe(rack).to(sink)?)
     })?;
@@ -249,6 +247,7 @@ fn resolve_output_index(monitor: &str) -> Result<u32, BackendError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
@@ -300,10 +299,10 @@ mod tests {
     /// these running side by side would refuse each other.
     static DISPLAY: Mutex<()> = Mutex::new(());
 
-    /// A device and the name of a display on its adapter, or why there are
+    /// A GPU and the name of a display on its adapter, or why there are
     /// none — a CI runner has no monitor to duplicate.
-    fn a_display() -> Result<(ID3D11Device, String), String> {
-        let (device, _) = crate::engine::backend::create_device()
+    fn a_display() -> Result<(D3d11Gpu, String), String> {
+        let gpu = crate::engine::backend::create_device()
             .map_err(|error| format!("no Direct3D 11 device: {error}"))?;
         // SAFETY: as in `resolve_output_index`.
         let name = unsafe {
@@ -320,7 +319,7 @@ mod tests {
                 .unwrap_or(desc.DeviceName.len());
             String::from_utf16_lossy(&desc.DeviceName[..end])
         };
-        Ok((device, name))
+        Ok((gpu, name))
     }
 
     /// An item added to a Scene whose display another Scene's item has
@@ -334,14 +333,14 @@ mod tests {
         let _display = DISPLAY
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (device, monitor) = match a_display() {
+        let (gpu, monitor) = match a_display() {
             Ok(found) => found,
             Err(reason) => return eprintln!("skipped: {reason}"),
         };
         let captures = CaptureRegistry::default();
 
         let (sink, _) = counting();
-        let (scene_1, _) = match captures.attach(&monitor, &device, 30, end(sink)) {
+        let (scene_1, _) = match captures.attach(&monitor, &gpu, 30, end(sink)) {
             Ok(attached) => attached,
             Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
         };
@@ -349,7 +348,7 @@ mod tests {
 
         let (sink, count) = counting();
         let (scene_2, _) = captures
-            .attach(&monitor, &device, 30, end(sink))
+            .attach(&monitor, &gpu, 30, end(sink))
             .expect("join the open capture");
         assert!(moves(&count), "the new item's branch gets pictures");
 
@@ -367,21 +366,21 @@ mod tests {
         let _display = DISPLAY
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (device, monitor) = match a_display() {
+        let (gpu, monitor) = match a_display() {
             Ok(found) => found,
             Err(reason) => return eprintln!("skipped: {reason}"),
         };
         let captures = CaptureRegistry::default();
 
         let (sink, count) = counting();
-        let (hidden, _) = match captures.attach(&monitor, &device, 30, end(sink)) {
+        let (hidden, _) = match captures.attach(&monitor, &gpu, 30, end(sink)) {
             Ok(attached) => attached,
             Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
         };
         captures.set_showing(&monitor, hidden, false);
         let (sink, _) = counting();
         let (shown, _) = captures
-            .attach(&monitor, &device, 30, end(sink))
+            .attach(&monitor, &gpu, 30, end(sink))
             .expect("join the open capture");
         assert!(moves(&count), "running while one item is shown");
 
@@ -407,20 +406,20 @@ mod tests {
         let _display = DISPLAY
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (device, monitor) = match a_display() {
+        let (gpu, monitor) = match a_display() {
             Ok(found) => found,
             Err(reason) => return eprintln!("skipped: {reason}"),
         };
         let captures = CaptureRegistry::default();
 
         let (sink, first_count) = counting_as("scene-item-1");
-        let (first, _) = match captures.attach(&monitor, &device, 30, end(sink)) {
+        let (first, _) = match captures.attach(&monitor, &gpu, 30, end(sink)) {
             Ok(attached) => attached,
             Err(error) => return eprintln!("skipped: could not duplicate {monitor}: {error}"),
         };
         let (sink, _) = counting_as("scene-item-2");
         let (second, _) = captures
-            .attach(&monitor, &device, 30, end(sink))
+            .attach(&monitor, &gpu, 30, end(sink))
             .expect("join the open capture");
         assert!(moves(&first_count), "the capture is delivering");
 
