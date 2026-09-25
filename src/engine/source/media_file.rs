@@ -514,17 +514,23 @@ pub(in crate::engine) fn open(
 /// decoding and a mixer taking the sound. Each seek has to put one picture
 /// through to the compositor and hold it while paused, or play on from it,
 /// and nothing from before a seek may be shown after it.
-#[cfg(all(test, target_os = "windows"))]
+// Both backends: the D3D11 compositor with D3D11VA on Windows, the CUDA one
+// with NVDEC on Linux — each `open` as the engine calls it there.
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
 mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
+    #[cfg(target_os = "windows")]
+    use media_pp::elements::D3d11VideoCompositor;
     use media_pp::elements::{
-        AudioCodec, AudioMixer, AudioMixerOptions, D3d11VideoCompositor, FileMuxer, SwAudioEncoder,
+        AudioCodec, AudioMixer, AudioMixerOptions, FileMuxer, SwAudioEncoder,
         SwAudioEncoderOptions, SwEncoder, SwEncoderOptions, SwScaler, TestAudioOptions,
         TestAudioSource, TestVideoOptions, TestVideoSource, VideoCodec, VideoCompositorOptions,
         VideoLayer, VideoRect,
     };
+    #[cfg(target_os = "linux")]
+    use media_pp::elements::{CudaDevice, CudaVideoCompositor};
     use media_pp::pipeline::{PipelineBuilder, SeekMode};
 
     use super::*;
@@ -690,24 +696,34 @@ mod tests {
 
     #[test]
     fn every_seek_puts_one_picture_through_and_holds_it_while_paused() {
+        #[cfg(target_os = "windows")]
         let Ok(gpu) = crate::engine::backend::create_device() else {
             eprintln!("skipping: no Direct3D 11 device");
             return;
         };
+        #[cfg(target_os = "linux")]
+        let gpu = match CudaDevice::new() {
+            Ok(device) => Arc::new(device),
+            Err(error) => {
+                eprintln!("skipping: no CUDA device ({error})");
+                return;
+            }
+        };
         let path = fixture();
 
-        let (_compositor, compositor) = D3d11VideoCompositor::new(
-            "test-compositor",
-            &gpu,
-            VideoCompositorOptions {
-                width: WIDTH,
-                height: HEIGHT,
-                frame_rate: ffmpeg::Rational::new(30, 1),
-                background: media_pp::color::Color::BLACK,
-                background_alpha: 255,
-            },
-        )
-        .expect("compositor");
+        let options = VideoCompositorOptions {
+            width: WIDTH,
+            height: HEIGHT,
+            frame_rate: ffmpeg::Rational::new(30, 1),
+            background: media_pp::color::Color::BLACK,
+            background_alpha: 255,
+        };
+        #[cfg(target_os = "windows")]
+        let (_compositor, compositor) =
+            D3d11VideoCompositor::new("test-compositor", &gpu, options).expect("compositor");
+        #[cfg(target_os = "linux")]
+        let (_compositor, compositor) =
+            CudaVideoCompositor::new("test-compositor", &gpu, options).expect("compositor");
         let (mixer, mixer_handle) = AudioMixer::new(
             "test-mixer",
             AudioMixerOptions {
