@@ -507,3 +507,318 @@ pub(in crate::engine) fn open(
         }),
     }))
 }
+
+/// A media file Source opened and sought the way the engine does it — the
+/// seek `EngineCommand::MediaSeek` makes, the pause and resume a Source's
+/// play button makes — on the pipeline `open` builds, with this machine's GPU
+/// decoding and a mixer taking the sound. Each seek has to put one picture
+/// through to the compositor and hold it while paused, or play on from it,
+/// and nothing from before a seek may be shown after it.
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use media_pp::elements::{
+        AudioCodec, AudioMixer, AudioMixerOptions, D3d11VideoCompositor, FileMuxer, SwAudioEncoder,
+        SwAudioEncoderOptions, SwEncoder, SwEncoderOptions, SwScaler, TestAudioOptions,
+        TestAudioSource, TestVideoOptions, TestVideoSource, VideoCodec, VideoCompositorOptions,
+        VideoLayer, VideoRect,
+    };
+    use media_pp::pipeline::{PipelineBuilder, SeekMode};
+
+    use super::*;
+    use crate::domain::{SceneItemId, SourceKind, SourceSettings, Transform};
+    use crate::engine::source::OpenOutcome;
+
+    const WIDTH: u32 = 320;
+    const HEIGHT: u32 = 240;
+    /// A keyframe every 40 frames at 30 a second: 1.333 s apart, so no round
+    /// target lands on one and a keyframe seek always has somewhere earlier
+    /// to go.
+    const GOP: u32 = 40;
+    const SECONDS: f64 = 8.0;
+
+    /// Eight seconds of picture and tone, made here as media-pp's own tests
+    /// make theirs: nothing of the kind is checked in. Made once a process.
+    fn fixture() -> PathBuf {
+        static MADE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        MADE.get_or_init(|| {
+            let directory = std::env::temp_dir().join("obs-rs-fixtures");
+            std::fs::create_dir_all(&directory).expect("fixture directory");
+            let path = directory.join(format!("media-file-seek.{}.mp4", std::process::id()));
+            let rate = ffmpeg::Rational::new(30, 1);
+            let video = TestVideoSource::new(
+                "fixture-video",
+                TestVideoOptions {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    frame_rate: rate,
+                },
+            );
+            let audio = TestAudioSource::new(
+                "fixture-audio",
+                TestAudioOptions {
+                    sample_rate: 48_000,
+                    channels: 2,
+                    frequency: 440.0,
+                },
+            );
+            let video_encoder = SwEncoder::new(
+                "fixture-video-encoder",
+                SwEncoderOptions {
+                    codec: VideoCodec::OpenH264,
+                    width: WIDTH,
+                    height: HEIGHT,
+                    pixel_format: ffmpeg::format::Pixel::YUV420P,
+                    frame_rate: rate,
+                    bit_rate: 1_000_000,
+                    gop_size: GOP,
+                    max_b_frames: None,
+                },
+            )
+            .expect("video encoder");
+            let audio_encoder = SwAudioEncoder::new(
+                "fixture-audio-encoder",
+                SwAudioEncoderOptions {
+                    codec: AudioCodec::Aac,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    bit_rate: 128_000,
+                },
+            )
+            .expect("audio encoder");
+            let mut muxer = FileMuxer::create(&path).expect("muxer");
+            let video_track = muxer.add_stream("video", &video_encoder).expect("track");
+            let audio_track = muxer.add_stream("audio", &audio_encoder).expect("track");
+            let mut sinks = muxer.open().expect("open muxer");
+            let video_sink = sinks.take(video_track).expect("video sink");
+            let audio_sink = sinks.take(audio_track).expect("audio sink");
+            let scaler = SwScaler::new(
+                "fixture-to-yuv",
+                ffmpeg::format::Pixel::YUV420P,
+                WIDTH,
+                HEIGHT,
+                ffmpeg::software::scaling::Flags::BILINEAR,
+            );
+            let builder = PipelineBuilder::new("fixture");
+            let (builder, ()) = builder
+                .add_source(video, move |source, context| {
+                    let branch = context
+                        .branch()
+                        .pipe(scaler)
+                        .pipe(video_encoder)
+                        .to(video_sink)?;
+                    context.attach(source, 0, branch)?;
+                    Ok(())
+                })
+                .expect("video branch");
+            let (builder, ()) = builder
+                .add_source(audio, move |source, context| {
+                    let branch = context.branch().pipe(audio_encoder).to(audio_sink)?;
+                    context.attach(source, 0, branch)?;
+                    Ok(())
+                })
+                .expect("audio branch");
+            let pipeline = builder.build();
+            pipeline.run().expect("run the fixture");
+            std::thread::sleep(Duration::from_secs_f64(SECONDS));
+            pipeline.stop();
+            drop(pipeline);
+            path
+        })
+        .clone()
+    }
+
+    fn item(path: PathBuf) -> SceneItemSnapshot {
+        SceneItemSnapshot {
+            id: SceneItemId(1),
+            name: "clip".into(),
+            kind: SourceKind::MediaFile,
+            settings: SourceSettings::MediaFile(MediaFileSettings {
+                path,
+                looping: false,
+                size_hint: Some([WIDTH, HEIGHT]),
+                has_audio: true,
+                gain_db: 0.0,
+                duration: None,
+                paused: true,
+                muted: false,
+                monitored: false,
+            }),
+            filters: Vec::new(),
+            audio_filters: Vec::new(),
+            source_size: [WIDTH as f32, HEIGHT as f32],
+            visible: true,
+            locked: false,
+            transform: Transform::default(),
+            crop: crate::domain::Crop::default(),
+            opacity: 1.0,
+            fades: Default::default(),
+            peak_db: None,
+            position: None,
+        }
+    }
+
+    /// Where the picture has reached, in seconds — what the dock's progress
+    /// bar reads — or `None` before the first frame.
+    fn position(meters: &MediaMeters) -> Option<f64> {
+        let micros = meters.position.load(Ordering::Relaxed);
+        (micros >= 0).then(|| micros as f64 / 1e6)
+    }
+
+    /// Waits up to `limit` for `until` to hold.
+    fn wait(limit: Duration, mut until: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if until() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        until()
+    }
+
+    /// Seeks as the engine does, and says how long it took.
+    fn seek(pipeline: &Pipeline, target: f64) -> Duration {
+        let started = Instant::now();
+        pipeline
+            .seek(Duration::from_secs_f64(target), SeekMode::Keyframe)
+            .unwrap_or_else(|error| panic!("seek to {target}s: {error}"));
+        started.elapsed()
+    }
+
+    #[test]
+    fn every_seek_puts_one_picture_through_and_holds_it_while_paused() {
+        let Ok(gpu) = crate::engine::backend::create_device() else {
+            eprintln!("skipping: no Direct3D 11 device");
+            return;
+        };
+        let path = fixture();
+
+        let (_compositor, compositor) = D3d11VideoCompositor::new(
+            "test-compositor",
+            &gpu,
+            VideoCompositorOptions {
+                width: WIDTH,
+                height: HEIGHT,
+                frame_rate: ffmpeg::Rational::new(30, 1),
+                background: media_pp::color::Color::BLACK,
+                background_alpha: 255,
+            },
+        )
+        .expect("compositor");
+        let (mixer, mixer_handle) = AudioMixer::new(
+            "test-mixer",
+            AudioMixerOptions {
+                sample_rate: 48_000,
+                channels: 2,
+            },
+        );
+        let (mix, ()) = Pipeline::new("test-mix", mixer, |source, context| {
+            let (branch, _tee) = context.tee("test-mix-tee").build_dynamic()?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("mixer pipeline");
+        mix.run().expect("run the mixer");
+
+        let outcome = open(
+            &gpu,
+            &compositor,
+            Some(&mixer_handle),
+            &MeterWake::new(|| {}),
+            &item(path),
+            VideoLayer::new(VideoRect::new(0, 0, WIDTH, HEIGHT)),
+        )
+        .expect("open the clip");
+        let OpenOutcome::Open(source) = outcome else {
+            panic!("the fixture is there");
+        };
+        let media = source.media_file.as_ref().expect("a media file");
+        let pipeline = &media.pipeline;
+        let meters = &media.meters;
+        let shown = || source.layer.latest_frame().and_then(|frame| frame.pts());
+
+        // Opened paused: one picture, the first, and it stays.
+        assert!(
+            wait(Duration::from_secs(5), || position(meters).is_some()
+                && shown().is_some()),
+            "opened paused, the compositor has a picture"
+        );
+        let first = position(meters).unwrap();
+        assert!(first < 0.1, "the first picture, not {first}s");
+        let held = shown();
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(position(meters), Some(first), "and holds it");
+        assert_eq!(shown(), held);
+
+        // Sought while paused: the keyframe before 3 s, which is 2.667 s,
+        // and it stays.
+        let took = seek(pipeline, 3.0);
+        assert!(took < Duration::from_secs(2), "the preroll took {took:?}");
+        let landed = position(meters).expect("a picture");
+        assert!(
+            (2.6..=3.0).contains(&landed),
+            "a paused seek to 3s landed on {landed}s"
+        );
+        let held = shown();
+        assert!(held.is_some() && held != Some(0));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(position(meters), Some(landed), "held while paused");
+        assert_eq!(shown(), held);
+
+        // Played on from there.
+        pipeline.resume();
+        assert!(
+            wait(Duration::from_secs(2), || position(meters)
+                > Some(landed + 0.2)),
+            "resumed, it plays on from {landed}s"
+        );
+
+        // Sought forward while playing: the keyframe before 5.5 s, playing on.
+        let took = seek(pipeline, 5.5);
+        assert!(took < Duration::from_secs(2), "the preroll took {took:?}");
+        let landed = position(meters).expect("a picture");
+        assert!(
+            (5.3..=5.8).contains(&landed),
+            "a playing seek to 5.5s landed on {landed}s"
+        );
+        assert!(
+            wait(Duration::from_secs(2), || position(meters)
+                > Some(landed + 0.2)),
+            "and plays on"
+        );
+
+        // Sought back while playing: to the start, and nothing from the
+        // stretch left behind comes after it.
+        let took = seek(pipeline, 1.0);
+        assert!(took < Duration::from_secs(2), "the preroll took {took:?}");
+        let landed = position(meters).expect("a picture");
+        assert!(landed < 1.1, "a playing seek to 1s landed on {landed}s");
+        let deadline = Instant::now() + Duration::from_millis(600);
+        while Instant::now() < deadline {
+            let now = position(meters).unwrap();
+            assert!(now < 2.5, "{now}s shown after a seek back to 1s");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(position(meters) > Some(landed), "and plays on");
+
+        // Paused, then sought past the end: the last of it, held.
+        pipeline.pause();
+        let took = seek(pipeline, 30.0);
+        assert!(took < Duration::from_secs(2), "the preroll took {took:?}");
+        let landed = position(meters).expect("a picture");
+        assert!(landed > 6.0, "a seek past the end landed on {landed}s");
+        let held = shown();
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(position(meters), Some(landed), "held while paused");
+        assert_eq!(shown(), held);
+
+        pipeline.stop();
+        mix.stop();
+        // One file a process, and no other test reads it.
+        drop(source);
+        let _ = std::fs::remove_file(fixture());
+    }
+}
