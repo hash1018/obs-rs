@@ -100,6 +100,7 @@ impl Backend {
             "preview-compositor",
             &gpu,
             VideoCompositorOptions {
+                mode: media_pp::elements::RenderMode::Live,
                 width,
                 height,
                 frame_rate: ffmpeg::Rational::new(fps as i32, 1),

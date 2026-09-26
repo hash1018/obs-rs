@@ -1042,6 +1042,7 @@ mod tests {
             "test-compositor",
             &cuda,
             VideoCompositorOptions {
+                mode: media_pp::elements::RenderMode::Live,
                 width,
                 height,
                 frame_rate: ffmpeg::Rational::new(30, 1),

@@ -587,6 +587,7 @@ mod tests {
                 }
             };
             let options = VideoCompositorOptions {
+                mode: media_pp::elements::RenderMode::Live,
                 width: WIDTH,
                 height: HEIGHT,
                 frame_rate: ffmpeg::Rational::new(30, 1),
@@ -602,6 +603,7 @@ mod tests {
             let (mixer, $mixer_handle) = AudioMixer::new(
                 "test-mixer",
                 AudioMixerOptions {
+                    mode: media_pp::elements::RenderMode::Live,
                     sample_rate: 48_000,
                     channels: 2,
                 },

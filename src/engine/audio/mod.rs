@@ -651,6 +651,7 @@ fn start_mixer(
     let (mixer, handle) = AudioMixer::new(
         format!("{pipeline_name}-mixer"),
         AudioMixerOptions {
+            mode: media_pp::elements::RenderMode::Live,
             sample_rate: format.sample_rate,
             channels: format.channels,
         },

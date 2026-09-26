@@ -138,6 +138,7 @@ fn compose(
         name.clone(),
         gpu,
         VideoCompositorOptions {
+            mode: media_pp::elements::RenderMode::Live,
             width: canvas[0],
             height: canvas[1],
             frame_rate: ffmpeg::Rational::new(fps as i32, 1),

@@ -539,6 +539,7 @@ mod tests {
             "text-test",
             &cuda,
             VideoCompositorOptions {
+                mode: media_pp::elements::RenderMode::Live,
                 width,
                 height,
                 frame_rate: ffmpeg::Rational::new(30, 1),
@@ -687,6 +688,7 @@ mod tests {
             "text-test",
             &gpu,
             VideoCompositorOptions {
+                mode: media_pp::elements::RenderMode::Live,
                 width,
                 height,
                 frame_rate: ffmpeg::Rational::new(30, 1),
