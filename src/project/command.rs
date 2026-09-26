@@ -193,6 +193,11 @@ pub enum SourceCommand {
     /// item was added, and this is what corrects it.
     SetSourceSize(SceneItemId, SourceKind, [u32; 2]),
     SetMediaLooping(SceneItemId, bool),
+    /// How fast a media file plays, in percent — see
+    /// [`crate::domain::MEDIA_SPEEDS`].
+    SetMediaSpeed(SceneItemId, u16),
+    /// Whether a media file plays backwards.
+    SetMediaBackwards(SceneItemId, bool),
     /// How a live stream's session carries its video.
     ///
     /// Unlike the media file settings above, this cannot take effect where it

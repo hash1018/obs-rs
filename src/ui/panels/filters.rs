@@ -864,6 +864,8 @@ mod tests {
                 duration: None,
                 paused: false,
                 monitored: false,
+                speed_percent: 100,
+                backwards: false,
             }),
             source_size: [1920.0, 1080.0],
             visible: true,

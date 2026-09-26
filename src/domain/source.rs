@@ -376,6 +376,28 @@ pub struct MediaFileSettings {
     /// only inside obs-rs, so with this off there is no way to hear it at
     /// all. See [`crate::domain::AudioSource::monitored`].
     pub monitored: bool,
+    /// How fast it plays, in percent of its own speed — one of
+    /// [`MEDIA_SPEEDS`]. The sound keeps its pitch.
+    pub speed_percent: u16,
+    /// Whether it plays backwards, from the end towards the start.
+    ///
+    /// Without sound: a file played backwards has none, and its channel in
+    /// the Audio Mixer dock stays, with what was set on it, for when it
+    /// plays forwards again. Played to the start it ends, looping or not —
+    /// looping backwards is not something a file does yet.
+    pub backwards: bool,
+}
+
+/// The speeds a media file can play at, in percent, as the Properties dock
+/// offers them.
+pub const MEDIA_SPEEDS: [u16; 9] = [25, 50, 75, 100, 125, 150, 200, 300, 400];
+
+impl MediaFileSettings {
+    /// The rate its pipeline plays at: the speed, below zero backwards.
+    pub fn rate(&self) -> f64 {
+        let speed = f64::from(self.speed_percent) / 100.0;
+        if self.backwards { -speed } else { speed }
+    }
 }
 
 /// A still picture placed in the Scene.

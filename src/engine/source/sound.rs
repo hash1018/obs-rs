@@ -6,7 +6,7 @@
 //! why this is a module rather than a copy in each.
 //!
 //! ```text
-//! packets ─ SwDecoder ─ Queue ─ Pacer ─ Rack ─ AudioVolume ─ Tee ┬ AppSink (meter)
+//! packets ─ SwDecoder ─ Queue ─ Pacer ─ AudioTempo ─ Rack ─ AudioVolume ─ Tee ┬ AppSink (meter)
 //!                                                                ├ AudioMixer (recording)
 //!                                                                └ AudioMixer (monitor)
 //! ```
@@ -41,8 +41,8 @@ use std::time::Duration;
 
 use media_pp::element::{Context, Sink, Source as SourceElement};
 use media_pp::elements::{
-    AppSink, AudioFormat, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, Rack, SwDecoder,
-    TeeHandle,
+    AppSink, AudioFormat, AudioTempo, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, Rack,
+    SwDecoder, TeeHandle,
 };
 use media_pp::ffmpeg;
 use media_pp::graph::BranchId;
@@ -433,7 +433,13 @@ pub(in crate::engine) fn attach<S: SourceElement>(
                     .pipe(match discontinuity_limit {
                         Some(limit) => Pacer::with_discontinuity_limit("audio-pacer", limit),
                         None => Pacer::new("audio-pacer"),
-                    }),
+                    })
+                    // A file played at a speed is paced that much faster
+                    // or slower, and the mixer takes sound at the wall
+                    // clock's pace: this stretches it back, keeping its
+                    // pitch. At a file's own speed, and a stream's, it
+                    // passes what it is given untouched.
+                    .pipe(AudioTempo::new("audio-tempo")),
             )
         }
         Head::Frames => (0, context.branch()),

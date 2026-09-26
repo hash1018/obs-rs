@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::database::PersistenceResult;
 
-const SCHEMA_VERSION: i64 = 34;
+const SCHEMA_VERSION: i64 = 35;
 
 /// The schema obs-rs 0.1.0 shipped, and the oldest one that can still be
 /// opened.
@@ -694,6 +694,20 @@ fn migrate(
                 CHECK (hide_fade_ms >= 0);
 
             PRAGMA user_version = 34;",
+        )?;
+    }
+    if step(35) {
+        // How fast a media file plays, and whether backwards. Its own speed
+        // and forwards for every file there is, which is what they did.
+        transaction.execute_batch(
+            "ALTER TABLE media_file_settings
+                ADD COLUMN speed_percent INTEGER NOT NULL DEFAULT 100
+                CHECK (speed_percent BETWEEN 25 AND 400);
+            ALTER TABLE media_file_settings
+                ADD COLUMN backwards INTEGER NOT NULL DEFAULT 0
+                CHECK (backwards IN (0, 1));
+
+            PRAGMA user_version = 35;",
         )?;
     }
     transaction.commit()?;

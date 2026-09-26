@@ -42,7 +42,10 @@ bottom.](docs/screenshot.png)
   pass it is on play out rather than stopping where it is, and the Sources
   list says when one has finished — and play starts it again. It can be
   paused and scrubbed from the Properties dock, and seeking a paused clip
-  moves the picture without starting it again.
+  moves the picture without starting it again. It plays at 25% to 400% of
+  its speed, its sound keeping its pitch, and backwards from where it is — or
+  from its end — without sound, its channel dimmed until it plays forwards
+  again.
 - **Network stream.** An RTSP session in a Scene — an IP camera, usually —
   decoded on the GPU like a media file, with a channel in the mixer for its
   sound. A camera that stops answering is not an error: the stream is put

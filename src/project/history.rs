@@ -129,6 +129,8 @@ fn classify(command: &ProjectCommand) -> Option<(EditVerb, Target)> {
             SourceCommand::SetColor(item, _)
             | SourceCommand::SetSourceSize(item, ..)
             | SourceCommand::SetMediaLooping(item, _)
+            | SourceCommand::SetMediaSpeed(item, _)
+            | SourceCommand::SetMediaBackwards(item, _)
             | SourceCommand::SetRtspTransport(item, _)
             | SourceCommand::SetRtspReconnect(item, _)
             | SourceCommand::SetVideoCaptureMode(item, _)

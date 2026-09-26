@@ -76,7 +76,7 @@ pub use scene_item::{
 pub use source::{
     BrowserSourceSettings, ClockFormat, ColorSourceSettings, DEFAULT_BROWSER_FPS,
     DEFAULT_BROWSER_SIZE, DEFAULT_FONT_SIZE, DisplayCaptureSettings, DisplayCaptureTarget,
-    DrawingSourceSettings, ImageSourceSettings, MAX_BROWSER_FPS, MediaFileSettings,
+    DrawingSourceSettings, ImageSourceSettings, MAX_BROWSER_FPS, MEDIA_SPEEDS, MediaFileSettings,
     RtspSourceSettings, RtspTransport, SceneSourceSettings, Source, SourceId, SourceKind,
     SourceSettings, Stroke, TextAlignment, TextMode, TextSourceSettings, TextTimer, TimerFormat,
     VideoCaptureMode, VideoCaptureSettings, WindowCaptureSettings, WindowCaptureTarget,

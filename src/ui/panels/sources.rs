@@ -1038,6 +1038,8 @@ fn add_file(scene_id: SceneId, picked: PickedFile) -> SourceCommand {
                 // played back would still be silent — and would say it was
                 // not.
                 monitored: false,
+                speed_percent: 100,
+                backwards: false,
             },
         },
         PickedFile::Image { path, size } => SourceCommand::AddImage {

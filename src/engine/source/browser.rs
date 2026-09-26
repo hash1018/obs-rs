@@ -484,6 +484,7 @@ pub(in crate::engine) fn open(
         // Named for the file it was written for; what a page shares with one
         // is that it carries its own sound — see [`MediaFile`].
         media_file: Some(MediaFile {
+            rate: 1.0,
             // Nothing to loop: a page is not playing a timeline.
             looping: None,
             volume,
@@ -660,6 +661,7 @@ pub(in crate::engine) fn open(
 
     Ok(OpenOutcome::Open(OpenSource {
         media_file: Some(MediaFile {
+            rate: 1.0,
             looping: None,
             volume,
             meters,

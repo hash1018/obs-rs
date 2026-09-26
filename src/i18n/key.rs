@@ -216,6 +216,12 @@ text_keys! {
     PropertiesReconnectOff        => "properties-reconnect-off";
     PropertiesReconnectSeconds    => "properties-reconnect-seconds";
     PropertiesLoop                => "properties-loop";
+    PropertiesLoopNotBackwards    => "properties-loop-not-backwards";
+    PropertiesSpeed               => "properties-speed";
+    PropertiesDirection           => "properties-direction";
+    PropertiesForwards            => "properties-forwards";
+    PropertiesBackwards           => "properties-backwards";
+    AudioSilentBackwards          => "audio-silent-backwards";
     PropertiesPlayback            => "properties-playback";
     PropertiesPlay                => "properties-play";
     PropertiesPause               => "properties-pause";

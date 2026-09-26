@@ -163,12 +163,34 @@ fn choose(demuxer: &FileDemuxer, mixer: Option<&MixerHandle>) -> Result<Chosen, 
 ///
 /// To the start rather than to where it was: where a clip is playing from is
 /// not written down — see `SourceCommand::SetMediaPaused` for what is.
-fn start(pipeline: &Arc<Pipeline>, paused: bool) -> Result<(), BackendError> {
-    if paused {
+fn start(pipeline: &Arc<Pipeline>, settings: &MediaFileSettings) -> Result<(), BackendError> {
+    let rate = settings.rate();
+    // Backwards is played from the end: sought there and turned round while
+    // paused, so nothing of the start plays forwards in between.
+    if settings.paused || settings.backwards {
         pipeline.pause();
     }
+    // A speed forwards is taken before the pipeline runs, so it starts at
+    // it; backwards needs a running pipeline to turn.
+    if !settings.backwards && rate != 1.0 {
+        pipeline.set_rate(rate)?;
+    }
     pipeline.run()?;
-    if paused
+    if settings.backwards {
+        // Reported and carried on, as below: a file that will not turn
+        // shows where it is rather than failing to open.
+        if let Some(end) = settings.duration
+            && let Err(error) = pipeline.seek(end, media_pp::pipeline::SeekMode::Accurate)
+        {
+            tracing::warn!("could not go to the end to play backwards: {error}");
+        }
+        if let Err(error) = pipeline.set_rate(rate) {
+            tracing::warn!("could not play backwards: {error}");
+        }
+        if !settings.paused {
+            pipeline.resume();
+        }
+    } else if settings.paused
         && let Err(error) = pipeline.seek(
             std::time::Duration::ZERO,
             media_pp::pipeline::SeekMode::Keyframe,
@@ -366,7 +388,7 @@ pub(in crate::engine) fn open(
             .map(|audio| sound::attach(context, source, audio, &sound_name))
             .transpose()
     })?;
-    start(&pipeline, settings.paused)?;
+    start(&pipeline, settings)?;
 
     Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource::Owned(Arc::clone(&pipeline)),
@@ -384,6 +406,7 @@ pub(in crate::engine) fn open(
         negotiated_size: size,
         page: None,
         media_file: Some(MediaFile {
+            rate: settings.rate(),
             looping: Some(looping),
             volume,
             meters,
@@ -481,7 +504,7 @@ pub(in crate::engine) fn open(
             .map(|audio| sound::attach(context, source, audio, &sound_name))
             .transpose()
     })?;
-    start(&pipeline, settings.paused)?;
+    start(&pipeline, settings)?;
 
     Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource::Owned(Arc::clone(&pipeline)),
@@ -499,6 +522,7 @@ pub(in crate::engine) fn open(
         negotiated_size: size,
         page: None,
         media_file: Some(MediaFile {
+            rate: settings.rate(),
             looping: Some(looping),
             volume,
             meters,
@@ -544,6 +568,53 @@ mod tests {
     /// to go.
     const GOP: u32 = 40;
     const SECONDS: f64 = 8.0;
+
+    /// A device, a compositor on it and a running mixer, as the engine has
+    /// them when it opens a file — or a skip where there is no device.
+    macro_rules! rig {
+        ($gpu:ident, $compositor_element:ident, $compositor:ident, $mix:ident, $mixer_handle:ident) => {
+            #[cfg(target_os = "windows")]
+            let Ok($gpu) = crate::engine::backend::create_device() else {
+                eprintln!("skipping: no Direct3D 11 device");
+                return;
+            };
+            #[cfg(target_os = "linux")]
+            let $gpu = match CudaDevice::new() {
+                Ok(device) => Arc::new(device),
+                Err(error) => {
+                    eprintln!("skipping: no CUDA device ({error})");
+                    return;
+                }
+            };
+            let options = VideoCompositorOptions {
+                width: WIDTH,
+                height: HEIGHT,
+                frame_rate: ffmpeg::Rational::new(30, 1),
+                background: media_pp::color::Color::BLACK,
+                background_alpha: 255,
+            };
+            #[cfg(target_os = "windows")]
+            let ($compositor_element, $compositor) =
+                D3d11VideoCompositor::new("test-compositor", &$gpu, options).expect("compositor");
+            #[cfg(target_os = "linux")]
+            let ($compositor_element, $compositor) =
+                CudaVideoCompositor::new("test-compositor", &$gpu, options).expect("compositor");
+            let (mixer, $mixer_handle) = AudioMixer::new(
+                "test-mixer",
+                AudioMixerOptions {
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+            );
+            let ($mix, ()) = Pipeline::new("test-mix", mixer, |source, context| {
+                let (branch, _tee) = context.tee("test-mix-tee").build_dynamic()?;
+                context.attach(source, 0, branch)?;
+                Ok(())
+            })
+            .expect("mixer pipeline");
+            $mix.run().expect("run the mixer");
+        };
+    }
 
     /// Eight seconds of picture and tone, made here as media-pp's own tests
     /// make theirs: nothing of the kind is checked in. Made once a process.
@@ -651,6 +722,8 @@ mod tests {
                 paused: true,
                 muted: false,
                 monitored: false,
+                speed_percent: 100,
+                backwards: false,
             }),
             filters: Vec::new(),
             audio_filters: Vec::new(),
@@ -694,50 +767,82 @@ mod tests {
         started.elapsed()
     }
 
+    /// Played at a speed the picture goes that much faster, and changed
+    /// while it plays it carries on from where it is; turned round it goes
+    /// down from there. Opened backwards, it plays from the end.
+    #[test]
+    fn a_file_plays_at_its_speed_and_backwards() {
+        rig!(gpu, _compositor, compositor, mix, mixer_handle);
+        let path = fixture();
+        let open_as = |tweak: &dyn Fn(&mut MediaFileSettings)| {
+            let mut item = item(path.clone());
+            if let SourceSettings::MediaFile(settings) = &mut item.settings {
+                settings.paused = false;
+                settings.duration = Some(Duration::from_secs_f64(SECONDS));
+                tweak(settings);
+            }
+            let outcome = open(
+                &gpu,
+                &compositor,
+                Some(&mixer_handle),
+                &MeterWake::new(|| {}),
+                &item,
+                VideoLayer::new(VideoRect::new(0, 0, WIDTH, HEIGHT)),
+            )
+            .expect("open the clip");
+            let OpenOutcome::Open(source) = outcome else {
+                panic!("the fixture is there");
+            };
+            (source, item)
+        };
+        // How fast the picture goes, as media seconds a second.
+        let pace = |meters: &MediaMeters| {
+            let (from, started) = (position(meters).unwrap(), Instant::now());
+            std::thread::sleep(Duration::from_millis(800));
+            (position(meters).unwrap() - from) / started.elapsed().as_secs_f64()
+        };
+
+        let (mut source, mut item) = open_as(&|_| {});
+        let meters = Arc::clone(&source.media_file.as_ref().unwrap().meters);
+        assert!(wait(Duration::from_secs(5), || position(&meters) > Some(0.3)));
+        if let SourceSettings::MediaFile(settings) = &mut item.settings {
+            settings.speed_percent = 200;
+        }
+        super::super::refresh_media_file(&mut source, &item, None);
+        let media = source.media_file.as_ref().unwrap();
+        assert_eq!(media.pipeline.rate(), 2.0);
+        std::thread::sleep(Duration::from_millis(200));
+        let twice = pace(&meters);
+        assert!((1.6..2.4).contains(&twice), "{twice:.2}x at 200%");
+
+        if let SourceSettings::MediaFile(settings) = &mut item.settings {
+            settings.backwards = true;
+        }
+        super::super::refresh_media_file(&mut source, &item, None);
+        assert_eq!(source.media_file.as_ref().unwrap().pipeline.rate(), -2.0);
+        std::thread::sleep(Duration::from_millis(200));
+        let back = pace(&meters);
+        assert!((-2.4..-1.6).contains(&back), "{back:.2}x turned round");
+        source.media_file.as_ref().unwrap().pipeline.stop();
+
+        let (source, _item) = open_as(&|settings| settings.backwards = true);
+        let meters = Arc::clone(&source.media_file.as_ref().unwrap().meters);
+        assert!(
+            wait(Duration::from_secs(5), || position(&meters)
+                > Some(SECONDS - 2.0)),
+            "from the end: {:?}",
+            position(&meters)
+        );
+        let down = pace(&meters);
+        assert!((-1.3..-0.7).contains(&down), "{down:.2}x backwards");
+        source.media_file.as_ref().unwrap().pipeline.stop();
+        mix.stop();
+    }
+
     #[test]
     fn every_seek_puts_one_picture_through_and_holds_it_while_paused() {
-        #[cfg(target_os = "windows")]
-        let Ok(gpu) = crate::engine::backend::create_device() else {
-            eprintln!("skipping: no Direct3D 11 device");
-            return;
-        };
-        #[cfg(target_os = "linux")]
-        let gpu = match CudaDevice::new() {
-            Ok(device) => Arc::new(device),
-            Err(error) => {
-                eprintln!("skipping: no CUDA device ({error})");
-                return;
-            }
-        };
+        rig!(gpu, _compositor, compositor, mix, mixer_handle);
         let path = fixture();
-
-        let options = VideoCompositorOptions {
-            width: WIDTH,
-            height: HEIGHT,
-            frame_rate: ffmpeg::Rational::new(30, 1),
-            background: media_pp::color::Color::BLACK,
-            background_alpha: 255,
-        };
-        #[cfg(target_os = "windows")]
-        let (_compositor, compositor) =
-            D3d11VideoCompositor::new("test-compositor", &gpu, options).expect("compositor");
-        #[cfg(target_os = "linux")]
-        let (_compositor, compositor) =
-            CudaVideoCompositor::new("test-compositor", &gpu, options).expect("compositor");
-        let (mixer, mixer_handle) = AudioMixer::new(
-            "test-mixer",
-            AudioMixerOptions {
-                sample_rate: 48_000,
-                channels: 2,
-            },
-        );
-        let (mix, ()) = Pipeline::new("test-mix", mixer, |source, context| {
-            let (branch, _tee) = context.tee("test-mix-tee").build_dynamic()?;
-            context.attach(source, 0, branch)?;
-            Ok(())
-        })
-        .expect("mixer pipeline");
-        mix.run().expect("run the mixer");
 
         let outcome = open(
             &gpu,

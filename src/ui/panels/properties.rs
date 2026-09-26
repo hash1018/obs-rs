@@ -281,7 +281,16 @@ fn show_settings(
                 i18n.text(TextKey::PropertiesFile).as_ref(),
                 &settings.path.display().to_string(),
             );
-            show_looping(ui, item.id, settings.looping, i18n, actions);
+            show_speed(ui, item.id, settings.speed_percent, i18n, actions);
+            show_direction(ui, item.id, settings.backwards, i18n, actions);
+            show_looping(
+                ui,
+                item.id,
+                settings.looping,
+                settings.backwards,
+                i18n,
+                actions,
+            );
             show_playback(ui, item, settings, ended, i18n, actions);
         }
         SourceSettings::Rtsp(settings) => {
@@ -470,8 +479,10 @@ fn show_playback(
     actions: &mut Vec<UiAction>,
 ) {
     // A clip that played out is not measured any more — its Source was
-    // stopped — so the readout takes the only position it could be at.
+    // stopped — so the readout takes the only position it could be at: its
+    // end, or its start played backwards.
     let position = match (ended, settings.duration) {
+        (true, _) if settings.backwards => std::time::Duration::ZERO,
         (true, Some(duration)) => duration,
         _ => item.position.unwrap_or_default(),
     };
@@ -787,20 +798,93 @@ pub(super) fn reconnect_label(
 /// through the demuxer's own handle rather than by reopening — so what is
 /// playing does not restart, and switching it off part way through lets the
 /// lap that is running play out.
+///
+/// Not while it plays backwards, which ends at the start whatever this says
+/// — the box is left as it was, and counts again forwards.
 fn show_looping(
     ui: &mut egui::Ui,
     item: SceneItemId,
     stored: bool,
+    backwards: bool,
     i18n: &LocalizationManager,
     actions: &mut Vec<UiAction>,
 ) {
     ui.label(i18n.text(TextKey::PropertiesLoop));
     let mut looping = stored;
-    if ui.checkbox(&mut looping, "").changed() {
+    if ui
+        .add_enabled(!backwards, egui::Checkbox::without_text(&mut looping))
+        .on_disabled_hover_text(i18n.text(TextKey::PropertiesLoopNotBackwards))
+        .changed()
+    {
         actions.push(UiAction::Project(ProjectCommand::Source(
             SourceCommand::SetMediaLooping(item, looping),
         )));
     }
+    ui.end_row();
+}
+
+/// How fast it plays, from the speeds [`crate::domain::MEDIA_SPEEDS`] offers.
+///
+/// Written the moment one is picked, like the loop: the engine sets it on
+/// the running pipeline rather than reopening, so what plays carries on from
+/// where it is, its sound at its own pitch.
+fn show_speed(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    stored: u16,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.label(i18n.text(TextKey::PropertiesSpeed));
+    egui::ComboBox::from_id_salt(("media-speed", item.0))
+        .selected_text(format!("{stored}%"))
+        .show_ui(ui, |ui| {
+            for speed in crate::domain::MEDIA_SPEEDS {
+                if ui
+                    .selectable_label(stored == speed, format!("{speed}%"))
+                    .clicked()
+                    && stored != speed
+                {
+                    actions.push(UiAction::Project(ProjectCommand::Source(
+                        SourceCommand::SetMediaSpeed(item, speed),
+                    )));
+                }
+            }
+        });
+    ui.end_row();
+}
+
+/// Which way it plays.
+///
+/// Written at once, like the loop. The engine turns round at the picture
+/// shown, at the same speed; backwards there is no sound. Two glyphs, as
+/// the play button is, named on the hover: the dock is narrow and the row
+/// already says what they choose.
+fn show_direction(
+    ui: &mut egui::Ui,
+    item: SceneItemId,
+    backwards: bool,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    ui.label(i18n.text(TextKey::PropertiesDirection));
+    ui.horizontal(|ui| {
+        for (value, glyph, key) in [
+            (false, "▶", TextKey::PropertiesForwards),
+            (true, "◀", TextKey::PropertiesBackwards),
+        ] {
+            if ui
+                .selectable_label(backwards == value, glyph)
+                .on_hover_text(i18n.text(key))
+                .clicked()
+                && backwards != value
+            {
+                actions.push(UiAction::Project(ProjectCommand::Source(
+                    SourceCommand::SetMediaBackwards(item, value),
+                )));
+            }
+        }
+    });
     ui.end_row();
 }
 
@@ -1507,6 +1591,8 @@ mod tests {
                 duration,
                 paused: false,
                 monitored: false,
+                speed_percent: 100,
+                backwards: false,
             }),
             source_size: [1920.0, 1080.0],
             visible: true,

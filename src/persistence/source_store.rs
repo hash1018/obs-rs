@@ -127,6 +127,8 @@ impl SourceStore {
                 media_file_settings.duration_us AS media_file_duration_us,
                 media_file_settings.paused AS media_file_paused,
                 media_file_settings.monitored AS media_file_monitored,
+                media_file_settings.speed_percent AS media_file_speed_percent,
+                media_file_settings.backwards AS media_file_backwards,
                 image_source_settings.path AS image_path,
                 image_source_settings.width AS image_width,
                 image_source_settings.height AS image_height,
@@ -340,6 +342,8 @@ impl SourceStore {
                             .map(std::time::Duration::from_micros),
                         paused: row.get("media_file_paused")?,
                         monitored: row.get("media_file_monitored")?,
+                        speed_percent: row.get("media_file_speed_percent")?,
+                        backwards: row.get("media_file_backwards")?,
                     }),
                     SourceKind::Image => SourceSettings::Image(ImageSourceSettings {
                         path: PathBuf::from(row.get::<_, String>("image_path")?),
@@ -1177,8 +1181,8 @@ impl SourceStore {
         transaction.execute(
             "INSERT INTO media_file_settings
                 (source_id, path, looping, width, height, has_audio, gain_db, muted,
-                 duration_us, paused)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 duration_us, paused, speed_percent, backwards)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 source_id.0,
                 settings.path.to_string_lossy(),
@@ -1191,7 +1195,9 @@ impl SourceStore {
                 settings
                     .duration
                     .and_then(|duration| i64::try_from(duration.as_micros()).ok()),
-                settings.paused
+                settings.paused,
+                settings.speed_percent,
+                settings.backwards
             ],
         )?;
         add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
@@ -1396,6 +1402,30 @@ impl SourceStore {
         looping: bool,
     ) -> PersistenceResult<()> {
         set_media_column(transaction, scene_item_id, "looping", looping)
+    }
+
+    /// How fast this media file Source plays, in percent — one of
+    /// [`crate::domain::MEDIA_SPEEDS`], and the nearest of them for anything
+    /// else.
+    pub(crate) fn set_media_speed(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        speed_percent: u16,
+    ) -> PersistenceResult<()> {
+        let speed = crate::domain::MEDIA_SPEEDS
+            .into_iter()
+            .min_by_key(|speed| speed.abs_diff(speed_percent))
+            .unwrap_or(100);
+        set_media_column(transaction, scene_item_id, "speed_percent", speed)
+    }
+
+    /// Whether this media file Source plays backwards.
+    pub(crate) fn set_media_backwards(
+        transaction: &Transaction<'_>,
+        scene_item_id: SceneItemId,
+        backwards: bool,
+    ) -> PersistenceResult<()> {
+        set_media_column(transaction, scene_item_id, "backwards", backwards)
     }
 
     /// The own fader, in decibels, of a Source that carries its own sound —
@@ -2350,6 +2380,8 @@ mod tests {
                         paused: false,
                         muted: false,
                         monitored: false,
+                        speed_percent: 100,
+                        backwards: false,
                     },
                 )
             })
@@ -2378,6 +2410,52 @@ mod tests {
         // shifted column would break silently.
         assert_eq!(stored.path, PathBuf::from("/tmp/clip.mp4"));
         assert!(stored.has_audio);
+    }
+
+    /// How fast a file plays and which way, written and read back — a speed
+    /// that is not one the dock offers is taken as the nearest that is.
+    #[test]
+    fn a_media_file_keeps_its_speed_and_direction() {
+        let mut database = ProjectDatabase::open_in_memory().unwrap();
+        let scene_id = scene(&database);
+        let item_id = database
+            .transaction(|transaction| {
+                SourceStore::add_media_file(
+                    transaction,
+                    scene_id,
+                    &MediaFileSettings {
+                        path: PathBuf::from("/tmp/clip.mp4"),
+                        looping: false,
+                        size_hint: None,
+                        has_audio: true,
+                        gain_db: 0.0,
+                        duration: None,
+                        paused: false,
+                        muted: false,
+                        monitored: false,
+                        speed_percent: 150,
+                        backwards: true,
+                    },
+                )
+            })
+            .unwrap();
+        let SourceSettings::MediaFile(stored) = settings_of(&database, scene_id) else {
+            panic!("a media file Source must read back as one");
+        };
+        assert_eq!((stored.speed_percent, stored.backwards), (150, true));
+        assert_eq!(stored.rate(), -1.5);
+
+        database
+            .transaction(|transaction| {
+                SourceStore::set_media_speed(transaction, item_id, 130)?;
+                SourceStore::set_media_backwards(transaction, item_id, false)
+            })
+            .unwrap();
+        let SourceSettings::MediaFile(stored) = settings_of(&database, scene_id) else {
+            panic!("a media file Source must read back as one");
+        };
+        assert_eq!((stored.speed_percent, stored.backwards), (125, false));
+        assert_eq!(stored.path, PathBuf::from("/tmp/clip.mp4"));
     }
 
     /// What a Source turned out to be, written where the picker's hint was

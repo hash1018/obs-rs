@@ -54,6 +54,11 @@ struct Channel<'a> {
     application: Option<Application<'a>>,
     /// What the name's hover says this is.
     kind: TextKey,
+    /// Why nothing comes through this channel for now, where that is
+    /// something it does rather than something wrong — a file played
+    /// backwards, which has no sound. The name is drawn weak and the hover
+    /// says so; everything set on the channel stays.
+    silent: Option<TextKey>,
     /// Whether this channel is played back — `None` for a channel there is
     /// no point monitoring.
     ///
@@ -123,6 +128,7 @@ fn channels<'a>(
                 kind: source.kind,
                 id: source.device.as_deref(),
             }),
+            silent: None,
             application: (source.kind == AudioSourceKind::Application).then_some(Application {
                 source: source.id,
                 executable: source.device.as_deref(),
@@ -153,7 +159,9 @@ fn channels<'a>(
                 settings.gain_db,
                 settings.muted,
                 settings.monitored,
-                settings.paused,
+                // Backwards makes no sound either, and the meter would sit
+                // at what was playing when it turned round.
+                settings.paused || settings.backwards,
                 TextKey::AudioKindMediaFile,
             ),
             crate::domain::SourceSettings::Rtsp(settings) => (
@@ -199,6 +207,11 @@ fn channels<'a>(
             device: None,
             application: None,
             kind,
+            silent: matches!(
+                &item.settings,
+                crate::domain::SourceSettings::MediaFile(settings) if settings.backwards
+            )
+            .then_some(TextKey::AudioSilentBackwards),
             // Always, and these are the channels the control was really
             // wanted for: a file's or a stream's sound exists nowhere but
             // inside obs-rs, so with this off there is no way at all to hear
@@ -545,6 +558,8 @@ fn show_name(
             // opens something looks like it does.
             if response.hovered() {
                 ui.visuals().widgets.hovered.fg_stroke.color
+            } else if channel.silent.is_some() {
+                ui.visuals().weak_text_color()
             } else {
                 ui.visuals().strong_text_color()
             },
@@ -558,11 +573,16 @@ fn show_name(
             });
         }
         let kind = i18n.text(channel.kind);
-        response.on_hover_text(if elided {
+        let mut hover = if elided {
             format!("{kind} · {}", channel.name)
         } else {
             kind.into_owned()
-        });
+        };
+        if let Some(silent) = channel.silent {
+            hover.push('\n');
+            hover.push_str(&i18n.text(silent));
+        }
+        response.on_hover_text(hover);
         return;
     };
     let kind = i18n.text(channel.kind);

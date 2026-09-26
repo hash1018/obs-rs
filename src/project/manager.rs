@@ -365,6 +365,12 @@ fn apply_source_command(
         SourceCommand::SetMediaLooping(scene_item_id, looping) => {
             SourceStore::set_media_looping(transaction, scene_item_id, looping)
         }
+        SourceCommand::SetMediaSpeed(scene_item_id, speed_percent) => {
+            SourceStore::set_media_speed(transaction, scene_item_id, speed_percent)
+        }
+        SourceCommand::SetMediaBackwards(scene_item_id, backwards) => {
+            SourceStore::set_media_backwards(transaction, scene_item_id, backwards)
+        }
         SourceCommand::SetMediaGain(scene_item_id, gain_db) => {
             SourceStore::set_media_gain_db(transaction, scene_item_id, gain_db)
         }
@@ -1716,6 +1722,8 @@ mod tests {
                     duration: None,
                     paused: false,
                     monitored: false,
+                    speed_percent: 100,
+                    backwards: false,
                 },
             },
         )
@@ -1761,6 +1769,8 @@ mod tests {
                     duration: None,
                     paused: false,
                     monitored: false,
+                    speed_percent: 100,
+                    backwards: false,
                 },
             },
         )
@@ -1840,6 +1850,8 @@ mod tests {
                         duration: None,
                         paused: false,
                         monitored: false,
+                        speed_percent: 100,
+                        backwards: false,
                     },
                 },
             )
@@ -1884,6 +1896,8 @@ mod tests {
                     duration: None,
                     paused: false,
                     monitored: false,
+                    speed_percent: 100,
+                    backwards: false,
                 },
             },
         )
@@ -1933,6 +1947,8 @@ mod tests {
                     duration: None,
                     paused: false,
                     monitored: false,
+                    speed_percent: 100,
+                    backwards: false,
                 },
             },
         )
@@ -1982,6 +1998,8 @@ mod tests {
                     duration: Some(std::time::Duration::from_millis(40_037)),
                     paused: false,
                     monitored: false,
+                    speed_percent: 100,
+                    backwards: false,
                 },
             },
         )
@@ -2030,6 +2048,8 @@ mod tests {
                     duration: None,
                     paused: false,
                     monitored: false,
+                    speed_percent: 100,
+                    backwards: false,
                 },
             },
         )

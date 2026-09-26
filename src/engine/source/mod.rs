@@ -337,6 +337,11 @@ pub(in crate::engine) struct MediaFile {
     /// *changed* from the engine loop rather than only read — see
     /// [`refresh_media_file`].
     pub(in crate::engine) sound: Option<sound::SoundRouting>,
+    /// The rate the pipeline was last set to play at — what
+    /// [`refresh_media_file`] compares the settings with. Kept rather than
+    /// asked of the pipeline because a change of direction is a seek, which
+    /// must happen once per change, not once per reconcile.
+    pub(in crate::engine) rate: f64,
 }
 
 /// What a running media file measures about itself, written by whichever
@@ -427,6 +432,18 @@ pub(in crate::engine) fn refresh_media_file(
     }
     if let (Some(looping), SourceSettings::MediaFile(settings)) = (&media.looping, &item.settings) {
         looping.set_looping(settings.looping);
+    }
+    if let SourceSettings::MediaFile(settings) = &item.settings {
+        let rate = settings.rate();
+        if rate != media.rate {
+            // Faster or slower the same way round is only a change of speed;
+            // the other way round is a turn at the picture shown. Paused, it
+            // stays paused. Tried once: what refused it refuses it again.
+            if let Err(error) = media.pipeline.set_rate(rate) {
+                tracing::warn!("{}: could not play at {rate}: {error}", item.name);
+            }
+            media.rate = rate;
+        }
     }
 }
 
