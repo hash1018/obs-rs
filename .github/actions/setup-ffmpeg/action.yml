@@ -41,6 +41,9 @@ inputs:
       adds only `ffnvcodec`, NVIDIA's MIT-licensed headers, which load the
       driver at run time.
 
+      On Linux the port is also patched to build FFmpeg's CUDA filters: see
+      the Linux install step below for why and how.
+
       Additive to vcpkg's default feature set, not a replacement for it — the
       defaults are already free of GPL components.
     required: false
@@ -76,6 +79,11 @@ runs:
     #
     # The key is made once, here, for both: a cache key may not contain a
     # comma, and a list of features is written with them.
+    #
+    # `PATCH` names what the Linux install step changes in the port, so a
+    # tree built without that change is never restored as one built with it.
+    # It is part of the key rather than of the ref because the ref is
+    # vcpkg's, and this change is ours.
     - name: Name the FFmpeg cache
       id: key
       shell: bash
@@ -83,7 +91,8 @@ runs:
         TRIPLET: ${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}
         REF: ${{ inputs.vcpkg-ref }}
         FEATURES: ${{ inputs.vcpkg-features }}
-      run: echo "key=vcpkg-ffmpeg-$TRIPLET-$REF-${FEATURES//,/-}" >> "$GITHUB_OUTPUT"
+        PATCH: ${{ runner.os == 'Linux' && '-cuda-llvm' || '' }}
+      run: echo "key=vcpkg-ffmpeg-$TRIPLET-$REF-${FEATURES//,/-}$PATCH" >> "$GITHUB_OUTPUT"
 
     - name: Restore cached FFmpeg development libraries
       id: ffmpeg
@@ -101,14 +110,15 @@ runs:
         path: .vcpkg
 
     # vcpkg builds its ports from source on a miss; these are what its own
-    # Linux CI installs first for exactly that.
+    # Linux CI installs first for exactly that. `clang` is ours, not vcpkg's:
+    # it is what compiles FFmpeg's CUDA filters — see the Linux install step.
     - name: Install vcpkg build dependencies
       if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential curl zip unzip tar pkg-config \
-          ninja-build nasm autoconf automake libtool python3
+          ninja-build nasm autoconf automake libtool python3 clang
 
     # The exit-code checks stop this step at the command that actually broke.
     # A native failure does not raise a PowerShell error, so without them the
@@ -126,11 +136,44 @@ runs:
         $debug = "$env:GITHUB_WORKSPACE\.vcpkg\installed\x64-windows\debug"
         Remove-Item $debug -Recurse -Force -ErrorAction SilentlyContinue
 
+    # The port is patched first, to add `--enable-cuda-llvm` to what its
+    # `nvcodec` feature passes FFmpeg's configure.
+    #
+    # The Linux backend composites on CUDA, and media-pp's compositor puts
+    # every layer through `scale_cuda` on its way to the canvas, whatever its
+    # size. That filter, like every CUDA filter, is built only when FFmpeg
+    # can compile CUDA kernels — with clang (`cuda-llvm`) or NVIDIA's nvcc
+    # (`cuda-nvcc`). The port configures with `--disable-autodetect` and
+    # enables neither, so its `nvcodec` build had the CUDA device and NVENC
+    # and no CUDA filters at all. The v0.2.0 draft archive shipped that: adding a Color
+    # source stopped the compositor at its first frame with "filter
+    # `scale_cuda` not found", the Preview froze, and the recording's
+    # picture ended there while its sound ran on. No runner has a GPU, so
+    # nothing in CI could see it — the check under Export FFMPEG_DIR is what
+    # sees it now.
+    #
+    # clang rather than nvcc: nvcc makes the build `--enable-nonfree`, which
+    # an archive cannot be distributed under, where `cuda-llvm` leaves the
+    # licence LGPL. clang compiles the kernels to PTX at build time and the
+    # driver loads them at run time, so there is no CUDA toolkit here either.
+    #
+    # Linux only. The Windows backend composites on D3D11 and uses no CUDA
+    # filter, and building them there would put clang into an MSVC build for
+    # nothing.
+    #
+    # The grep is what makes an edit to the pinned port fail here, loudly,
+    # rather than build without the flag and ship the same archive again.
     - name: Install FFmpeg development libraries (Linux)
       if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'Linux'
       shell: bash
       run: |
         set -euo pipefail
+        port="$GITHUB_WORKSPACE/.vcpkg/ports/ffmpeg/portfile.cmake"
+        sed -i 's/--enable-ffnvcodec")/--enable-ffnvcodec --enable-cuda-llvm")/' "$port"
+        grep -q -- '--enable-ffnvcodec --enable-cuda-llvm")' "$port" || {
+          echo "the ffmpeg port's nvcodec options are not where this patch expects them" >&2
+          exit 1
+        }
         "$GITHUB_WORKSPACE/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         "$GITHUB_WORKSPACE/.vcpkg/vcpkg" install "ffmpeg[${{ inputs.vcpkg-features }}]:x64-linux-dynamic"
         rm -rf "$GITHUB_WORKSPACE/.vcpkg/installed/x64-linux-dynamic/debug"
@@ -172,6 +215,8 @@ runs:
     - name: Export FFMPEG_DIR (Linux)
       if: runner.os == 'Linux'
       shell: bash
+      env:
+        FEATURES: ${{ inputs.vcpkg-features }}
       run: |
         set -euo pipefail
         prefix="$GITHUB_WORKSPACE/.vcpkg/installed/x64-linux-dynamic"
@@ -186,6 +231,14 @@ runs:
         # Recorded so a future header mismatch is diagnosable from the log.
         grep -E '#define\s+LIBAVCODEC_VERSION_(MAJOR|MINOR)\s' \
           "$prefix"/include/libavcodec/version*.h
+        # The filter the CUDA compositor scales with — see the Linux install
+        # step. A filter's name is in libavfilter only if the filter was
+        # built, so this tells the two builds apart without a GPU.
+        if [[ ",$FEATURES," == *",nvcodec,"* ]] &&
+          ! grep -qa scale_cuda "$prefix"/lib/libavfilter.so.*.*; then
+          echo "FFmpeg under $prefix was built without its CUDA filters" >&2
+          exit 1
+        fi
         echo "FFMPEG_DIR=$prefix" >> "$GITHUB_ENV"
 
         # x64-linux-dynamic links FFmpeg as .so: a test binary resolves those

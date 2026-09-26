@@ -24,6 +24,12 @@ way:
   feature set, so they are not in the build. OpenH264 is BSD-2-Clause and is what obs-rs encodes H.264
   with where no hardware encoder is available. `nvcodec` adds NVIDIA's
   `ffnvcodec` headers, which are MIT-licensed and load the driver at run time.
+- **One configure flag of our own, on Linux.** The Linux build adds
+  `--enable-cuda-llvm` to what the port's `nvcodec` feature passes, so that
+  FFmpeg's CUDA filters are built — the Linux compositor scales every layer
+  with `scale_cuda`. It compiles those filters' kernels with clang, which
+  keeps the build free: the alternative, `--enable-cuda-nvcc`, requires
+  `--enable-nonfree` and would make the libraries undistributable.
 - **Dynamic linking only.** obs-rs loads these as DLLs or shared objects and
   never links them statically, which is what keeps the LGPL's relinking
   requirement satisfiable.
@@ -40,10 +46,12 @@ release and names an immutable vcpkg tag:
 | vcpkg tag | `2026.01.16` |
 | port | `ffmpeg[openh264,nvcodec]` (with its default features) |
 | triplet | `x64-windows`, `x64-linux-dynamic` |
+| Linux only | `--enable-cuda-llvm` added to the port's `nvcodec` options |
 
 Building `microsoft/vcpkg` at that tag with those options reproduces the
-libraries in the archive, and the port's own portfile records which FFmpeg
-tarball it fetches. FFmpeg's sources are at <https://ffmpeg.org/download.html>
+libraries in the archive — on Linux after the one-line change to the port
+that `.github/actions/setup-ffmpeg/action.yml` makes and explains — and the
+port's own portfile records which FFmpeg tarball it fetches. FFmpeg's sources are at <https://ffmpeg.org/download.html>
 and <https://github.com/FFmpeg/FFmpeg>.
 
 ### License text
