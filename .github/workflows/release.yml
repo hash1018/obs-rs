@@ -38,7 +38,7 @@ jobs:
 
       # The same pinned FFmpeg the CI workflow builds against, which is what
       # makes the licence statement in THIRD-PARTY.md true of this archive:
-      # vcpkg's default port plus openh264, and no GPL components.
+      # vcpkg's default port plus openh264 and nvcodec, and no GPL components.
       - name: Set up FFmpeg
         uses: ./.github/actions/setup-ffmpeg
 

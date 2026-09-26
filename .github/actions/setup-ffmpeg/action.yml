@@ -33,10 +33,18 @@ inputs:
       and it is GPL, which would change the terms a release archive is
       distributed under. See `THIRD-PARTY.md`.
 
+      `nvcodec` is NVIDIA's encode, decode and CUDA support. The Linux
+      backend opens its CUDA device through FFmpeg and composites on it, and
+      a build without this has no CUDA device type to open. On Windows it is
+      what the NVENC encoder setting means; without it a recording falls
+      back to Media Foundation (measured on the v0.2.0 draft archive). It
+      adds only `ffnvcodec`, NVIDIA's MIT-licensed headers, which load the
+      driver at run time.
+
       Additive to vcpkg's default feature set, not a replacement for it — the
       defaults are already free of GPL components.
     required: false
-    default: "openh264"
+    default: "openh264,nvcodec"
 
 runs:
   using: composite

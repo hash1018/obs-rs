@@ -19,10 +19,11 @@ They are **LGPL-2.1-or-later**, and the release is built to keep them that
 way:
 
 - **No GPL components.** The build is vcpkg's default `ffmpeg` port with the
-  `openh264` feature added and nothing else. GPL-only pieces — `x264`,
-  `x265`, and the rest — are not in vcpkg's default feature set, so they are
-  not in the build. OpenH264 is BSD-2-Clause and is what obs-rs encodes H.264
-  with where no hardware encoder is available.
+  `openh264` and `nvcodec` features added and nothing else. GPL-only
+  pieces — `x264`, `x265`, and the rest — are not in vcpkg's default
+  feature set, so they are not in the build. OpenH264 is BSD-2-Clause and is what obs-rs encodes H.264
+  with where no hardware encoder is available. `nvcodec` adds NVIDIA's
+  `ffnvcodec` headers, which are MIT-licensed and load the driver at run time.
 - **Dynamic linking only.** obs-rs loads these as DLLs or shared objects and
   never links them statically, which is what keeps the LGPL's relinking
   requirement satisfiable.
@@ -37,7 +38,7 @@ release and names an immutable vcpkg tag:
 |---|---|
 | FFmpeg version | 8.0.1 |
 | vcpkg tag | `2026.01.16` |
-| port | `ffmpeg[core,openh264]` |
+| port | `ffmpeg[openh264,nvcodec]` (with its default features) |
 | triplet | `x64-windows`, `x64-linux-dynamic` |
 
 Building `microsoft/vcpkg` at that tag with those options reproduces the
