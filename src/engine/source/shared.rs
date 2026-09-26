@@ -15,7 +15,7 @@
 //!
 //! Windows shares both kinds. Linux shares cameras — which fail there
 //! outright, the second reader refused as busy — and opens a display per
-//! SceneItem, for the reasons the CUDA backend's `RunningSource` gives.
+//! SceneItem, for the reasons the Linux backend's `RunningSource` gives.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};

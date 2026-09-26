@@ -108,17 +108,17 @@ pub(in crate::engine) fn filled_rack(
     })
 }
 
-/// The same, on the CUDA backend. Neither backend takes a size: every
-/// filter is per pixel and the bridge in front of them follows the
-/// frames.
+/// The same, on Linux's GPU, CUDA or Vulkan. Neither platform takes a
+/// size: every filter is per pixel and the bridge in front of them follows
+/// the frames.
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn filled_rack(
     name: &str,
-    device: &Arc<media_pp::elements::CudaDevice>,
+    gpu: &crate::engine::backend::Gpu,
     incoming: filters::ChainFormat,
     item: &SceneItemSnapshot,
 ) -> Result<FilledRack, BackendError> {
-    let (rack, filter_rack) = filters::rack(name, device, incoming);
+    let (rack, filter_rack) = filters::rack(name, gpu, incoming);
     let open = filter_rack.refill(&item.filters)?;
     Ok(FilledRack {
         rack,

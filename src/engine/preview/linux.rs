@@ -800,10 +800,63 @@ struct CudaExternalMemoryBufferDesc {
     reserved: [c_uint; 16],
 }
 
-// SAFETY of the block: these are the driver's own C ABI declarations, and
-// every call site above checks the returned `CUresult`.
-#[link(name = "cuda")]
-unsafe extern "C" {
+// These are the driver's own C ABI declarations, and every call site above
+// checks the returned `CUresult`. Opened when first called rather than
+// linked, as media-pp opens its own: linked, `libcuda.so.1` is something
+// the program cannot start without, and a machine compositing on Vulkan has
+// none — see `backend::linux::gpu`.
+macro_rules! cuda_driver {
+    ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) -> CUresult;)*) => {
+        /// The driver's entry points, as it answered for each.
+        #[allow(non_snake_case)]
+        struct Entries {
+            _library: libloading::Library,
+            $($name: Option<unsafe extern "C" fn($($ty),*) -> CUresult>,)*
+        }
+
+        fn entries() -> Option<&'static Entries> {
+            static ENTRIES: std::sync::OnceLock<Option<Entries>> = std::sync::OnceLock::new();
+            ENTRIES
+                .get_or_init(|| {
+                    // SAFETY: loading the NVIDIA driver runs its initialisers,
+                    // which linking against it would have run at startup.
+                    let library = unsafe { libloading::Library::new("libcuda.so.1") }.ok()?;
+                    Some(Entries {
+                        $(
+                            // SAFETY: the type is the entry point's own, from
+                            // `cuda.h`, and the library it points into is
+                            // kept beside it for as long as the process runs.
+                            $name: unsafe {
+                                library
+                                    .get::<unsafe extern "C" fn($($ty),*) -> CUresult>(
+                                        concat!(stringify!($name), "\0").as_bytes(),
+                                    )
+                                    .ok()
+                                    .map(|symbol| *symbol)
+                            },
+                        )*
+                        _library: library,
+                    })
+                })
+                .as_ref()
+        }
+
+        $(
+            #[allow(non_snake_case)]
+            unsafe fn $name($($arg: $ty),*) -> CUresult {
+                match entries().and_then(|entries| entries.$name) {
+                    // SAFETY: the caller's, as for the C function itself.
+                    Some(entry) => unsafe { entry($($arg),*) },
+                    // `CUDA_ERROR_SHARED_OBJECT_INIT_FAILED`: no driver, or
+                    // not this entry point in it.
+                    None => 303,
+                }
+            }
+        )*
+    };
+}
+
+cuda_driver! {
     fn cuInit(flags: c_uint) -> CUresult;
     fn cuDeviceGet(device: *mut CUdevice, ordinal: c_int) -> CUresult;
     fn cuDevicePrimaryCtxRetain(ctx: *mut CUcontext, device: CUdevice) -> CUresult;
@@ -870,7 +923,7 @@ impl PreviewRenderer {
 /// the buffer-to-texture copies it drives are work for a texture no one will
 /// sample.
 ///
-/// The CUDA copy into shared memory still happens: it is device-to-device and
+/// The copy into staging still happens: on CUDA it is device-to-device and
 /// cheap, and keeping it current is what lets the window come back to the
 /// picture as it is then rather than as it was when it went down — the
 /// `ChangeGate` in front of this forwards changes, and a Scene that is not
@@ -879,14 +932,31 @@ pub(in crate::engine) struct PreviewSurface {
     wgpu_device: wgpu::Device,
     queue: wgpu::Queue,
     target: Nv12Target,
-    shared: SharedNv12,
-    /// Set when the shared memory has new content the Preview has not been
-    /// told about; the counting sink clears it as it reports.
+    staging: Staging,
+    /// Set when the staging has new content the Preview has not been told
+    /// about; the counting sink clears it as it reports.
     drawn: Arc<AtomicBool>,
     visible: AtomicBool,
-    /// Whether the shared memory holds a picture the target has not drawn,
-    /// which is what coming back into view has to answer.
+    /// Whether the staging holds a picture the target has not drawn, which
+    /// is what coming back into view has to answer.
     undrawn: AtomicBool,
+}
+
+/// Where a composited frame waits for the Preview to resolve it.
+pub(in crate::engine) enum Staging {
+    /// Memory CUDA and Vulkan both hold, which CUDA copies each frame into —
+    /// this module's own subject.
+    Shared(SharedNv12),
+    /// The target's own planes. The Vulkan compositor runs on a device of
+    /// FFmpeg's, not wgpu's, and nothing shares memory between the two, so
+    /// each frame the Preview draws comes back to system memory and is
+    /// written into them: a readback CUDA avoids, at the Preview's rate
+    /// rather than the compositor's.
+    ///
+    /// The lock keeps a write from interleaving with a resolve the UI thread
+    /// asks for as the window comes back, which would draw one frame's luma
+    /// under another's chroma.
+    Host(Mutex<()>),
 }
 
 impl PreviewSurface {
@@ -900,31 +970,38 @@ impl PreviewSurface {
         wgpu_device: wgpu::Device,
         queue: wgpu::Queue,
         target: Nv12Target,
-        shared: SharedNv12,
+        staging: Staging,
         drawn: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new(Self {
             wgpu_device,
             queue,
             target,
-            shared,
+            staging,
             drawn,
             visible: AtomicBool::new(true),
             undrawn: AtomicBool::new(false),
         })
     }
 
-    /// Draws what is in shared memory, if there is anyone to see it.
+    /// Draws what is in staging, if there is anyone to see it.
     fn present(&self) -> bool {
         if !self.visible.load(Ordering::Relaxed) {
             self.undrawn.store(true, Ordering::Relaxed);
             return true;
         }
-        if !self
-            .target
-            .draw(&self.wgpu_device, &self.queue, &self.shared)
-        {
-            return false;
+        match &self.staging {
+            Staging::Shared(shared) => {
+                if !self.target.draw(&self.wgpu_device, &self.queue, shared) {
+                    return false;
+                }
+            }
+            Staging::Host(writing) => {
+                let _writing = writing
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                self.target.resolve(&self.wgpu_device, &self.queue);
+            }
         }
         self.drawn.store(true, Ordering::Relaxed);
         true
@@ -937,6 +1014,35 @@ impl PreviewSurface {
         if visible && self.undrawn.swap(false, Ordering::Relaxed) {
             self.present();
         }
+    }
+
+    /// Draws a composited frame that has come back to system memory — the
+    /// Vulkan backend's renderer, an `AppSink` behind a `VulkanDownload`.
+    ///
+    /// `false` for anything but an NV12 frame of the Canvas's size, or on a
+    /// surface staged through shared memory, which takes its frames from
+    /// [`PreviewRenderer`] instead.
+    pub(in crate::engine) fn submit_host(&self, frame: &media_pp::ffmpeg::frame::Video) -> bool {
+        let Staging::Host(writing) = &self.staging else {
+            return false;
+        };
+        if frame.format() != media_pp::ffmpeg::format::Pixel::NV12 {
+            return false;
+        }
+        {
+            let _writing = writing
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !self.target.write(
+                &self.queue,
+                [frame.width(), frame.height()],
+                (frame.data(0), frame.stride(0)),
+                (frame.data(1), frame.stride(1)),
+            ) {
+                return false;
+            }
+        }
+        self.present()
     }
 }
 
@@ -953,6 +1059,10 @@ impl CudaFrameRenderer for PreviewRenderer {
         // what `nv12.rs`'s shader converts from, whatever it says.
         _color: media_pp::color::ColorDescription,
     ) -> Result<(), SubmitError> {
+        // Only a surface staged through shared memory is drawn from CUDA.
+        let Staging::Shared(shared) = &self.surface.staging else {
+            return Err(SubmitError::InvalidFrame);
+        };
         // Everything that arrives is drawn. The rate this is held to, and
         // the frames carrying a picture already on screen, are both the
         // `ChangeGate` in front of it — deliberately, since a renderer that
@@ -963,16 +1073,12 @@ impl CudaFrameRenderer for PreviewRenderer {
         // an NV12 CUDA frame on the primary context, both planes present —
         // before calling, which is the whole reason the element is in the
         // graph rather than an `AppSink`.
-        if !unsafe {
-            self.surface
-                .shared
-                .write(y, y_pitch, uv, uv_pitch, width, height)
-        } {
+        if !unsafe { shared.write(y, y_pitch, uv, uv_pitch, width, height) } {
             return Err(SubmitError::InvalidFrame);
         }
         // Checked after the copy rather than before: the frame is only
         // readable at all once it is in memory the CPU can see.
-        if self.surface.shared.tail_is_unwritten() {
+        if shared.tail_is_unwritten() {
             return Ok(());
         }
         // Whether drawing it happens now is `PreviewSurface`'s answer, not

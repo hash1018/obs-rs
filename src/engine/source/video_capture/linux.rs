@@ -12,8 +12,8 @@
 //! item to open it asked for.
 
 use media_pp::elements::{
-    CudaDevice, CudaUpload, CudaVideoCompositorHandle, CudaVideoCompositorInput, V4l2CaptureFormat,
-    V4l2CaptureOptions, V4l2CaptureSource, V4l2Device, VideoLayer,
+    CompositorInput, V4l2CaptureFormat, V4l2CaptureOptions, V4l2CaptureSource, V4l2Device,
+    VideoLayer,
 };
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
 
 use crate::domain::{SourceSettings, VideoCaptureSettings};
-use crate::engine::backend::{BackendError, RunningSource, pipeline_ended};
+use crate::engine::backend::{BackendError, Compositor, Gpu, RunningSource, pipeline_ended};
 use crate::engine::source::shared::{CaptureEnded, Registry, Share, Shared, SharedCapture};
 use crate::engine::source::{
     FilledRack, OpenOutcome, OpenSource, filled_rack, filters, input_name,
@@ -68,8 +68,8 @@ impl SharedCapture for CameraRegistry {
 /// `Absent` when the camera is not there to open — see this module's
 /// parent.
 pub(in crate::engine) fn open(
-    device: &Arc<CudaDevice>,
-    handle: &CudaVideoCompositorHandle,
+    gpu: &Gpu,
+    handle: &Compositor,
     cameras: &Arc<CameraRegistry>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
@@ -79,7 +79,7 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     // As on Windows: a camera that is not there is a state rather than a
     // failure, and the attempt is the only way to find out — so what it said
@@ -89,7 +89,7 @@ pub(in crate::engine) fn open(
     let attached = cameras.open.attach(
         &settings.device,
         || {
-            open_camera(settings, &item.name, device).map_err(|absent| {
+            open_camera(settings, &item.name, gpu).map_err(|absent| {
                 unavailable = Some(absent.clone());
                 BackendError::from(absent)
             })
@@ -100,7 +100,7 @@ pub(in crate::engine) fn open(
             // conversion at its head; an empty one leaves the picture NV12
             // all the way to the compositor.
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, filters::ChainFormat::Nv12, item)?;
+                filled_rack(&name, gpu, filters::ChainFormat::Nv12, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },
@@ -157,20 +157,16 @@ pub(in crate::engine) fn open(
 fn open_camera(
     settings: &VideoCaptureSettings,
     item_name: &str,
-    device: &Arc<CudaDevice>,
+    gpu: &Gpu,
 ) -> Result<Shared<()>, String> {
     // The camera's own name rather than any item's: the capture outlives each
     // of them, and this is what the log and the Stats dock show it as.
     let name = format!("camera-{}", settings.device_name);
     let (source, format) = start(&name, settings, item_name)?;
-    // NV12 in system memory from the camera, straight into a CUDA surface —
-    // the reason the element converts rather than handing on whatever the
-    // device speaks.
-    let upload = CudaUpload::new(
-        format!("{name}-upload"),
-        device,
-        media_pp::elements::CudaFrameFormat::Nv12,
-    );
+    // NV12 in system memory from the camera — the capture element converts
+    // rather than handing on whatever the device speaks — straight into a
+    // surface on the GPU.
+    let upload = gpu.upload(format!("{name}-upload"), filters::ChainFormat::Nv12);
 
     let mut handle = None;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, |source, context| {

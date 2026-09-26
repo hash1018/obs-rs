@@ -304,14 +304,14 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
+    use media_pp::elements::{CompositorInput, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -324,9 +324,9 @@ pub(in crate::engine) fn open(
     };
     let chosen = choose(&source, mixer)?;
 
-    // NV12 in CUDA memory, from NVDEC or uploaded after a software decode,
+    // NV12 on the GPU, decoded there or uploaded after a software decode,
     // is one of the two the compositor draws from — so there is no
-    // `CudaConverter` here, unlike the Sources that upload BGRA of their own;
+    // converter here, unlike the Sources that upload BGRA of their own;
     // a file with alpha arrives as BGRA, the other one.
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
@@ -338,16 +338,13 @@ pub(in crate::engine) fn open(
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
-        DecodeTarget::Cuda {
-            device: media_pp::elements::CudaDevice::clone(device),
-            downstream_hw_frames: HW_FRAME_BUDGET,
-        },
+        gpu.decode_target(HW_FRAME_BUDGET),
         threading,
     )?;
     decode_policy::log(&item.name, codec, size, threading, &video_decoder);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
-        device,
+        gpu,
         super::decoded_chain_format(&video_decoder),
         item,
     )?;
@@ -369,7 +366,7 @@ pub(in crate::engine) fn open(
     .map(|sound| sound.with_discontinuity_limit(TIMELINE_JUMP));
     let volume = audio.as_ref().map(|audio| audio.volume.clone());
 
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let (pipeline, sound) = build(
         name.clone(),

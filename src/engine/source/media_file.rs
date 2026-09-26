@@ -418,14 +418,14 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     mixer: Option<&MixerHandle>,
     meter_wake: &MeterWake,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<super::OpenOutcome, BackendError> {
-    use media_pp::elements::{CudaVideoCompositorInput, DecodeTarget, VideoDecodeBin};
+    use media_pp::elements::{CompositorInput, VideoDecodeBin};
 
     use crate::engine::backend::RunningSource;
     use crate::engine::source::{MediaFile, OpenSource};
@@ -441,9 +441,9 @@ pub(in crate::engine) fn open(
     let looping = demuxer.looping_handle();
     looping.set_looping(settings.looping);
 
-    // NV12 in CUDA memory, from NVDEC or uploaded after a software decode,
+    // NV12 on the GPU, decoded there or uploaded after a software decode,
     // is one of the two the compositor draws from — so there is no
-    // `CudaConverter` here, unlike the Sources that upload BGRA of their own;
+    // converter here, unlike the Sources that upload BGRA of their own;
     // a file with alpha arrives as BGRA, the other one.
     // Read before the parameters are moved into the decoder, which is
     // also the only place they describe a picture rather than a stream.
@@ -453,16 +453,13 @@ pub(in crate::engine) fn open(
     let video_decoder = VideoDecodeBin::open(
         format!("{name}-video"),
         chosen.video_params,
-        DecodeTarget::Cuda {
-            device: media_pp::elements::CudaDevice::clone(device),
-            downstream_hw_frames: HW_FRAME_BUDGET,
-        },
+        gpu.decode_target(HW_FRAME_BUDGET),
         threading,
     )?;
     decode_policy::log(&item.name, codec, size, threading, &video_decoder);
     let FilledRack { rack, filters } = super::filled_rack(
         &name,
-        device,
+        gpu,
         super::decoded_chain_format(&video_decoder),
         item,
     )?;
@@ -484,9 +481,9 @@ pub(in crate::engine) fn open(
         Arc::clone(&meters),
     );
 
-    // No `Option` here, unlike the Direct3D half: the CUDA compositor
+    // No `Option` here, unlike the Direct3D half: a Linux compositor
     // answers with the input itself or with an error.
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let video_index = chosen.video;
     let sound_name = name.clone();
@@ -538,8 +535,8 @@ pub(in crate::engine) fn open(
 /// decoding and a mixer taking the sound. Each seek has to put one picture
 /// through to the compositor and hold it while paused, or play on from it,
 /// and nothing from before a seek may be shown after it.
-// Both backends: the D3D11 compositor with D3D11VA on Windows, the CUDA one
-// with NVDEC on Linux — each `open` as the engine calls it there.
+// Both backends: the D3D11 compositor with D3D11VA on Windows, CUDA or
+// Vulkan on Linux — each `open` as the engine calls it there.
 #[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
 mod tests {
     use std::path::PathBuf;
@@ -553,8 +550,6 @@ mod tests {
         TestAudioSource, TestVideoOptions, TestVideoSource, VideoCodec, VideoCompositorOptions,
         VideoLayer, VideoRect,
     };
-    #[cfg(target_os = "linux")]
-    use media_pp::elements::{CudaDevice, CudaVideoCompositor};
     use media_pp::pipeline::{PipelineBuilder, SeekMode};
 
     use super::*;
@@ -579,10 +574,10 @@ mod tests {
                 return;
             };
             #[cfg(target_os = "linux")]
-            let $gpu = match CudaDevice::new() {
-                Ok(device) => Arc::new(device),
+            let $gpu = match crate::engine::backend::Gpu::open() {
+                Ok(gpu) => gpu,
                 Err(error) => {
-                    eprintln!("skipping: no CUDA device ({error})");
+                    eprintln!("skipping: no GPU ({error})");
                     return;
                 }
             };
@@ -598,8 +593,13 @@ mod tests {
             let ($compositor_element, $compositor) =
                 D3d11VideoCompositor::new("test-compositor", &$gpu, options).expect("compositor");
             #[cfg(target_os = "linux")]
-            let ($compositor_element, $compositor) =
-                CudaVideoCompositor::new("test-compositor", &$gpu, options).expect("compositor");
+            let ($compositor_element, $compositor) = $gpu
+                .compositor(
+                    "test-compositor".to_owned(),
+                    options,
+                    crate::engine::source::filters::ChainFormat::Nv12,
+                )
+                .expect("compositor");
             let (mixer, $mixer_handle) = AudioMixer::new(
                 "test-mixer",
                 AudioMixerOptions {

@@ -19,8 +19,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
-use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
@@ -364,15 +362,15 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     let (size, settings) = surface(item)?;
     let name = input_name(item);
     let frame = text_bgra(size[0], size[1], &settings)?;
-    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    let wired = pushed::wire(&name, gpu, handle, item, layer)?;
     pushed::opened(
         name,
         wired,

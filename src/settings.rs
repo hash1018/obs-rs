@@ -475,8 +475,9 @@ fn even(value: f32) -> u32 {
 ///
 /// [`RecordingEncoder::Nvenc`] takes the compositor's own frames as they are —
 /// already on the GPU, already in the format NVENC wants — so a recording
-/// costs an encode and nothing else. Everything else here is a software
-/// encoder, and reaching one means copying every frame back from the GPU and
+/// costs an encode and nothing else, and so do Media Foundation on Windows
+/// and Vulkan Video on Linux. The rest here are software encoders, and
+/// reaching one means copying every frame back from the GPU and
 /// converting it to `YUV420P` first. At 1080p60 that is unlikely to keep up,
 /// and the recording branch's queue reports the overload on the bus rather
 /// than dropping frames quietly.
@@ -499,6 +500,12 @@ pub enum RecordingEncoder {
     /// idle. On an NVIDIA machine it reaches the same block `Nvenc` does, by
     /// a longer route, which is why it is second rather than first.
     MediaFoundation,
+    /// `h264_vulkan`, fed the compositor's frames directly — the hardware
+    /// entry of a Linux machine compositing on Vulkan, which is any GPU but
+    /// NVIDIA's: Vulkan Video reaches whichever encode block the driver
+    /// exposes. Only there: its frames have to be Vulkan's, so neither a
+    /// Windows machine nor one compositing on CUDA can feed it.
+    Vulkan,
     /// `libopenh264` — Cisco's encoder, whose licence terms are why it is the
     /// software H.264 encoder most FFmpeg builds carry.
     OpenH264,
@@ -510,9 +517,10 @@ pub enum RecordingEncoder {
 impl RecordingEncoder {
     /// In preference order, which is also the order the Settings dialog
     /// lists them and the order [`Self::best_of`] falls through.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Nvenc,
         Self::MediaFoundation,
+        Self::Vulkan,
         Self::OpenH264,
         Self::X264,
     ];
@@ -520,7 +528,7 @@ impl RecordingEncoder {
     /// Whether reaching this encoder means copying frames back from the GPU
     /// and converting them.
     pub fn is_software(self) -> bool {
-        !matches!(self, Self::Nvenc | Self::MediaFoundation)
+        !matches!(self, Self::Nvenc | Self::MediaFoundation | Self::Vulkan)
     }
 
     /// The most preferred of `available`, or `None` when it is empty.
@@ -544,6 +552,7 @@ impl RecordingEncoder {
         match self {
             Self::Nvenc => "NVENC (h264_nvenc)",
             Self::MediaFoundation => "Media Foundation (h264_mf)",
+            Self::Vulkan => "Vulkan Video (h264_vulkan)",
             Self::OpenH264 => "OpenH264 (libopenh264)",
             Self::X264 => "x264 (libx264)",
         }
@@ -931,6 +940,7 @@ mod tests {
     fn encoder_uses_expected_toml_value() {
         for (encoder, written) in [
             (RecordingEncoder::Nvenc, "nvenc"),
+            (RecordingEncoder::Vulkan, "vulkan"),
             (RecordingEncoder::OpenH264, "open-h264"),
             (RecordingEncoder::X264, "x264"),
         ] {

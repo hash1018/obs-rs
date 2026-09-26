@@ -108,7 +108,7 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsA
 windows-core = "0.62"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Names the Vulkan types the CUDA interop needs: `engine::backend::cuda`
+# Names the Vulkan types the CUDA interop needs: `engine::preview`
 # allocates the buffer the composited frame reaches wgpu through, and that
 # allocation has to be exportable, which is past what wgpu's own API offers.
 # The version is wgpu-hal's, deliberately — a second `ash` in the tree is a
@@ -155,10 +155,14 @@ x11rb = { version = "0.13.2", features = ["randr"] }
 # compositor cannot accept — `media-pp` compares memory domains when a branch
 # is built and no element converts between the two. So Windows takes the
 # Direct3D side whole rather than CUDA plus a round trip through system memory.
+#
+# Linux takes two such sets and picks one when it starts: CUDA on an NVIDIA
+# GPU, Vulkan on any other — see `engine::backend`.
 [target.'cfg(target_os = "linux")'.dependencies.media-pp]
 version = "0.3"
 features = [
     "cuda",
+    "vulkan",
     "rnnoise",
     "pipewire-screen-capture",
     "pipewire-audio-capture",
@@ -182,4 +186,4 @@ features = [
 # released yet: the Vulkan backend the Linux build chooses where there is no
 # NVIDIA GPU. Back to the published crate once it carries that.
 [patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp", rev = "437c9ed21ca5550d075dcce9d9709d5e9a188c37" }
+media-pp = { git = "https://github.com/hash1018/media-pp", rev = "9688c5b76a08fbd05e21f00b026294db28c2e599" }

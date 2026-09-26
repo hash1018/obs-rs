@@ -4,8 +4,9 @@
 //! draws from a texture wgpu does own. What is between them is the largest
 //! single thing in the engine, and it is entirely different on each platform:
 //! Windows shares one D3D11 texture and hands wgpu a view of it, while Linux
-//! copies NV12 planes through Vulkan external memory and resolves them into
-//! RGBA with a render pass.
+//! resolves NV12 planes into RGBA with a render pass — copied into them
+//! through Vulkan external memory on CUDA, and written from a readback on
+//! Vulkan.
 //!
 //! Neither half shares a line with the other, which is why each gets a file
 //! rather than a `#[cfg]` inside one. What they do share is their shape: a
@@ -30,11 +31,11 @@ mod nv12;
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) use nv12::Nv12Target;
-#[cfg(target_os = "linux")]
-pub(in crate::engine) use platform::SharedNv12;
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use platform::SharedTarget;
 pub(in crate::engine) use platform::{PreviewRenderer, PreviewSurface};
+#[cfg(target_os = "linux")]
+pub(in crate::engine) use platform::{SharedNv12, Staging};
 
 /// One composited frame, already resident on the GPU.
 ///

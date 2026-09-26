@@ -18,9 +18,6 @@
 //!
 //! [`AppSource`]: media_pp::elements::AppSource
 
-#[cfg(target_os = "linux")]
-use std::sync::Arc;
-
 use media_pp::elements::AppSourceHandle;
 
 use crate::engine::backend::{BackendError, Layer, RunningSource};
@@ -86,24 +83,24 @@ pub(in crate::engine) fn wire(
     })
 }
 
-/// The same on the CUDA backend — see the Direct3D half for what it is and
-/// why it is BGRA throughout.
+/// The same on Linux's GPU, CUDA or Vulkan — see the Direct3D half for what
+/// it is and why it is BGRA throughout.
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn wire(
     name: &str,
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<Wired, BackendError> {
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
+    use media_pp::elements::{AppSource, CompositorInput};
     use media_pp::pipeline::Pipeline;
 
     let (source, pusher) = AppSource::new(name.to_owned(), 1);
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra);
-    let FilledRack { rack, filters } = filled_rack(name, device, filters::ChainFormat::Bgra, item)?;
+    let upload = gpu.upload(format!("{name}-upload"), filters::ChainFormat::Bgra);
+    let FilledRack { rack, filters } = filled_rack(name, gpu, filters::ChainFormat::Bgra, item)?;
 
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.to_owned(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.to_owned(), layer)?;
     let (pipeline, ()) = Pipeline::new(name.to_owned(), source, move |source, context| {
         let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;

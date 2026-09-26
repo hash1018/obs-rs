@@ -14,17 +14,15 @@
 //! its own pipeline — which is the difference `RunningSource` is shaped
 //! around, and why it is a type each backend defines for itself.
 
-use std::sync::Arc;
-
+use media_pp::element::Filter;
 use media_pp::elements::{
-    CaptureSourceKind, CudaConverter, CudaDevice, CudaFrameFormat, CudaVideoCompositorHandle,
-    CudaVideoCompositorInput, PipeWireScreenCaptureOptions, PipeWireScreenCaptureSource,
-    VideoLayer,
+    CaptureSourceKind, CompositorInput, CudaConverter, CudaFrameFormat,
+    PipeWireScreenCaptureOptions, PipeWireScreenCaptureSource, VideoLayer,
 };
 use media_pp::pipeline::Pipeline;
 use media_pp::rate::FrameRateHandle;
 
-use crate::engine::backend::{BackendError, RunningSource};
+use crate::engine::backend::{BackendError, Compositor, Gpu, RunningSource};
 use crate::engine::source::{FilledRack, OpenSource, filled_rack, filters, input_name};
 use crate::snapshots::SceneItemSnapshot;
 
@@ -37,30 +35,49 @@ use crate::snapshots::SceneItemSnapshot;
 pub(in crate::engine) fn open(
     kind: CaptureSourceKind,
     restore_token: Option<String>,
-    device: &Arc<CudaDevice>,
-    handle: &CudaVideoCompositorHandle,
+    gpu: &Gpu,
+    handle: &Compositor,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
 ) -> Result<(OpenSource, FrameRateHandle), BackendError> {
     let name = input_name(item);
+    let options = PipeWireScreenCaptureOptions {
+        frame_rate: media_pp::ffmpeg::Rational::new(fps as i32, 1),
+        source_kind: kind,
+        include_cursor: false,
+        restore_token: restore_token.clone(),
+    };
     // Blocking, and it can sit here indefinitely: an unrecognised token makes
     // the portal show its dialog and wait for the user. Sources are opened one
     // at a time, so the rest wait behind whichever one is asking.
-    // GPU capture: what is captured lands in CUDA surfaces and never reaches
-    // system memory. It negotiates DMA-BUF only and fails rather than falling
-    // back, which is the point — a silent CPU path would undo the whole
-    // arrangement, and would hand the compositor frames it cannot take.
-    let (source, format, refreshed_token) = PipeWireScreenCaptureSource::open_gpu(
-        name.clone(),
-        PipeWireScreenCaptureOptions {
-            frame_rate: media_pp::ffmpeg::Rational::new(fps as i32, 1),
-            source_kind: kind,
-            include_cursor: false,
-            restore_token: restore_token.clone(),
-        },
-        device,
-    )?;
+    let (source, format, refreshed_token, bridge, incoming) = match gpu {
+        // GPU capture: what is captured lands in CUDA surfaces and never
+        // reaches system memory. It negotiates DMA-BUF only and fails rather
+        // than falling back, which is the point — a silent CPU path would undo
+        // the whole arrangement, and would hand the compositor frames it
+        // cannot take.
+        //
+        // Capture gives BGRA and the compositor works in NV12; nothing
+        // between them converts, so the converter is not optional.
+        Gpu::Cuda(device) => {
+            let (source, format, token) =
+                PipeWireScreenCaptureSource::open_gpu(name.clone(), options, device)?;
+            let converter =
+                CudaConverter::new(format!("{name}-convert"), device, CudaFrameFormat::Nv12)?;
+            let bridge: Box<dyn Filter> = Box::new(converter);
+            (source, format, token, bridge, filters::ChainFormat::Nv12)
+        }
+        // Nothing takes a DMA-BUF into a Vulkan frame here, so the capture
+        // comes through system memory and is uploaded as it is — BGRA, which
+        // the compositor draws as well as NV12, and which the filters want
+        // anyway.
+        Gpu::Vulkan(_) => {
+            let (source, format, token) = PipeWireScreenCaptureSource::open(name.clone(), options)?;
+            let upload = gpu.upload(format!("{name}-upload"), filters::ChainFormat::Bgra);
+            (source, format, token, upload, filters::ChainFormat::Bgra)
+        }
+    };
     // A compositor may issue a fresh token on every restore, and keeping the
     // old one then means prompting on every launch — the thing persisting it
     // was for. But declining to issue a new one is not the same as revoking
@@ -90,18 +107,13 @@ pub(in crate::engine) fn open(
     // `set_frame_rate`.
     let frame_rate = source.frame_rate();
 
-    // Capture gives BGRA and the compositor works in NV12; nothing between
-    // them converts, so this element is not optional.
-    let converter = CudaConverter::new(format!("{name}-convert"), device, CudaFrameFormat::Nv12)?;
-
-    // After the converter, as a camera's rack is after its upload — see the
+    // After the bridge, as a camera's rack is after its upload — see the
     // `filters` module for why a capture is not filtered before it.
-    let FilledRack { rack, filters } =
-        filled_rack(&name, device, filters::ChainFormat::Nv12, item)?;
+    let FilledRack { rack, filters } = filled_rack(&name, gpu, incoming, item)?;
 
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let (pipeline, ()) = Pipeline::new(name.clone(), source, move |source, context| {
-        let branch = context.branch().pipe(converter).pipe(rack).to(sink)?;
+        let branch = context.branch().pipe(bridge).pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;

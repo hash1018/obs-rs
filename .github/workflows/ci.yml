@@ -101,11 +101,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-26.04
-    # Job-level rather than on the step that links: `RUSTFLAGS` is part of the
-    # build fingerprint, so setting it for `cargo test` alone would make it
-    # rebuild everything `cargo clippy` had just built.
     env:
-      RUSTFLAGS: -L ${{ github.workspace }}/target/cuda-stub
       # Where `cef-dll-sys` looks for Chromium's binary distribution before
       # downloading it, as on Windows. Beside the checkout rather than in it,
       # so a cache restore never lands inside the source tree.
@@ -124,11 +120,12 @@ jobs:
       # `dlopen` at run time, but the headers have to be here to compile
       # against.
       #
-      # No CUDA toolkit, even though this compiles the CUDA backend: the
-      # driver ships both the library and the PTX compiler, and media-pp's
-      # CUDA elements only move `AVFrame`s around. Nothing here runs it —
-      # a hosted runner has no NVIDIA GPU — so this job proves the Linux
-      # build compiles and its tests pass, not that compositing works.
+      # No CUDA toolkit, and no CUDA at all: the CUDA backend opens the
+      # driver when it first calls it, and a hosted runner has no NVIDIA GPU
+      # to open. lavapipe — Mesa's Vulkan on the CPU — is what the tests
+      # composite on instead, through the Vulkan backend a machine without
+      # NVIDIA's driver gets. So this job proves the Linux build compiles
+      # and the Vulkan path works, not that CUDA compositing does.
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -140,10 +137,16 @@ jobs:
             libxcursor-dev \
             libxrandr-dev \
             libxi-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            mesa-vulkan-drivers \
+            libvulkan1
 
+      # `vulkan` on Linux alone, where the backend composites on it without
+      # an NVIDIA GPU — see the action.
       - name: Set up FFmpeg
         uses: ./.github/actions/setup-ffmpeg
+        with:
+          vcpkg-features: openh264,nvcodec,vulkan
 
       - name: Cache downloaded crates
         uses: actions/cache@v4
@@ -165,62 +168,11 @@ jobs:
           key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cef-${{ runner.os }}-
 
-      # Before anything is compiled, because `RUSTFLAGS` above points at it and
-      # a missing `-L` directory is not an error — the failure would come much
-      # later, as the `-lcuda` this exists to satisfy.
-      # Two names for one file, because the linker and the loader ask for
-      # different ones. `-lcuda` wants `libcuda.so`; the binary it produces
-      # records the SONAME, `libcuda.so.1`, and that is what the loader looks
-      # for when the test binary starts. Building only the first got a binary
-      # that linked and then died with "libcuda.so.1: cannot open shared
-      # object file".
-      - name: Build a libcuda to link and to load
-        run: |
-          set -euo pipefail
-          mkdir -p target/cuda-stub
-          cc -shared -fPIC -Wl,-soname,libcuda.so.1 \
-            -o target/cuda-stub/libcuda.so.1 .github/cuda/libcuda-stub.c
-          ln -sf libcuda.so.1 target/cuda-stub/libcuda.so
-          # Appended rather than assigned: `setup-ffmpeg` put FFmpeg's own
-          # directory here in an earlier step, and dropping that would trade
-          # this failure for the same one about libavcodec.
-          echo "LD_LIBRARY_PATH=$PWD/target/cuda-stub:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-
-      # The stub is a list kept by hand, and what it has to cover moves: a
-      # CUDA call added to `media-pp` reaches this repository as a link
-      # failure in the `Test` step below, ten minutes in and naming one
-      # symbol at a time. This asks the same question in seconds, and names
-      # every missing one at once.
-      #
-      # The two trees are the ones the stub's own comment names: `media-pp`,
-      # wherever Cargo put the revision `Cargo.lock` pins, and the Preview's
-      # extern block for the external-memory calls.
-      - name: Check the libcuda stub declares every CUDA call
-        run: |
-          set -euo pipefail
-          media_pp=$(cargo metadata --format-version 1 |
-            jq -r '.packages[] | select(.name == "media-pp") | .manifest_path')
-          missing=$(
-            grep -rhoE '\bfn (cu[A-Z][A-Za-z0-9_]*)' \
-              "$(dirname "$media_pp")/src" src/engine/preview/linux.rs |
-              sed 's/fn //' | sort -u |
-              while read -r symbol; do
-                grep -q "STUB($symbol)" .github/cuda/libcuda-stub.c || echo "$symbol"
-              done
-          )
-          if [ -n "$missing" ]; then
-            echo "::error::.github/cuda/libcuda-stub.c declares no stub for:"
-            echo "$missing" | sed 's/^/  /'
-            exit 1
-          fi
-
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
-      # The first step that links anything. `clippy` above type-checks and
-      # never links, which is why it passed on a tree that could not build.
       - name: Test
         run: cargo test

@@ -275,9 +275,9 @@ does have to be there:
 
 **Linux**
 
-- **An NVIDIA driver.** Not for speed — for anything: see the note under
-  *Building*. `libcuda.so.1` comes from the driver and is deliberately not in
-  the archive.
+- **A GPU with a Vulkan driver** — Mesa's, for AMD and Intel — **or
+  NVIDIA's driver.** See the note under *Building*. Neither is in the
+  archive: both belong to the system.
 - **PipeWire.** `libpipewire-0.3.so.0` is a client for a system service, so a
   bundled copy would only be a version to disagree with the one running.
   Every current desktop distribution has it.
@@ -302,7 +302,10 @@ cargo run --release
 ```
 
 Beyond the Rust toolchain you need FFmpeg 8.0 or newer development headers.
-On Linux, desktop capture also needs PipeWire development files.
+On Linux, desktop capture also needs PipeWire development files, FFmpeg has
+to be built with Vulkan, and the Vulkan headers have to be installed
+(`libvulkan-dev`); the bindings to FFmpeg's Vulkan context are generated
+from them with libclang.
 
 On Windows the default build also fetches the browser engine a Browser
 Source draws with — Chromium, through CEF — which is a few hundred megabytes
@@ -328,11 +331,14 @@ there. To skip all of it, on either platform, while working on something else:
 cargo run --release --no-default-features
 ```
 
-**Linux needs an NVIDIA GPU.** Not for a faster path — for the only one. The
-Linux backend composites on CUDA and there is no fallback, so obs-rs will not
-start on an AMD or Intel machine. The driver alone is enough; no CUDA toolkit,
-since it ships both the library and the PTX compiler. Windows uses D3D11 and
-has no such requirement.
+**Linux composites on the GPU, CUDA or Vulkan.** CUDA where NVIDIA's driver
+is there — it ships both the library and the PTX compiler, so no CUDA
+toolkit — and Vulkan on any other GPU, AMD's or Intel's through Mesa. The
+choice is made at startup; `OBSRS_GPU=vulkan` (or `cuda`) insists on one,
+which is how the Vulkan path is tried on an NVIDIA machine. What Vulkan does
+differently: a screen capture comes through system memory, the Preview is a
+readback, and a recording smaller than the Canvas is scaled on the CPU.
+Windows uses D3D11 and has neither.
 
 ## Where it is up to
 

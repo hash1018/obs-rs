@@ -1,5 +1,8 @@
-//! The CUDA backend: PipeWire capture straight into CUDA surfaces, an NV12
-//! compositor, and memory both CUDA and Vulkan hold to reach wgpu.
+//! The Linux backend: an NV12 compositor on CUDA or on Vulkan — see `gpu` for
+//! which, and for everything that differs between the two — and the frame it
+//! hands wgpu.
+
+mod gpu;
 
 use crate::engine::TARGET_FPS;
 use std::collections::HashMap;
@@ -11,11 +14,8 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
-    elements::{
-        AppSink, ChangeGate, CudaDevice, CudaRenderer, CudaVideoCompositor,
-        CudaVideoCompositorHandle, CudaVideoLayerHandle, TeeHandle, VideoCompositorOptions,
-        VideoLayer,
-    },
+    element::Sink,
+    elements::{AppSink, ChangeGate, CudaRenderer, TeeHandle, VideoCompositorOptions, VideoLayer},
     ffmpeg,
     pipeline::Pipeline,
     queue::OverflowPolicy,
@@ -24,6 +24,7 @@ use media_pp::{
 
 use crate::domain::SourceKind;
 use crate::engine::audio::MeterWake;
+use crate::engine::source::filters::ChainFormat;
 use crate::settings::RecordingEncoder;
 use crate::snapshots::SceneItemSnapshot;
 
@@ -32,28 +33,21 @@ use crate::engine::source::{self, OpenOutcome};
 
 use super::{BACKGROUND, BackendError, Target};
 
-/// The running recording: which branch it is, and the control that stops it
-/// taking frames without stopping anything else.
-use crate::engine::preview::{Nv12Target, PreviewRenderer, PreviewSurface, SharedNv12};
+use crate::engine::preview::{Nv12Target, PreviewRenderer, PreviewSurface, SharedNv12, Staging};
 
-/// The compositor's layer control already offers exactly what a backend must.
-pub(in crate::engine) type Layer = CudaVideoLayerHandle;
+pub(in crate::engine) use gpu::{Compositor, Gpu, Layer};
 
 pub(in crate::engine) struct Backend {
-    /// The one CUDA device this process opens, in an `Arc` so a Source can
-    /// keep it.
+    /// The one device this process composites on, which every Source's
+    /// elements are built from — see [`Gpu`].
     ///
-    /// media-pp hands this out by reference and says it need only outlive
-    /// the constructor calls, because every element takes its own FFmpeg
-    /// reference. A filter rack breaks that: it builds elements long after
-    /// the Source was opened, whenever the filter list changes. The `Arc` is
-    /// what lets it hold the same device rather than opening a second one —
-    /// which is the one thing this type's own docs forbid, since creating or
-    /// dropping a primary context while another thread encodes can fault
-    /// inside the driver.
-    pub(in crate::engine) device: Arc<CudaDevice>,
+    /// Kept rather than lent to each Source: a filter rack builds elements
+    /// long after the Source was opened, whenever the filter list changes,
+    /// and has to build them on this same device rather than open a second
+    /// — which the device's own docs forbid.
+    pub(in crate::engine) gpu: Gpu,
     pub(in crate::engine) size: [u32; 2],
-    pub(in crate::engine) compositor: CudaVideoCompositorHandle,
+    pub(in crate::engine) compositor: Compositor,
     /// Every open capture's rate control, keyed by the name it was
     /// registered with. Held here rather than beside the `OpenSource` the
     /// engine keeps, so that [`Backend::set_frame_rate`] is the one place a
@@ -91,9 +85,9 @@ impl Backend {
     ) -> Result<Self, BackendError> {
         let [width, height] = size;
 
-        // One per process, not one per pipeline: creating or dropping a device
-        // while another thread is encoding can fault inside the NVIDIA driver.
-        let device = CudaDevice::new()?;
+        // One per process, not one per pipeline — see `Gpu`.
+        let gpu = Gpu::open()?;
+        tracing::info!("compositing with {}", gpu.describe());
 
         let target = Nv12Target::new(&render_state.device, width, height);
         let texture_id = render_state.renderer.write().register_native_texture(
@@ -102,9 +96,8 @@ impl Backend {
             wgpu::FilterMode::Linear,
         );
 
-        let (compositor, handle) = CudaVideoCompositor::new(
-            "preview-compositor",
-            &device,
+        let (compositor, handle) = gpu.compositor(
+            "preview-compositor".to_owned(),
             VideoCompositorOptions {
                 mode: media_pp::elements::RenderMode::Live,
                 width,
@@ -113,13 +106,18 @@ impl Backend {
                 background: BACKGROUND,
                 background_alpha: 255,
             },
+            ChainFormat::Nv12,
         )?;
 
-        // The composited frame reaches wgpu through memory both APIs hold
-        // rather than a readback: see `shared`. What it replaces —
+        // On CUDA the composited frame reaches wgpu through memory both APIs
+        // hold rather than a readback: see `preview`. What it replaces —
         // `CudaDownload` plus `write_texture` — carried every Preview frame
-        // across PCIe twice for pixels that never left the GPU.
-        let shared = SharedNv12::new(&render_state.device, width, height)?;
+        // across PCIe twice for pixels that never left the GPU. Vulkan has
+        // no such memory to share with wgpu here, and takes that readback.
+        let staging = match &gpu {
+            Gpu::Cuda(_) => Staging::Shared(SharedNv12::new(&render_state.device, width, height)?),
+            Gpu::Vulkan(_) => Staging::Host(Mutex::new(())),
+        };
 
         // `on_frame` is not called from the drawing branch: that branch sits
         // behind a dropping queue and refreshes only at the Preview's rate,
@@ -149,20 +147,39 @@ impl Backend {
             render_state.device.clone(),
             render_state.queue.clone(),
             target,
-            shared,
+            staging,
             drawn_flag,
         );
-        let renderer = CudaRenderer::new(
-            "preview-out",
-            &device,
-            Box::new(PreviewRenderer::new(Arc::clone(&surface))),
-        );
+        // What the drawing branch ends in: on CUDA a renderer handed the
+        // frame's own planes, on Vulkan the frame read back and written.
+        let (download, renderer): (_, Box<dyn Sink>) = match &gpu {
+            Gpu::Cuda(device) => (
+                None,
+                Box::new(CudaRenderer::new(
+                    "preview-out",
+                    device,
+                    Box::new(PreviewRenderer::new(Arc::clone(&surface))),
+                )),
+            ),
+            Gpu::Vulkan(_) => {
+                let surface = Arc::clone(&surface);
+                (
+                    Some(gpu.download("preview-download".to_owned(), ChainFormat::Nv12)),
+                    Box::new(AppSink::new("preview-out", move |buffer| match &buffer {
+                        MediaBuffer::Video(frame) if !surface.submit_host(frame) => {
+                            Err(media_pp::error::Error::Other(
+                                "the Preview was handed a frame that is not the Canvas".to_owned(),
+                            ))
+                        }
+                        _ => Ok(()),
+                    })),
+                )
+            }
+        };
 
-        // Taken back out of the builder below: `Pipeline::new` runs it once,
-        // before returning, and the `Tee` it builds is the only way to attach
-        // a recording later.
-        let mut tee = None;
-        let (preview, ()) = Pipeline::new("preview", compositor, |source, context| {
+        // `Pipeline::new` runs the builder once, before returning, and the
+        // `Tee` it builds is the only way to attach a recording later.
+        let (preview, tee) = compositor.pipeline("preview".to_owned(), |context| {
             // The counting branch is synchronous — it is how the calls stay at
             // the compositor's own rate — so its sink must stay trivial.
             let count_branch = context.branch().to(count)?;
@@ -174,32 +191,32 @@ impl Backend {
             // What reaches the renderer past the gate is the newest picture,
             // no more often than the Preview's rate, and never one it has
             // already drawn — so a Scene that is not changing costs nothing
-            // at all: no copy, no resolve pass, and no egui repaint.
-            let draw_branch = context
+            // at all: no copy, no readback, no resolve pass, and no egui
+            // repaint.
+            let mut draw = context
                 .branch()
                 .queue_with_policy("preview-queue", 1, OverflowPolicy::DropNewest)
                 .pipe(ChangeGate::new(
                     "preview-changes",
                     Duration::from_secs_f32(1.0 / preview_fps as f32),
-                ))
-                .to(renderer)?;
+                ));
+            if let Some(download) = download {
+                draw = draw.pipe(download);
+            }
+            let draw_branch = draw.to(renderer)?;
             // `build_dynamic` rather than `build`: the recording branch is
             // attached and detached while this is already running, and the
             // handle is the only way back to this `Tee` afterwards.
-            let (tee_branch, tee_handle) = context
+            context
                 .tee("output-tee")
                 .branch(count_branch)
                 .branch(draw_branch)
-                .build_dynamic()?;
-            context.attach(source, 0, tee_branch)?;
-            tee = Some(tee_handle);
-            Ok(())
+                .build_dynamic()
         })?;
         preview.run()?;
-        let tee = tee.expect("Pipeline::new runs the builder before returning");
 
         Ok(Self {
-            device: Arc::new(device),
+            gpu,
             size,
             capture_rates: Mutex::new(HashMap::new()),
             cameras: Arc::new(source::video_capture::CameraRegistry::default()),
@@ -326,12 +343,12 @@ impl Backend {
         layer: VideoLayer,
         fps: u32,
         mixer: Option<&media_pp::elements::MixerHandle>,
-        compositor: &CudaVideoCompositorHandle,
+        compositor: &Compositor,
     ) -> Result<OpenOutcome, BackendError> {
         match item.kind {
             SourceKind::DisplayCapture => {
                 let (source, frame_rate) =
-                    source::display_capture::open(&self.device, compositor, item, layer, fps)?;
+                    source::display_capture::open(&self.gpu, compositor, item, layer, fps)?;
                 // Filed under the compositor registration this capture feeds,
                 // which is the same key `remove_source` clears it by.
                 self.capture_rates
@@ -342,7 +359,7 @@ impl Backend {
             }
             SourceKind::WindowCapture => {
                 let (source, frame_rate) =
-                    source::window_capture::open(&self.device, compositor, item, layer, fps)?;
+                    source::window_capture::open(&self.gpu, compositor, item, layer, fps)?;
                 self.capture_rates
                     .lock()
                     .expect("capture rates poisoned")
@@ -350,36 +367,31 @@ impl Backend {
                 Ok(OpenOutcome::Open(source))
             }
             SourceKind::MediaFile => source::media_file::open(
-                &self.device,
+                &self.gpu,
                 compositor,
                 mixer,
                 &self.meter_wake,
                 item,
                 layer,
             ),
-            SourceKind::Rtsp => source::rtsp::open(
-                &self.device,
-                compositor,
-                mixer,
-                &self.meter_wake,
-                item,
-                layer,
-            ),
-            SourceKind::VideoCapture => {
-                source::video_capture::open(&self.device, compositor, &self.cameras, item, layer)
+            SourceKind::Rtsp => {
+                source::rtsp::open(&self.gpu, compositor, mixer, &self.meter_wake, item, layer)
             }
-            SourceKind::Image => source::image::open(&self.device, compositor, item, layer),
+            SourceKind::VideoCapture => {
+                source::video_capture::open(&self.gpu, compositor, &self.cameras, item, layer)
+            }
+            SourceKind::Image => source::image::open(&self.gpu, compositor, item, layer),
             SourceKind::Color => {
-                source::color::open(&self.device, compositor, item, layer).map(OpenOutcome::Open)
+                source::color::open(&self.gpu, compositor, item, layer).map(OpenOutcome::Open)
             }
             SourceKind::Drawing => {
-                source::drawing::open(&self.device, compositor, item, layer).map(OpenOutcome::Open)
+                source::drawing::open(&self.gpu, compositor, item, layer).map(OpenOutcome::Open)
             }
             SourceKind::Text => {
-                source::text::open(&self.device, compositor, item, layer).map(OpenOutcome::Open)
+                source::text::open(&self.gpu, compositor, item, layer).map(OpenOutcome::Open)
             }
             SourceKind::Scene => source::scene::open(
-                &self.device,
+                &self.gpu,
                 compositor,
                 &self.scenes,
                 item,
@@ -387,14 +399,9 @@ impl Backend {
                 fps,
                 self.size,
             ),
-            SourceKind::Browser => source::browser::open(
-                &self.device,
-                compositor,
-                mixer,
-                &self.meter_wake,
-                item,
-                layer,
-            ),
+            SourceKind::Browser => {
+                source::browser::open(&self.gpu, compositor, mixer, &self.meter_wake, item, layer)
+            }
         }
     }
 }

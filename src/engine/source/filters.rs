@@ -49,13 +49,16 @@
 //! Windows, anything this application draws itself — says so, and gets no
 //! bridge at all.
 //!
-//! On Linux a capture is converted to NV12 before the compositor, and its
+//! On CUDA a capture is converted to NV12 before the compositor, and its
 //! rack goes *after* that conversion, as a camera's does after its upload:
 //! bridged back to BGRA when it has filters, and an unfiltered capture costs
 //! exactly what it did. Before the conversion would be cheaper for a filtered
 //! one, but a key's alpha cannot survive NV12, so the conversion would have
 //! to come out of the branch — and what that does to an unfiltered capture's
 //! share of the compositor has not been measured.
+//!
+//! On Vulkan a capture is uploaded as the BGRA it arrives in, like a
+//! Windows one, and gets no bridge either.
 
 use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
 use media_pp::element::Filter as PpFilter;
@@ -77,7 +80,7 @@ pub(in crate::engine) enum ChainFormat {
     /// Nothing after the rack may convert to NV12. NV12 has no alpha, so
     /// converting a keyed frame throws away exactly what the key just wrote.
     Bgra,
-    /// A camera, anything decoded, and a capture on Linux. Bridged to BGRA
+    /// A camera, anything decoded, and a capture on CUDA. Bridged to BGRA
     /// when the rack has filters to run, and left alone when it does not.
     Nv12,
 }
@@ -354,38 +357,30 @@ mod windows {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::sync::Arc;
-
-    use media_pp::contract::MemoryDomain;
     use media_pp::element::Filter as PpFilter;
-    use media_pp::elements::{
-        CudaChromaKey, CudaConverter, CudaDevice, CudaFrameFormat, CudaVideoEffect, Rack,
-    };
+    use media_pp::elements::Rack;
 
-    use super::{
-        BackendError, ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter,
-    };
+    use super::{ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter};
+    use crate::engine::backend::Gpu;
 
     /// What a refill needs and the rack cannot hold for it — see the Windows
-    /// twin, whose device is a refcounted interface and needs no wrapper.
-    /// A `CudaDevice` is not `Clone` — media-pp hands it out by reference and
-    /// documents that it need only outlive the constructor calls — so the
-    /// backend keeps the one it opened in an `Arc` and this shares it.
+    /// twin. A `Gpu` is a cheap clone of the one device the backend opened,
+    /// CUDA or Vulkan, so every element this builds is on that device.
     pub(super) struct Backend {
         name: String,
-        device: Arc<CudaDevice>,
+        gpu: Gpu,
         incoming: ChainFormat,
     }
 
     pub(in crate::engine) fn rack(
         name: &str,
-        device: &Arc<CudaDevice>,
+        gpu: &Gpu,
         incoming: ChainFormat,
     ) -> (Rack, FilterRack) {
-        let (rack, handle) = super::new_rack(name, MemoryDomain::Cuda);
+        let (rack, handle) = super::new_rack(name, gpu.memory_domain());
         let backend = Backend {
             name: name.to_owned(),
-            device: device.clone(),
+            gpu: gpu.clone(),
             incoming,
         };
         (
@@ -404,41 +399,33 @@ mod linux {
         }
         let Backend {
             name,
-            device,
+            gpu,
             incoming,
         } = backend;
 
         let mut elements: Vec<Box<dyn PpFilter>> = Vec::with_capacity(filters.len() + 1);
-        // `CudaScaler` cannot do this — it refuses a YUV/RGB pair either way
-        // — which is why `CudaConverter` grew the direction.
         if *incoming == ChainFormat::Nv12 {
-            elements.push(Box::new(
-                CudaConverter::new(format!("{name}-to-bgra"), device, CudaFrameFormat::Bgra)
-                    .map_err(|error| BackendError::from(error.to_string()))?,
-            ));
+            elements.push(gpu.to_bgra(format!("{name}-to-bgra"))?);
         }
 
         let mut open = Vec::with_capacity(filters.len());
         for filter in filters {
             if let FilterSettings::ChromaKey(settings) = &filter.settings {
-                let (element, handle) = CudaChromaKey::new(
+                let (element, handle) = gpu.chroma_key(
                     format!("{name}-key-{}", filter.id.0),
-                    device,
                     super::chroma_key_options(settings),
-                )
-                .map_err(|error| BackendError::from(error.to_string()))?;
+                )?;
                 handle.set_enabled(filter.enabled);
-                elements.push(Box::new(element));
+                elements.push(element);
                 open.push(OpenFilter {
                     id: filter.id,
                     handle: FilterHandle::ChromaKey(handle),
                 });
             } else if let Some(effect) = super::video_effect(&filter.settings) {
                 let (element, handle) =
-                    CudaVideoEffect::new(format!("{name}-effect-{}", filter.id.0), device, effect)
-                        .map_err(|error| BackendError::from(error.to_string()))?;
+                    gpu.video_effect(format!("{name}-effect-{}", filter.id.0), effect)?;
                 handle.set_enabled(filter.enabled);
-                elements.push(Box::new(element));
+                elements.push(element);
                 open.push(OpenFilter {
                     id: filter.id,
                     handle: FilterHandle::VideoEffect(filter.settings.kind(), handle),

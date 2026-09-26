@@ -2,23 +2,20 @@
 //!
 //! The Windows half's own docs say what this is for and why it is one
 //! picture rather than a bundle of layers; what differs here is the
-//! compositor. `CudaVideoCompositor` composes a Canvas in NV12, which has no
-//! alpha at all, so a composition meant to be laid over another asks for a
-//! BGRA canvas instead — see `CudaVideoCompositor::with_format`. That is
-//! what lets an overlay Scene leave the Scene under it showing.
+//! compositor. The Canvas is composed in NV12, which has no alpha at all,
+//! so a composition meant to be laid over another asks for a BGRA canvas
+//! instead — which both of this platform's compositors, CUDA and Vulkan,
+//! can make. That is what lets an overlay Scene leave the Scene under it
+//! showing.
 
 use std::sync::Arc;
 
 use media_pp::color::Color;
-use media_pp::elements::{
-    CudaDevice, CudaFrameFormat, CudaVideoCompositor, CudaVideoCompositorHandle,
-    CudaVideoCompositorInput, VideoCompositorOptions, VideoLayer,
-};
+use media_pp::elements::{CompositorInput, VideoCompositorOptions, VideoLayer};
 use media_pp::ffmpeg;
-use media_pp::pipeline::Pipeline;
 
 use crate::domain::{SceneId, SourceSettings};
-use crate::engine::backend::{BackendError, RunningSource};
+use crate::engine::backend::{BackendError, Compositor, Gpu, RunningSource};
 use crate::engine::source::shared::{Registry, Share, Shared, SharedCapture};
 use crate::engine::source::{
     FilledRack, OpenOutcome, OpenSource, filled_rack, filters, input_name,
@@ -29,7 +26,7 @@ use crate::snapshots::SceneItemSnapshot;
 /// draws.
 #[derive(Default)]
 pub(in crate::engine) struct SceneRegistry {
-    pub(in crate::engine) open: Registry<CudaVideoCompositorHandle>,
+    pub(in crate::engine) open: Registry<Compositor>,
 }
 
 impl SharedCapture for SceneRegistry {
@@ -59,8 +56,8 @@ pub(in crate::engine) fn key(scene: SceneId) -> String {
 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::engine) fn open(
-    device: &Arc<CudaDevice>,
-    handle: &CudaVideoCompositorHandle,
+    gpu: &Gpu,
+    handle: &Compositor,
     scenes: &Arc<SceneRegistry>,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
@@ -72,18 +69,18 @@ pub(in crate::engine) fn open(
     };
 
     let name = input_name(item);
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
 
     let key = key(settings.scene_id);
     let mut kept = None;
     let (share, _) = scenes.open.attach(
         &key,
-        || compose(&settings.scene_name, device, fps, canvas),
+        || compose(&settings.scene_name, gpu, fps, canvas),
         |builder, _size| {
             // No converter in front of it, as a Text Source has none: what
             // arrives is BGRA and the alpha is the point.
             let FilledRack { rack, filters } =
-                filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
+                filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
             kept = Some(filters);
             Ok(builder.pipe(rack).to(sink)?)
         },
@@ -114,14 +111,13 @@ pub(in crate::engine) fn open(
 /// Starts compositing one Scene into a `Tee` nothing is attached to yet.
 fn compose(
     scene_name: &str,
-    device: &Arc<CudaDevice>,
+    gpu: &Gpu,
     fps: u32,
     canvas: [u32; 2],
-) -> Result<Shared<CudaVideoCompositorHandle>, BackendError> {
+) -> Result<Shared<Compositor>, BackendError> {
     let name = format!("scene-{scene_name}");
-    let (compositor, handle) = CudaVideoCompositor::with_format(
+    let (compositor, handle) = gpu.compositor(
         name.clone(),
-        device,
         VideoCompositorOptions {
             mode: media_pp::elements::RenderMode::Live,
             width: canvas[0],
@@ -133,17 +129,12 @@ fn compose(
             background: Color::BLACK,
             background_alpha: 0,
         },
-        CudaFrameFormat::Bgra,
+        filters::ChainFormat::Bgra,
     )?;
 
-    let mut tee = None;
-    let (pipeline, ()) = Pipeline::new(name.clone(), compositor, |source, context| {
-        let (branch, tee_handle) = context.tee(format!("{name}-tee")).build_dynamic()?;
-        context.attach(source, 0, branch)?;
-        tee = Some(tee_handle);
-        Ok(())
-    })?;
-    let tee = tee.expect("the wire closure always produces the TeeHandle");
+    let tee_name = format!("{name}-tee");
+    let (pipeline, tee) =
+        compositor.pipeline(name, |context| context.tee(tee_name).build_dynamic())?;
     pipeline.run()?;
 
     Ok(Shared::new(pipeline, tee, canvas, handle))

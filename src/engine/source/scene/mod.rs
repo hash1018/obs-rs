@@ -4,7 +4,7 @@
 //! half for what that buys and what it costs.
 
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
-#[cfg_attr(target_os = "linux", path = "cuda.rs")]
+#[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(
     not(any(target_os = "windows", target_os = "linux")),
     path = "absent.rs"

@@ -5,9 +5,6 @@
 //! beneath it through — which is also why the two backends differ only in
 //! which element uploads it: neither converts.
 
-#[cfg(target_os = "linux")]
-use std::sync::Arc;
-
 use media_pp::{buffer::MediaBuffer, ffmpeg};
 
 use crate::domain::{SourceSettings, Stroke};
@@ -196,14 +193,14 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     let (size, strokes) = surface(item)?;
     let name = input_name(item);
-    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    let wired = pushed::wire(&name, gpu, handle, item, layer)?;
     pushed::opened(name, wired, picture(size, strokes))
 }
 #[cfg(test)]

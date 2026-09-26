@@ -284,6 +284,9 @@ impl Backend {
                 };
                 Ok(RecordEncoder::Hardware { encoder, input })
             }
+            // Vulkan Video takes Vulkan frames, and this compositor's are
+            // Direct3D's: Linux's alone.
+            RecordingEncoder::Vulkan => Err("Vulkan Video records only on Linux".into()),
             other => Ok(RecordEncoder::Software(SwEncoder::with_color(
                 format!("{}-encode", kind.prefix()),
                 SwEncoderOptions {

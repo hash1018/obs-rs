@@ -7,14 +7,16 @@
 //! texture the Preview already knows how to draw. The UI side does not change.
 //!
 //! The planes are separate textures rather than one, because that is what the
-//! shape of NV12 makes them: different resolutions, different formats. What
-//! fills them is one buffer CUDA wrote the whole frame into — see [`super::platform`] —
-//! so the upload is two `copy_buffer_to_texture` calls in the same submission
-//! as the pass, and nothing here crosses the bus.
+//! shape of NV12 makes them: different resolutions, different formats. On
+//! CUDA what fills them is one buffer CUDA wrote the whole frame into — see
+//! [`super::platform`] — so the upload is two `copy_buffer_to_texture` calls
+//! in the same submission as the pass, and nothing here crosses the bus. On
+//! Vulkan the frame has come back to system memory and is written into them
+//! as it is: [`Nv12Target::write`], then [`Nv12Target::resolve`].
 
 use super::platform::SharedNv12;
 
-/// `CudaConverter` documents its output as BT.709 limited-range Y'CbCr from
+/// Both compositors document their NV12 as BT.709 limited-range Y'CbCr from
 /// full-range RGB, so this is that conversion run backwards. Guessing the
 /// matrix produces a picture that looks almost right, which is worse than one
 /// that looks wrong.
@@ -218,6 +220,66 @@ impl Nv12Target {
             layout.pitch,
             &self.chroma,
         );
+        self.pass(&mut encoder);
+        queue.submit([encoder.finish()]);
+        true
+    }
+
+    /// Writes a frame in system memory into the two planes, to be drawn by
+    /// the next [`Self::resolve`]: `luma` and `chroma` are its two planes,
+    /// each `stride` bytes a row as FFmpeg lays them out.
+    ///
+    /// Returns `false` for a frame of another size, or planes too short for
+    /// it, which would otherwise paint a torn picture rather than fail.
+    pub(in crate::engine) fn write(
+        &self,
+        queue: &wgpu::Queue,
+        [width, height]: [u32; 2],
+        (luma, luma_stride): (&[u8], usize),
+        (chroma, chroma_stride): (&[u8], usize),
+    ) -> bool {
+        let [expected_width, expected_height] = self.size;
+        let fits = |plane: &[u8], stride: usize, rows: u32| {
+            stride >= width as usize && plane.len() >= stride * rows as usize
+        };
+        if [width, height] != [expected_width, expected_height]
+            || !fits(luma, luma_stride, height)
+            || !fits(chroma, chroma_stride, height.div_ceil(2))
+        {
+            return false;
+        }
+        for (texture, data, stride) in [
+            (&self.luma, luma, luma_stride),
+            (&self.chroma, chroma, chroma_stride),
+        ] {
+            let size = texture.size();
+            queue.write_texture(
+                texture.as_image_copy(),
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride as u32),
+                    rows_per_image: Some(size.height),
+                },
+                size,
+            );
+        }
+        true
+    }
+
+    /// Resolves whatever the planes hold into the output texture. The
+    /// writes of a [`Self::write`] before it land first: wgpu applies a
+    /// queue's writes ahead of the next submission on it.
+    pub(in crate::engine) fn resolve(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("nv12-to-rgba"),
+        });
+        self.pass(&mut encoder);
+        queue.submit([encoder.finish()]);
+    }
+
+    /// The pass that resolves the planes into the output texture.
+    fn pass(&self, encoder: &mut wgpu::CommandEncoder) {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("nv12-to-rgba"),
@@ -240,8 +302,6 @@ impl Nv12Target {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        queue.submit([encoder.finish()]);
-        true
     }
 }
 

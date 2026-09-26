@@ -1,6 +1,5 @@
-//! What a platform without a Scene-in-a-Scene answers, which is every one
-//! but Windows so far — the CUDA backend composites a Canvas and has no
-//! second compositor to give a Scene of its own yet.
+//! What a platform without a Scene-in-a-Scene answers: every one but
+//! Windows and Linux, which is every one with no backend here at all.
 
 use crate::engine::source::OpenOutcome;
 

@@ -6,9 +6,14 @@
 //! the frame reaches wgpu:
 //!
 //! ```text
-//! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor  → shared buffer → NV12 resolve
-//! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor → shared texture
+//! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor   → shared buffer → NV12 resolve
+//! Vulkan  PipeWire open (CPU) → VulkanUpload  → VulkanVideoCompositor → readback      → NV12 resolve
+//! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor  → shared texture
 //! ```
+//!
+//! Linux has two of these and picks one as it starts — CUDA on an NVIDIA
+//! GPU, Vulkan on any other — which is why its Sources build their elements
+//! from a `Gpu` rather than from a device of either kind.
 //!
 //! Wiring a D3D11 capture into a CUDA compositor is not merely slow, it is
 //! rejected: `media-pp` compares memory domains when a branch is built, and no
@@ -56,7 +61,7 @@ use std::error::Error;
 use media_pp::color::Color;
 use media_pp::elements::VideoCodec;
 
-#[cfg_attr(target_os = "linux", path = "cuda/mod.rs")]
+#[cfg_attr(target_os = "linux", path = "linux/mod.rs")]
 #[cfg_attr(target_os = "windows", path = "d3d11/mod.rs")]
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "windows")),
@@ -65,6 +70,10 @@ use media_pp::elements::VideoCodec;
 mod platform;
 
 pub(in crate::engine) use platform::{Backend, Layer, RunningSource};
+/// Linux composites on CUDA or on Vulkan, chosen as it starts, so what a
+/// Source builds its elements from is one of the two — see `linux::gpu`.
+#[cfg(target_os = "linux")]
+pub(in crate::engine) use platform::{Compositor, Gpu};
 
 /// The device the D3D11 backend composites on, for the one test outside this
 /// module that has to compose something — see `source::text`.
@@ -112,8 +121,8 @@ pub(super) const BACKGROUND: Color = Color::BLACK;
 
 /// Which of `VideoCodec`'s H.264 entries a software choice maps to.
 ///
-/// The hardware entries never reach here — neither is a software encoder and
-/// neither has a `VideoCodec` at all — so they are folded into the one this
+/// The hardware entries never reach here — none is a software encoder and
+/// none has a `VideoCodec` at all — so they are folded into the one this
 /// crate would rather have if they somehow did.
 pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> VideoCodec {
     use crate::settings::RecordingEncoder;
@@ -122,7 +131,8 @@ pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> Vide
         RecordingEncoder::X264 => VideoCodec::H264,
         RecordingEncoder::OpenH264
         | RecordingEncoder::Nvenc
-        | RecordingEncoder::MediaFoundation => VideoCodec::OpenH264,
+        | RecordingEncoder::MediaFoundation
+        | RecordingEncoder::Vulkan => VideoCodec::OpenH264,
     }
 }
 

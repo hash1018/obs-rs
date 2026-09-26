@@ -5,20 +5,18 @@
 //! things. What is here is the part that is a *display*: which token reopens
 //! it, and what a target the portal cannot resolve means.
 
-use std::sync::Arc;
-
-use media_pp::elements::{CaptureSourceKind, CudaDevice, CudaVideoCompositorHandle, VideoLayer};
+use media_pp::elements::{CaptureSourceKind, VideoLayer};
 use media_pp::rate::FrameRateHandle;
 
 use crate::domain::{DisplayCaptureTarget, SourceSettings};
-use crate::engine::backend::BackendError;
+use crate::engine::backend::{BackendError, Compositor, Gpu};
 use crate::engine::source::{OpenSource, portal_capture};
 use crate::snapshots::SceneItemSnapshot;
 
 /// Opens the portal's screen cast and wires it into the compositor.
 pub(in crate::engine) fn open(
-    device: &Arc<CudaDevice>,
-    handle: &CudaVideoCompositorHandle,
+    gpu: &Gpu,
+    handle: &Compositor,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
@@ -37,7 +35,7 @@ pub(in crate::engine) fn open(
     portal_capture::open(
         CaptureSourceKind::Monitor,
         restore_token,
-        device,
+        gpu,
         handle,
         item,
         layer,

@@ -5,19 +5,17 @@
 //! names no window, so there is no "not found" state. This opens what the
 //! portal hands over, or fails.
 
-use std::sync::Arc;
-
-use media_pp::elements::{CaptureSourceKind, CudaDevice, CudaVideoCompositorHandle, VideoLayer};
+use media_pp::elements::{CaptureSourceKind, VideoLayer};
 use media_pp::rate::FrameRateHandle;
 
 use crate::domain::{SourceSettings, WindowCaptureTarget};
-use crate::engine::backend::BackendError;
+use crate::engine::backend::{BackendError, Compositor, Gpu};
 use crate::engine::source::{OpenSource, portal_capture};
 use crate::snapshots::SceneItemSnapshot;
 
 pub(in crate::engine) fn open(
-    device: &Arc<CudaDevice>,
-    handle: &CudaVideoCompositorHandle,
+    gpu: &Gpu,
+    handle: &Compositor,
     item: &SceneItemSnapshot,
     layer: VideoLayer,
     fps: u32,
@@ -32,7 +30,7 @@ pub(in crate::engine) fn open(
     portal_capture::open(
         CaptureSourceKind::Window,
         restore_token.clone(),
-        device,
+        gpu,
         handle,
         item,
         layer,

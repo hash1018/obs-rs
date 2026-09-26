@@ -10,9 +10,6 @@
 //! convert to NV12 on the way, which a key's alpha could not have survived,
 //! and which a flat colour pushed once never needed.
 
-#[cfg(target_os = "linux")]
-use std::sync::Arc;
-
 use media_pp::{buffer::MediaBuffer, ffmpeg};
 
 use crate::domain::SourceSettings;
@@ -87,13 +84,13 @@ pub(in crate::engine) fn open(
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     item: &SceneItemSnapshot,
     layer: media_pp::elements::VideoLayer,
 ) -> Result<OpenSource, BackendError> {
     let (size, rgba) = size(item)?;
     let name = input_name(item);
-    let wired = pushed::wire(&name, device, handle, item, layer)?;
+    let wired = pushed::wire(&name, gpu, handle, item, layer)?;
     pushed::opened(name, wired, picture(size, rgba))
 }

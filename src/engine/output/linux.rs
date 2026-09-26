@@ -10,16 +10,18 @@
 
 use media_pp::color::ColorDescription;
 use media_pp::elements::{
-    CudaCodec, CudaDownload, CudaEncoder, CudaEncoderOptions, CudaFrameFormat, CudaScaler,
-    CudaScalerInterp, PauseGate, SwEncoder, SwEncoderOptions, SwScaler, TimestampOrigin,
+    CudaCodec, CudaEncoder, CudaEncoderOptions, CudaFrameFormat, CudaScaler, CudaScalerInterp,
+    PauseGate, SwEncoder, SwEncoderOptions, SwScaler, TimestampOrigin, VulkanCodec, VulkanEncoder,
+    VulkanEncoderOptions,
 };
 use media_pp::ffmpeg;
 use media_pp::queue::OverflowPolicy;
 
 use crate::engine::backend::{
-    Backend, BackendError, OUTPUT_QUEUE_DEPTH, OUTPUT_SEND_TIMEOUT, PROBE_FPS, VideoTrack,
+    Backend, BackendError, Gpu, OUTPUT_QUEUE_DEPTH, OUTPUT_SEND_TIMEOUT, PROBE_FPS, VideoTrack,
     software_codec,
 };
+use crate::engine::source::filters::ChainFormat;
 use crate::settings::{RecordingEncoder, RecordingSettings};
 
 use super::{OutputEncoding, OutputKind};
@@ -44,7 +46,8 @@ impl PreparedOutput {
     /// What `Mp4Muxer::add_stream` needs to describe this track.
     pub(in crate::engine) fn parameters(&self) -> ffmpeg::codec::Parameters {
         match &self.encoder {
-            RecordEncoder::Hardware(encoder) => encoder.parameters(),
+            RecordEncoder::Cuda(encoder) => encoder.parameters(),
+            RecordEncoder::Vulkan(encoder) => encoder.parameters(),
             RecordEncoder::Software(encoder) => encoder.parameters(),
         }
     }
@@ -53,7 +56,8 @@ impl PreparedOutput {
     /// it converts each frame's timestamp into.
     pub(in crate::engine) fn time_base(&self) -> ffmpeg::Rational {
         match &self.encoder {
-            RecordEncoder::Hardware(encoder) => encoder.time_base(),
+            RecordEncoder::Cuda(encoder) => encoder.time_base(),
+            RecordEncoder::Vulkan(encoder) => encoder.time_base(),
             RecordEncoder::Software(encoder) => encoder.time_base(),
         }
     }
@@ -61,8 +65,10 @@ impl PreparedOutput {
 
 /// One opened encoder, and which kind of chain it needs in front of it.
 enum RecordEncoder {
-    /// Takes the compositor's frames as they are.
-    Hardware(CudaEncoder),
+    /// NVENC through CUDA, taking the compositor's frames as they are.
+    Cuda(CudaEncoder),
+    /// Vulkan Video, taking the compositor's frames as they are.
+    Vulkan(VulkanEncoder),
     /// Needs them copied back from the GPU and converted first.
     Software(SwEncoder),
 }
@@ -92,8 +98,8 @@ impl Backend {
     /// cannot exist until every track has been declared — see
     /// [`PreparedOutput`].
     ///
-    /// No colour conversion anywhere: the compositor draws NV12 and NVENC
-    /// takes NV12 as its own native input.
+    /// No colour conversion anywhere: the compositor draws NV12, and NVENC
+    /// and Vulkan Video both take NV12 as their own native input.
     ///
     /// # What the queue's policy has to be
     ///
@@ -104,7 +110,7 @@ impl Backend {
     /// blocks, but only for a bounded time, and a timeout arrives on the bus
     /// as an error naming this branch rather than as silence.
     ///
-    /// # Verified on this backend
+    /// # Verified on CUDA
     ///
     /// The commits that built this could only reason about the Linux half —
     /// the host they were written on cannot build the CUDA backend — so it is
@@ -142,10 +148,12 @@ impl Backend {
         let (gate, pause) = PauseGate::new(format!("{}-pause", kind.prefix()));
         branch = branch.pipe(gate);
         // Only when the file is smaller than the canvas.
-        if size != self.size {
+        let scaled = size != self.size;
+        // CUDA scales on the GPU, before anything else sees the frame.
+        if let (true, Gpu::Cuda(device)) = (scaled, &self.gpu) {
             branch = branch.pipe(CudaScaler::new(
                 format!("{}-scale", kind.prefix()),
-                &self.device,
+                device,
                 width,
                 height,
                 // Downscaling a screen recording is exactly the quality-sensitive
@@ -154,24 +162,54 @@ impl Backend {
                 CudaScalerInterp::Lanczos,
             ));
         }
+        // Where the CPU scales instead — Vulkan has no scaler here — it is
+        // the same Lanczos, for the same reason.
+        let cpu_scale = if scaled && matches!(self.gpu, Gpu::Vulkan(_)) {
+            ffmpeg::software::scaling::Flags::LANCZOS
+        } else {
+            ffmpeg::software::scaling::Flags::BILINEAR
+        };
         branch = match encoder {
-            RecordEncoder::Hardware(encoder) => branch.pipe(encoder),
+            RecordEncoder::Cuda(encoder) => branch.pipe(encoder),
+            RecordEncoder::Vulkan(encoder) => {
+                // A smaller file on Vulkan goes to the CPU to be scaled and
+                // comes back: the cost of recording below the Canvas's size
+                // there, which recording at it does not pay.
+                if scaled {
+                    branch = branch
+                        .pipe(
+                            self.gpu
+                                .download(format!("{}-download", kind.prefix()), ChainFormat::Nv12),
+                        )
+                        .pipe(SwScaler::new(
+                            format!("{}-scale", kind.prefix()),
+                            ffmpeg::format::Pixel::NV12,
+                            width,
+                            height,
+                            cpu_scale,
+                        ))
+                        .pipe(
+                            self.gpu
+                                .upload(format!("{}-upload", kind.prefix()), ChainFormat::Nv12),
+                        );
+                }
+                branch.pipe(encoder)
+            }
             // A software encoder is not on the GPU and does not take NV12, so
             // the frames have to come back across the bus and be converted
             // before it sees them. That is the cost the choice carries, and it
             // is why the hardware path is the default.
             RecordEncoder::Software(encoder) => branch
-                .pipe(CudaDownload::new(
-                    format!("{}-download", kind.prefix()),
-                    &self.device,
-                    CudaFrameFormat::Nv12,
-                ))
+                .pipe(
+                    self.gpu
+                        .download(format!("{}-download", kind.prefix()), ChainFormat::Nv12),
+                )
                 .pipe(SwScaler::new(
                     format!("{}-convert", kind.prefix()),
                     ffmpeg::format::Pixel::YUV420P,
                     width,
                     height,
-                    ffmpeg::software::scaling::Flags::BILINEAR,
+                    cpu_scale,
                 ))
                 .pipe(encoder),
         };
@@ -198,43 +236,80 @@ impl Backend {
         let frame_rate = ffmpeg::Rational::new(fps as i32, 1);
         let bit_rate = encoding.bit_rate_bits;
         let gop_size = fps * encoding.keyframe_seconds.max(1);
-        // What the Canvas is — the CUDA compositor converts everything into
+        // What the Canvas is — both compositors convert everything into
         // BT.709 limited range — told to the encoder so the file says it.
         // Untagged, a player guesses, and FFmpeg's guess is BT.601 at any
         // size: a recorded (230, 20, 20) came back as (211, 0, 22). The
         // software path gets its frames through a scaler that changes only
         // their layout, so the same is true of what it encodes.
         let color = ColorDescription::BT709_LIMITED;
-        match encoding.encoder {
-            RecordingEncoder::Nvenc => Ok(RecordEncoder::Hardware(CudaEncoder::with_color(
-                format!("{}-encode", kind.prefix()),
-                &self.device,
-                CudaEncoderOptions {
-                    codec: CudaCodec::H264,
-                    input_format: CudaFrameFormat::Nv12,
-                    width,
-                    height,
-                    frame_rate,
-                    bit_rate,
-                    gop_size,
-                    max_b_frames: None,
-                },
-                color,
-            )?)),
-            other => Ok(RecordEncoder::Software(SwEncoder::with_color(
-                format!("{}-encode", kind.prefix()),
-                SwEncoderOptions {
-                    codec: software_codec(other),
-                    width,
-                    height,
-                    pixel_format: ffmpeg::format::Pixel::YUV420P,
-                    frame_rate,
-                    bit_rate,
-                    gop_size,
-                    max_b_frames: None,
-                },
-                color,
-            )?)),
+        let name = format!("{}-encode", kind.prefix());
+        match (encoding.encoder, &self.gpu) {
+            (RecordingEncoder::Nvenc, Gpu::Cuda(device)) => {
+                Ok(RecordEncoder::Cuda(CudaEncoder::with_color(
+                    name,
+                    device,
+                    CudaEncoderOptions {
+                        codec: CudaCodec::H264,
+                        input_format: CudaFrameFormat::Nv12,
+                        width,
+                        height,
+                        frame_rate,
+                        bit_rate,
+                        gop_size,
+                        max_b_frames: None,
+                    },
+                    color,
+                )?))
+            }
+            (RecordingEncoder::Vulkan, Gpu::Vulkan(device)) => {
+                Ok(RecordEncoder::Vulkan(VulkanEncoder::with_color(
+                    name,
+                    device,
+                    VulkanEncoderOptions {
+                        codec: VulkanCodec::H264,
+                        width,
+                        height,
+                        frame_rate,
+                        bit_rate,
+                        gop_size,
+                        max_b_frames: None,
+                    },
+                    color,
+                )?))
+            }
+            // Each hardware encoder takes frames of its own API only, so the
+            // one that is not the compositor's cannot be fed: NVENC while
+            // compositing on Vulkan — an NVIDIA GPU told to, see `Gpu` — and
+            // Vulkan Video while compositing on CUDA. Media Foundation is
+            // Windows' own.
+            (
+                RecordingEncoder::Nvenc
+                | RecordingEncoder::Vulkan
+                | RecordingEncoder::MediaFoundation,
+                _,
+            ) => Err(format!(
+                "{} is not available while compositing with {}",
+                encoding.encoder.label(),
+                self.gpu.describe()
+            )
+            .into()),
+            (other @ (RecordingEncoder::OpenH264 | RecordingEncoder::X264), _) => {
+                Ok(RecordEncoder::Software(SwEncoder::with_color(
+                    name,
+                    SwEncoderOptions {
+                        codec: software_codec(other),
+                        width,
+                        height,
+                        pixel_format: ffmpeg::format::Pixel::YUV420P,
+                        frame_rate,
+                        bit_rate,
+                        gop_size,
+                        max_b_frames: None,
+                    },
+                    color,
+                )?))
+            }
         }
     }
 
@@ -302,11 +377,10 @@ impl Backend {
             .tee
             .branch()?
             .queue_with_policy("screenshot-queue", 1, OverflowPolicy::DropNewest)
-            .pipe(CudaDownload::new(
-                "screenshot-download",
-                &self.device,
-                CudaFrameFormat::Nv12,
-            ))
+            .pipe(
+                self.gpu
+                    .download("screenshot-download".to_owned(), ChainFormat::Nv12),
+            )
             .pipe(SwScaler::to_format(
                 "screenshot-convert",
                 ffmpeg::format::Pixel::RGB24,
@@ -322,16 +396,14 @@ impl Backend {
     pub(in crate::engine) fn screenshot_picture(
         &self,
         frame: std::sync::Arc<media_pp::pool::UnboundObjectPoolRef<ffmpeg::frame::Video>>,
-        format: crate::engine::source::filters::ChainFormat,
+        format: ChainFormat,
         sink: Box<dyn media_pp::element::Sink>,
     ) -> Result<std::sync::Arc<media_pp::pipeline::Pipeline>, BackendError> {
         use media_pp::elements::AppSource;
 
-        let layout = match format {
-            crate::engine::source::filters::ChainFormat::Bgra => CudaFrameFormat::Bgra,
-            crate::engine::source::filters::ChainFormat::Nv12 => CudaFrameFormat::Nv12,
-        };
-        let download = CudaDownload::new("source-screenshot-download", &self.device, layout);
+        let download = self
+            .gpu
+            .download("source-screenshot-download".to_owned(), format);
         let convert = SwScaler::to_format(
             "source-screenshot-convert",
             ffmpeg::format::Pixel::RGBA,

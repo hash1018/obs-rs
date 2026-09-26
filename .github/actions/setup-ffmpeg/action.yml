@@ -41,6 +41,13 @@ inputs:
       adds only `ffnvcodec`, NVIDIA's MIT-licensed headers, which load the
       driver at run time.
 
+      `vulkan` is FFmpeg's Vulkan hardware context, which the Linux backend
+      composites, decodes and encodes on where there is no NVIDIA GPU, and
+      whose headers `media-pp`'s `vulkan` feature is built against. The
+      Linux jobs add it; Windows composites on D3D11 and has no use for it.
+      It adds the Khronos Vulkan headers, which are Apache-2.0 and MIT, and
+      FFmpeg opens the Vulkan loader at run time.
+
       On Linux the port is also patched to build FFmpeg's CUDA filters: see
       the Linux install step below for why and how.
 
@@ -237,6 +244,14 @@ runs:
         if [[ ",$FEATURES," == *",nvcodec,"* ]] &&
           ! grep -qa scale_cuda "$prefix"/lib/libavfilter.so.*.*; then
           echo "FFmpeg under $prefix was built without its CUDA filters" >&2
+          exit 1
+        fi
+        # The Vulkan hardware context, which the header alone does not show:
+        # FFmpeg installs it whether or not it was built. Its functions are
+        # in libavutil only if it was.
+        if [[ ",$FEATURES," == *",vulkan,"* ]] &&
+          ! grep -qa av_vk_frame_alloc "$prefix"/lib/libavutil.so.*.*; then
+          echo "FFmpeg under $prefix was built without Vulkan" >&2
           exit 1
         fi
         echo "FFMPEG_DIR=$prefix" >> "$GITHUB_ENV"

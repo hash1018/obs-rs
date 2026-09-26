@@ -24,6 +24,10 @@ way:
   feature set, so they are not in the build. OpenH264 is BSD-2-Clause and is what obs-rs encodes H.264
   with where no hardware encoder is available. `nvcodec` adds NVIDIA's
   `ffnvcodec` headers, which are MIT-licensed and load the driver at run time.
+  On Linux `vulkan` is added too, for the Vulkan backend a machine without
+  NVIDIA's driver composites on: it adds the Khronos Vulkan headers,
+  Apache-2.0 and MIT, and FFmpeg opens the system's Vulkan loader at run
+  time.
 - **One configure flag of our own, on Linux.** The Linux build adds
   `--enable-cuda-llvm` to what the port's `nvcodec` feature passes, so that
   FFmpeg's CUDA filters are built — the Linux compositor scales every layer
@@ -44,7 +48,7 @@ release and names an immutable vcpkg tag:
 |---|---|
 | FFmpeg version | 8.0.1 |
 | vcpkg tag | `2026.01.16` |
-| port | `ffmpeg[openh264,nvcodec]` (with its default features) |
+| port | `ffmpeg[openh264,nvcodec]` (with its default features), and `vulkan` on Linux |
 | triplet | `x64-windows`, `x64-linux-dynamic` |
 | Linux only | `--enable-cuda-llvm` added to the port's `nvcodec` options |
 

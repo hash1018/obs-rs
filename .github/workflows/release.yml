@@ -153,10 +153,10 @@ jobs:
   # What this archive can and cannot promise, stated here because neither is
   # obvious from the files in it:
   #
-  # - It needs an NVIDIA GPU. The Linux backend composites on CUDA and there
-  #   is no fallback, so this does not start on an AMD or Intel machine. The
-  #   driver is enough; there is no CUDA toolkit in the archive and none is
-  #   wanted.
+  # - It needs a GPU with a Vulkan driver, or NVIDIA's. The Linux backend
+  #   composites on CUDA where NVIDIA's driver is there and on Vulkan where
+  #   it is not; there is no CUDA toolkit in the archive and none is wanted.
+  #   Vulkan's loader and the GPU's driver are the system's own.
   # - It is bound to the glibc it was built against — this runner's, and
   #   nothing older. A distribution older than the runner needs a build from
   #   source.
@@ -171,12 +171,8 @@ jobs:
     # script would otherwise have to set. It survives as those eight
     # characters because this is a value rather than a shell command, so
     # nothing expands it before the linker sees it.
-    #
-    # The `-L` is the CUDA stub built below. Job-level rather than on the step
-    # that links, because `RUSTFLAGS` is part of the build fingerprint and
-    # changing it partway through would rebuild everything.
     env:
-      RUSTFLAGS: -C link-arg=-Wl,-rpath,$ORIGIN/lib -L ${{ github.workspace }}/target/cuda-stub
+      RUSTFLAGS: -C link-arg=-Wl,-rpath,$ORIGIN/lib
       # The same as the CI workflow, for the same reason — see there.
       CEF_PATH: ${{ github.workspace }}/../cef
     steps:
@@ -203,6 +199,8 @@ jobs:
 
       - name: Set up FFmpeg
         uses: ./.github/actions/setup-ffmpeg
+        with:
+          vcpkg-features: openh264,nvcodec,vulkan
 
       - name: Cache downloaded crates
         uses: actions/cache@v4
@@ -220,22 +218,6 @@ jobs:
           path: ${{ github.workspace }}/../cef
           key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cef-${{ runner.os }}-
-
-      # Before anything is compiled, because `RUSTFLAGS` above points at it and
-      # a missing `-L` directory is not an error — the failure would come much
-      # later, as the `-lcuda` this exists to satisfy.
-      # Only `libcuda.so` is needed to link, but it is built under its SONAME
-      # with a symlink beside it so both jobs produce the same thing. Nothing
-      # puts this on `LD_LIBRARY_PATH`: the archive has to find the user's
-      # real driver, and a stub reachable at run time here would only hide a
-      # mistake.
-      - name: Build a libcuda to link against
-        run: |
-          set -euo pipefail
-          mkdir -p target/cuda-stub
-          cc -shared -fPIC -Wl,-soname,libcuda.so.1 \
-            -o target/cuda-stub/libcuda.so.1 .github/cuda/libcuda-stub.c
-          ln -sf libcuda.so.1 target/cuda-stub/libcuda.so
 
       - name: Build
         run: cargo build --release --locked
@@ -311,13 +293,12 @@ jobs:
           compgen -G "$stage/locales/*.pak" > /dev/null \
             || { echo "no browser engine locales in the archive" >&2; exit 1; }
           # Every shared object the executable asks for has to be resolvable
-          # from inside the archive, except the one that deliberately is not:
-          # `libcuda.so.1` belongs to the user's NVIDIA driver and shipping a
-          # copy would be both wrong and useless. It is expected to be missing
-          # here, where there is no driver; everything else missing is a
-          # library that failed to get copied, and would fail on somebody's
-          # machine instead of in this log.
-          missing=$(ldd "$stage/obs-rs" | grep "not found" | grep -v libcuda || true)
+          # from inside the archive. `libcuda.so.1` is not among them: it
+          # belongs to the user's NVIDIA driver, and is opened when first
+          # called, so a machine without one starts and composites on Vulkan.
+          # Anything missing is a library that failed to get copied, and would
+          # fail on somebody's machine instead of in this log.
+          missing=$(ldd "$stage/obs-rs" | grep "not found" || true)
           if [ -n "$missing" ]; then
             echo "unresolved libraries:" >&2
             echo "$missing" >&2

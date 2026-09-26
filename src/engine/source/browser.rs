@@ -12,7 +12,7 @@
 //!
 //! On Linux the browser draws on the CPU and hands over its pixels — see
 //! `crate::browser` for why — and they go the way a Text Source's do: into
-//! a frame, through `CudaUpload`, and on to the compositor.
+//! a frame, through the GPU's upload, and on to the compositor.
 //!
 //! # Its alpha is already in its colour
 //!
@@ -20,9 +20,10 @@
 //! colour multiplied by alpha. On Windows the layer says so — see
 //! `layer_for` — and the compositor blends it by what it already holds
 //! rather than applying that alpha a second time. The CUDA compositor has no
-//! such blend, so on Linux the colour is divided back out as the pixels are
-//! copied, and the page arrives with straight alpha like every other Source
-//! there — which is also what the filters in its rack expect.
+//! such blend, so on Linux — on either GPU, for one way to serve both — the
+//! colour is divided back out as the pixels are copied, and the page
+//! arrives with straight alpha like every other Source there — which is
+//! also what the filters in its rack expect.
 //!
 //! # Changing anything reopens it
 //!
@@ -520,8 +521,8 @@ const PICTURE_QUEUE_DEPTH: usize = 2;
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) fn open(
-    device: &Arc<media_pp::elements::CudaDevice>,
-    handle: &media_pp::elements::CudaVideoCompositorHandle,
+    gpu: &crate::engine::backend::Gpu,
+    handle: &crate::engine::backend::Compositor,
     mixer: Option<&media_pp::elements::MixerHandle>,
     meter_wake: &crate::engine::audio::MeterWake,
     item: &SceneItemSnapshot,
@@ -530,7 +531,7 @@ pub(in crate::engine) fn open(
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use media_pp::buffer::MediaBuffer;
-    use media_pp::elements::{AppSource, CudaFrameFormat, CudaUpload, CudaVideoCompositorInput};
+    use media_pp::elements::{AppSource, CompositorInput};
     use media_pp::ffmpeg;
     use media_pp::pipeline::PipelineBuilder;
     use media_pp::pool::UnboundObjectPool;
@@ -545,9 +546,9 @@ pub(in crate::engine) fn open(
     let name = input_name(item);
 
     let (source, pusher) = AppSource::new(name.clone(), PICTURE_QUEUE_DEPTH);
-    let upload = CudaUpload::new(format!("{name}-upload"), device, CudaFrameFormat::Bgra);
+    let upload = gpu.upload(format!("{name}-upload"), filters::ChainFormat::Bgra);
     let FilledRack { rack, filters } =
-        super::filled_rack(&name, device, filters::ChainFormat::Bgra, item)?;
+        super::filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
 
     // The same channel a Windows page gets — see the twin for why it is
     // built before the page has played anything.
@@ -573,7 +574,7 @@ pub(in crate::engine) fn open(
 
     // No converter, for the reason a Text Source has none: the alpha is the
     // point, and NV12 has nowhere to keep it.
-    let CudaVideoCompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
+    let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let sound_name = name.clone();
     let builder = PipelineBuilder::new(name.clone());
     let (builder, ()) = builder.add_source(source, move |source, context| {
@@ -686,7 +687,7 @@ pub(in crate::engine) fn open(
 }
 
 /// Copies a page's premultiplied BGRA into `frame` with the alpha divided
-/// back out — see this module's docs for why the CUDA compositor needs it.
+/// back out — see this module's docs for why Linux needs it.
 ///
 /// Row by row, because `frame`'s rows may be wider than the page's, and
 /// eight pixels at a time within a row: a run that is entirely clear or
