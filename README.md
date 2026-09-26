@@ -233,12 +233,15 @@ projector have keys of their own, unbound to begin with. None of them fire
 while you are typing a name.
 
 All but the Scene keys can be changed in **Settings → Hotkeys**: click a
-binding, press the key you want, or Backspace to clear it. They work while
-another application has focus, which is the point of them — a recorder has
-to be reachable from inside the game it is recording. On Windows that is a
-thread asking the system which bound keys are down; on Linux it is the
-desktop's own global-shortcuts portal, which asks you once whether to allow
-them. Each mixer channel gets a push-to-talk and a push-to-mute binding on
+binding, press the key you want, or Backspace to clear it. A key you choose
+works while another application has focus, which is the point of it — a
+recorder has to be reachable from inside the game it is recording. On
+Windows that is a thread asking the system which bound keys are down; on
+Linux it is the desktop's own global-shortcuts portal, which asks you once
+whether to allow them. The keys obs-rs comes with work only in its own
+window: `Ctrl+R` and `Ctrl+P` are every browser's and editor's own, and
+heard everywhere they would start or pause a recording from inside
+something else. Each mixer channel gets a push-to-talk and a push-to-mute binding on
 that page too, which is why a key has to report being let go as well as
 pressed. Every Scene has a key of its own there, and so does every source
 in one: one key shows or hides that placement, so the same source in two

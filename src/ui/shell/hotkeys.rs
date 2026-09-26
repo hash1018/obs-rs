@@ -429,8 +429,8 @@ mod tests {
             bindings
                 .bound()
                 .into_iter()
+                .filter(|(hotkey, chord)| hotkey.is_global_with(*chord))
                 .map(|(hotkey, _)| hotkey)
-                .filter(|hotkey| hotkey.is_global())
                 .collect()
         } else {
             HashSet::new()
@@ -781,20 +781,30 @@ mod tests {
 
     /// With a global listener running, the window leaves every global
     /// hotkey to it — hearing one here too would do it twice — and keeps
-    /// its own.
+    /// its own, which include the keys recording comes with: heard
+    /// everywhere, a browser's reload would stop a recording.
     #[test]
     fn with_a_global_listener_the_window_keeps_only_its_own_keys() {
         let idle = recording_for(None);
-        let bindings = HotkeySettings::default();
+        let mut bindings = HotkeySettings::default();
+        let heard = run(
+            vec![vec![(Key::R, true, Modifiers::CTRL)]],
+            &idle,
+            &bindings,
+            true,
+        );
+        assert!(matches!(heard[0].as_slice(), [UiAction::StartRecording]));
+        bindings.set(HotkeyAction::ToggleRecording, Some(Chord::plain(Key::F9)));
         assert!(
             run(
-                vec![vec![(Key::R, true, Modifiers::CTRL)]],
+                vec![vec![(Key::F9, true, Modifiers::NONE)]],
                 &idle,
                 &bindings,
                 true
             )
             .remove(0)
-            .is_empty()
+            .is_empty(),
+            "a key somebody chose is the listener's"
         );
         assert_eq!(
             run(

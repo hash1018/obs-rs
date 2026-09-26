@@ -197,7 +197,7 @@ impl GlobalHotkeys {
     pub fn set_bindings(&self, bound: Vec<Bound>) {
         let bound: Vec<Bound> = bound
             .into_iter()
-            .filter(|bound| bound.hotkey.is_global())
+            .filter(|bound| bound.hotkey.is_global_with(bound.chord))
             .collect();
         let mut current = self
             .shared
@@ -1151,5 +1151,52 @@ mod portal {
             let mut state = State::default();
             assert_eq!(state.take(down(SESSION), false), None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui::Key;
+
+    use super::*;
+    use crate::hotkey::{HotkeyAction, HotkeySettings};
+
+    /// Recording's own keys never reach the listener, so the window is the
+    /// only thing that hears them; a key chosen for it does.
+    #[test]
+    fn the_listener_is_given_only_keys_somebody_chose() {
+        let listener = GlobalHotkeys {
+            shared: Arc::new(Shared::default()),
+            edges: mpsc::channel().1,
+            worker: None,
+        };
+        let listened = |settings: &HotkeySettings| {
+            listener.set_bindings(
+                settings
+                    .bound()
+                    .into_iter()
+                    .map(|(hotkey, chord)| Bound {
+                        hotkey,
+                        chord,
+                        description: String::new(),
+                    })
+                    .collect(),
+            );
+            lock(&listener.shared.bound)
+                .iter()
+                .map(|bound| (bound.hotkey, bound.chord))
+                .collect::<Vec<_>>()
+        };
+
+        let mut settings = HotkeySettings::default();
+        assert_eq!(listened(&settings), []);
+        settings.set(HotkeyAction::ToggleRecording, Some(Chord::plain(Key::F9)));
+        assert_eq!(
+            listened(&settings),
+            [(
+                Hotkey::Action(HotkeyAction::ToggleRecording),
+                Chord::plain(Key::F9)
+            )]
+        );
     }
 }

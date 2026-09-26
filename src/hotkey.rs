@@ -274,7 +274,8 @@ pub enum Hotkey {
 }
 
 impl Hotkey {
-    /// Whether this acts while another application has focus.
+    /// Whether this can act while another application has focus — on a key
+    /// somebody chose, see [`Self::is_global_with`].
     ///
     /// Everything but the three that are about this application's own
     /// windows: going fullscreen, putting the Canvas on another screen, or
@@ -291,6 +292,19 @@ impl Hotkey {
                     | HotkeyAction::Redo
             )
         )
+    }
+
+    /// Whether this, bound to `chord`, acts while another application has
+    /// focus: one of [`Self::is_global`]'s, on a key somebody chose.
+    ///
+    /// The keys the actions come with are the window's, wherever they are
+    /// bound. They are what every editor and browser uses for itself —
+    /// `Ctrl+R` reloads a page, `Ctrl+P` prints one or opens a file finder —
+    /// so heard everywhere, using another application meant starting,
+    /// stopping or pausing a recording without knowing it. A key somebody
+    /// picked is one they meant to press from a game.
+    pub fn is_global_with(self, chord: Chord) -> bool {
+        self.is_global() && HotkeySettings::default().binding(self) != Some(chord)
     }
 
     /// Whether this lasts as long as its key is held, rather than acting
@@ -719,6 +733,22 @@ mod tests {
         assert!(!Hotkey::Action(HotkeyAction::OpenSettings).is_global());
         assert!(Hotkey::PushToMute(AudioSourceId(1)).is_held());
         assert!(!Hotkey::ToggleMute(AudioSourceId(1)).is_held());
+    }
+
+    /// Recording's own keys are heard only in the window, the same keys chosen
+    /// for something that has none are heard everywhere, and a key chosen
+    /// for recording is heard everywhere too.
+    #[test]
+    fn a_default_key_is_the_windows_and_a_chosen_one_is_global() {
+        let recording = Hotkey::Action(HotkeyAction::ToggleRecording);
+        let pause = Hotkey::Action(HotkeyAction::TogglePause);
+        assert!(!recording.is_global_with(Chord::ctrl(Key::R)));
+        assert!(!pause.is_global_with(Chord::ctrl(Key::P)));
+        assert!(recording.is_global_with(Chord::plain(Key::F9)));
+        assert!(pause.is_global_with(Chord::ctrl(Key::R)), "not its own key");
+        assert!(Hotkey::Action(HotkeyAction::ToggleStreaming).is_global_with(Chord::ctrl(Key::R)));
+        assert!(Hotkey::Scene(SceneId(1)).is_global_with(Chord::ctrl(Key::P)));
+        assert!(!Hotkey::Action(HotkeyAction::Fullscreen).is_global_with(Chord::plain(Key::F9)));
     }
 
     /// Escape is how the capture widget is dismissed, so it can never be a
