@@ -2356,9 +2356,9 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "media-pp"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0d0c6084534a1f3ce0bd161d5b36612116f613f3dd2cef2515da0f6e2592dc7"
+checksum = "4375954f6b8e11ffebf084cb3d92fe205814997f552f5b4747aa64092e447284"
 dependencies = [
  "ab_glyph",
  "arc-swap",
