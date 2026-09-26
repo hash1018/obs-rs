@@ -606,7 +606,10 @@ impl ObsApp {
         let Some(engine) = &self.engine else {
             return;
         };
-        for item in &mut self.snapshots.sources.items {
+        // Every Scene shown inside this one too, which the Audio Mixer dock
+        // gives a channel: skipped here, its meter stood still while the
+        // file played.
+        for item in self.snapshots.sources.items_with_nested_mut() {
             item.peak_db = engine.media_peak_db(item.id);
             item.position = engine.media_position(item.id);
         }

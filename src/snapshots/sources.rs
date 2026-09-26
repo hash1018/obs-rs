@@ -61,6 +61,27 @@ impl Default for SourcesSnapshot {
     }
 }
 
+impl SourcesSnapshot {
+    /// The selected Scene's items, then those of every Scene shown inside it.
+    ///
+    /// What is heard with this Scene: a clip playing in an overlay is mixed
+    /// and recorded like one placed directly, so the Audio Mixer dock gives
+    /// it a channel, and whatever fills a channel's meter has to reach the
+    /// same items — see [`Self::items_with_nested_mut`].
+    pub fn items_with_nested(&self) -> impl Iterator<Item = &SceneItemSnapshot> {
+        self.items
+            .iter()
+            .chain(self.nested.iter().flat_map(|scene| &scene.items))
+    }
+
+    /// The same items, to fill in what the engine measures of them.
+    pub fn items_with_nested_mut(&mut self) -> impl Iterator<Item = &mut SceneItemSnapshot> {
+        self.items
+            .iter_mut()
+            .chain(self.nested.iter_mut().flat_map(|scene| &mut scene.items))
+    }
+}
+
 impl SceneItemSnapshot {
     /// The item's rectangle in Canvas coordinates, as `[x, y, width, height]`.
     ///
@@ -191,6 +212,34 @@ mod tests {
             visible: true,
             locked: false,
         }
+    }
+
+    /// A media file playing in a Scene shown inside this one has a channel in
+    /// the Audio Mixer dock, so it has to be among the items its meter is
+    /// read into — left out, the channel showed and its meter never moved.
+    #[test]
+    fn a_nested_scenes_items_are_filled_in_like_the_scenes_own() {
+        let mut sources = SourcesSnapshot::default();
+        sources.items.push(item([10.0, 10.0], Crop::default()));
+        let mut inside = item([10.0, 10.0], Crop::default());
+        inside.id = SceneItemId(2);
+        sources.nested.push(NestedScene {
+            scene_id: SceneId(3),
+            items: vec![inside],
+        });
+
+        for item in sources.items_with_nested_mut() {
+            item.peak_db = Some(-12.0 - item.id.0 as f32);
+        }
+
+        let read: Vec<_> = sources
+            .items_with_nested()
+            .map(|item| (item.id, item.peak_db))
+            .collect();
+        assert_eq!(
+            read,
+            [(SceneItemId(1), Some(-13.0)), (SceneItemId(2), Some(-14.0))]
+        );
     }
 
     /// Drawing needs the exact inverse of the placement, not something close
