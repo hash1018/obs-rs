@@ -1,6 +1,6 @@
 [package]
 name = "obs-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A screen recorder and scene compositor built on media-pp: capture, composite and record without leaving the GPU."
 license = "MIT OR Apache-2.0"
@@ -78,10 +78,9 @@ raw-window-handle = "0.6"
 
 # The pipeline library this application is built on. Taken from crates.io so
 # that cloning this repository alone is enough to build it, and named by
-# version here rather than by location — see the `[patch.crates-io]` entry
-# at the bottom of this file for how an unreleased one is used meanwhile.
+# version rather than by location.
 [dependencies.media-pp]
-version = "0.2"
+version = "0.3"
 
 # Stamps the icon and version information onto the executable — see `build.rs`.
 [target.'cfg(target_os = "windows")'.build-dependencies]
@@ -157,7 +156,7 @@ x11rb = { version = "0.13.2", features = ["randr"] }
 # is built and no element converts between the two. So Windows takes the
 # Direct3D side whole rather than CUDA plus a round trip through system memory.
 [target.'cfg(target_os = "linux")'.dependencies.media-pp]
-version = "0.2"
+version = "0.3"
 features = [
     "cuda",
     "rnnoise",
@@ -168,7 +167,7 @@ features = [
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.media-pp]
-version = "0.2"
+version = "0.3"
 features = [
     "d3d11",
     "rnnoise",
@@ -178,21 +177,3 @@ features = [
     "mf-capture",
     "wgc-capture",
 ]
-
-# Until the elements this needs are on crates.io, `media-pp` comes from its
-# own repository rather than the released 0.2.
-#
-# A git source and not `path = "../media-pp/lib"`, which is the obvious
-# thing to reach for and is wrong the moment it is committed: CI and the
-# release workflow both run `actions/checkout` on this repository alone, so
-# that directory does not exist on a runner. A git source is also what keeps
-# cloning this repository alone enough to build it, which the dependency
-# above exists to preserve. `Cargo.lock` pins the exact revision, so a build
-# here and a build on a runner take the same code.
-#
-# This whole section goes away when media-pp 0.3.0 is published. The two
-# changes have to land together: the version requirement above says `0.2`,
-# and a patch whose own version has moved past that stops applying at all
-# rather than quietly doing nothing.
-[patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp" }
