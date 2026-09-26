@@ -73,12 +73,24 @@ runs:
     # save step below sits inside this action's own steps, before control
     # returns to the caller, so it still runs even when the caller's later
     # lint/test steps fail.
+    #
+    # The key is made once, here, for both: a cache key may not contain a
+    # comma, and a list of features is written with them.
+    - name: Name the FFmpeg cache
+      id: key
+      shell: bash
+      env:
+        TRIPLET: ${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}
+        REF: ${{ inputs.vcpkg-ref }}
+        FEATURES: ${{ inputs.vcpkg-features }}
+      run: echo "key=vcpkg-ffmpeg-$TRIPLET-$REF-${FEATURES//,/-}" >> "$GITHUB_OUTPUT"
+
     - name: Restore cached FFmpeg development libraries
       id: ffmpeg
       uses: actions/cache/restore@v4
       with:
         path: .vcpkg/installed
-        key: vcpkg-ffmpeg-${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}-${{ inputs.vcpkg-ref }}-${{ inputs.vcpkg-features }}
+        key: ${{ steps.key.outputs.key }}
 
     - name: Check out compatible vcpkg
       if: steps.ffmpeg.outputs.cache-hit != 'true'
@@ -193,4 +205,4 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: .vcpkg/installed
-        key: vcpkg-ffmpeg-${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}-${{ inputs.vcpkg-ref }}-${{ inputs.vcpkg-features }}
+        key: ${{ steps.key.outputs.key }}
