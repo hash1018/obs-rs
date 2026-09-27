@@ -193,6 +193,21 @@ stored shapes.
   `CGEventTap`-based keyboard can implement the same polling
   `tracker::Keyboard` trait Windows uses, and needs the Accessibility
   (input monitoring) permission.
+- **The application's own shortcuts answer Control, not Command**
+  (`ui/shell/hotkeys.rs:355`). Ctrl+R, Ctrl+P, Ctrl+1…9, Ctrl+, and
+  Ctrl+Z/Y are matched with `matches_exact(Modifiers::CTRL)`. On macOS
+  egui reports Command as `command` and `mac_cmd`, never as `ctrl`, so
+  ⌘R does nothing and only the physical Control key works — and the
+  Settings page and the menus say "Ctrl". What a Mac user expects is
+  Command: match `Modifiers::COMMAND` there (Ctrl elsewhere, ⌘ on macOS),
+  and show ⌘ in `Chord`'s label (`hotkey.rs:105`). Bindings the user sets
+  already take Command as Ctrl (`Chord::from_press`, `hotkey.rs:77`), so a
+  stored binding means the same key on both.
+- **The menu bar** is drawn inside the window by egui (File, Edit, View),
+  as on the other platforms; the macOS menu bar at the top of the screen
+  shows only the application menu winit gives every app. That works, but a
+  native menu there (for example through `muda`) is what makes it look
+  like a Mac application — a later nicety, not part of making it run.
 - **Browser Source** (`src/browser`): macOS gets `absent.rs`, which works.
   CEF on macOS needs an `.app` bundle with its helper apps and framework in
   place — the largest single piece, and the one to leave for last. Touches
