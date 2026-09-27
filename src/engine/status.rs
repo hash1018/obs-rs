@@ -209,6 +209,10 @@ pub(super) fn notice_closed_windows(
 /// setting meaningless. Someone pressing play is a different thing: the
 /// Properties dock's transport asks for `ReopenSource`, which is the same
 /// request the Sources dock makes for a disconnected capture.
+///
+/// A looping file played backwards is the exception: at its start it goes
+/// round from the end again, as looping asks — see
+/// [`super::source::media_file::go_round_backwards`].
 pub(super) fn notice_ended_media(
     backend: &Backend,
     open: &mut HashMap<SceneItemId, SourceState>,
@@ -221,6 +225,12 @@ pub(super) fn notice_ended_media(
         let Some(SourceState::Open(source)) = open.get(&item.id) else {
             continue;
         };
+        if let (Some(media), crate::domain::SourceSettings::MediaFile(settings)) =
+            (&source.media_file, &item.settings)
+            && super::source::media_file::go_round_backwards(media, settings)
+        {
+            continue;
+        }
         if !source.source.ended() {
             continue;
         }

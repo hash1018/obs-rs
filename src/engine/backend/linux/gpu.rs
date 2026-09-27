@@ -90,6 +90,32 @@ impl Gpu {
         }
     }
 
+    /// A turn at making Vulkan instances, held by a test for as long as it
+    /// has one of its own — where `vulkan` says it will, and the instance is
+    /// NVIDIA's.
+    ///
+    /// NVIDIA's Vulkan driver (595.91.07, under the 1.4.341 loader) faults
+    /// when one thread creates or destroys an instance while another lists
+    /// the instance extensions: five runs in five with nothing but `ash`,
+    /// none with lavapipe. The application makes its instances one after
+    /// the other — eframe's, then this one on the device eframe made — but
+    /// tests run side by side, and a media file test opening this on Vulkan
+    /// took the Preview's test down with it. So the tests that make one take
+    /// turns there, and only there.
+    #[cfg(test)]
+    pub(in crate::engine) fn test_turn(vulkan: bool) -> Option<std::sync::MutexGuard<'static, ()>> {
+        static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        (vulkan && std::path::Path::new("/proc/driver/nvidia").exists())
+            .then(|| TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
+    /// Whether [`Self::open`] will open Vulkan on a machine that has CUDA —
+    /// which only asking for it does.
+    #[cfg(test)]
+    pub(in crate::engine) fn asked_for_vulkan() -> bool {
+        std::env::var(CHOICE).is_ok_and(|choice| choice.trim() == "vulkan")
+    }
+
     /// What the log and the Stats dock call it.
     pub(in crate::engine) fn describe(&self) -> String {
         match self {

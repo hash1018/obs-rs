@@ -1130,6 +1130,7 @@ mod tests {
     /// rather than failing a build that never had a chance.
     #[test]
     fn a_composited_frame_reaches_the_shared_memory() {
+        let _turn = crate::engine::backend::Gpu::test_turn(true);
         let Some((_instance, device, queue)) = exporting_device() else {
             eprintln!(
                 "skipped: no Vulkan adapter offering VK_KHR_external_memory_fd on this machine"

@@ -163,12 +163,23 @@ fn choose(demuxer: &FileDemuxer, mixer: Option<&MixerHandle>) -> Result<Chosen, 
 ///
 /// To the start rather than to where it was: where a clip is playing from is
 /// not written down — see `SourceCommand::SetMediaPaused` for what is.
-fn start(pipeline: &Arc<Pipeline>, settings: &MediaFileSettings) -> Result<(), BackendError> {
+///
+/// Backwards, the file is not looped while it is sought to its end: reaching
+/// the end there would start it again, and the picture the seek shows — the
+/// one playback turns round from — would be the start of a second lap.
+fn start(
+    pipeline: &Arc<Pipeline>,
+    settings: &MediaFileSettings,
+    looping: &FileDemuxerHandle,
+) -> Result<(), BackendError> {
     let rate = settings.rate();
     // Backwards is played from the end: sought there and turned round while
     // paused, so nothing of the start plays forwards in between.
     if settings.paused || settings.backwards {
         pipeline.pause();
+    }
+    if settings.backwards {
+        looping.set_looping(false);
     }
     // A speed forwards is taken before the pipeline runs, so it starts at
     // it; backwards needs a running pipeline to turn.
@@ -187,6 +198,7 @@ fn start(pipeline: &Arc<Pipeline>, settings: &MediaFileSettings) -> Result<(), B
         if let Err(error) = pipeline.set_rate(rate) {
             tracing::warn!("could not play backwards: {error}");
         }
+        looping.set_looping(settings.looping);
         if !settings.paused {
             pipeline.resume();
         }
@@ -204,16 +216,50 @@ fn start(pipeline: &Arc<Pipeline>, settings: &MediaFileSettings) -> Result<(), B
     Ok(())
 }
 
+/// Starts a looping file played backwards again from its end, where it has
+/// played back to its start. Answers whether it did, which is the only case
+/// a file played to its start does not end.
+///
+/// The file's own demuxer carries backwards over the start of every lap but
+/// the first, as it carries forwards over the end of every one, with the
+/// timeline going down; before the first lap there is no timeline left to go
+/// down into, and the stream ends. Going round from there is a seek to the
+/// end — a moment's preroll, where a forward lap joins without one.
+pub(in crate::engine) fn go_round_backwards(
+    media: &super::MediaFile,
+    settings: &MediaFileSettings,
+) -> bool {
+    let (true, true, Some(end)) = (settings.looping, settings.backwards, settings.duration) else {
+        return false;
+    };
+    let mut finished = false;
+    while let Some(message) = media.pipeline.bus().try_recv_message() {
+        finished |= matches!(message.event, media_pp::bus::BusEvent::Finished);
+    }
+    if !finished {
+        return false;
+    }
+    if let Err(error) = media
+        .pipeline
+        .seek(end, media_pp::pipeline::SeekMode::Accurate)
+    {
+        tracing::warn!("could not go round to the end again: {error}");
+        return false;
+    }
+    true
+}
+
 /// The sink that records where playback has reached, and how it is wired.
 ///
 /// On the *video* branch rather than the audio one, because every media file
 /// has a picture and only some have sound — and because what a progress bar
 /// means is where the picture is.
 ///
-/// The loop's offset is taken off here rather than by the reader: the two are
-/// only comparable at the moment a frame is stamped, and doing it anywhere
-/// else would mean sampling them apart and subtracting numbers from different
-/// instants.
+/// Each frame's own lap is taken off here, from its timestamp, rather than
+/// the lap the demuxer is reading: that one is ahead of the picture by what
+/// the queues and the decoder hold — seconds of the file, played fast — and
+/// the bar went blank at the end of every lap forwards, and read a lap too
+/// far at the start of one backwards.
 fn position_sink(
     name: &str,
     time_base: ffmpeg::Rational,
@@ -225,10 +271,11 @@ fn position_sink(
         if let media_pp::buffer::MediaBuffer::Video(frame) = &buffer
             && let Some(pts) = frame.pts()
         {
-            let offset = looping.lap_offset().as_micros() as i64;
+            let at = (pts as f64 * micros).max(0.0) as u64;
+            let in_lap = looping.in_lap(std::time::Duration::from_micros(at));
             meters
                 .position
-                .store((pts as f64 * micros) as i64 - offset, Ordering::Relaxed);
+                .store(in_lap.as_micros() as i64, Ordering::Relaxed);
         }
         Ok(())
     }))
@@ -388,7 +435,7 @@ pub(in crate::engine) fn open(
             .map(|audio| sound::attach(context, source, audio, &sound_name))
             .transpose()
     })?;
-    start(&pipeline, settings)?;
+    start(&pipeline, settings, &looping)?;
 
     Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource::Owned(Arc::clone(&pipeline)),
@@ -501,7 +548,7 @@ pub(in crate::engine) fn open(
             .map(|audio| sound::attach(context, source, audio, &sound_name))
             .transpose()
     })?;
-    start(&pipeline, settings)?;
+    start(&pipeline, settings, &looping)?;
 
     Ok(super::OpenOutcome::Open(OpenSource {
         source: RunningSource::Owned(Arc::clone(&pipeline)),
@@ -573,6 +620,11 @@ mod tests {
                 eprintln!("skipping: no Direct3D 11 device");
                 return;
             };
+            // Before the device, so it is let go of after it.
+            #[cfg(target_os = "linux")]
+            let _turn = crate::engine::backend::Gpu::test_turn(
+                crate::engine::backend::Gpu::asked_for_vulkan(),
+            );
             #[cfg(target_os = "linux")]
             let $gpu = match crate::engine::backend::Gpu::open() {
                 Ok(gpu) => gpu,
@@ -864,6 +916,164 @@ mod tests {
         );
         let down = pace(&meters);
         assert!((-1.3..-0.7).contains(&down), "{down:.2}x backwards");
+        source.media_file.as_ref().unwrap().pipeline.stop();
+        mix.stop();
+    }
+
+    /// Looping backwards is looping: opened that way it plays from the end,
+    /// and at the start it goes round to the end again rather than ending.
+    #[test]
+    fn a_looping_file_played_backwards_goes_round_from_its_start() {
+        rig!(gpu, _compositor, compositor, mix, mixer_handle);
+        let fixture = fixture();
+        let mut item = item(fixture.0.clone());
+        if let SourceSettings::MediaFile(settings) = &mut item.settings {
+            settings.paused = false;
+            settings.looping = true;
+            settings.backwards = true;
+            settings.speed_percent = 400;
+            settings.duration = Some(Duration::from_secs_f64(SECONDS));
+        }
+        let outcome = open(
+            &gpu,
+            &compositor,
+            Some(&mixer_handle),
+            &MeterWake::new(|| {}),
+            &item,
+            VideoLayer::new(VideoRect::new(0, 0, WIDTH, HEIGHT)),
+        )
+        .expect("open the clip");
+        let OpenOutcome::Open(source) = outcome else {
+            panic!("the fixture is there");
+        };
+        let media = source.media_file.as_ref().unwrap();
+        let settings = match &item.settings {
+            SourceSettings::MediaFile(settings) => settings.clone(),
+            _ => unreachable!(),
+        };
+        let meters = Arc::clone(&media.meters);
+        assert!(
+            wait(Duration::from_secs(5), || position(&meters)
+                > Some(SECONDS - 2.0)),
+            "from the end: {:?}",
+            position(&meters)
+        );
+        // Down to the start at four times its speed, then round — as the
+        // engine's loop sends it round — somewhere near the end again, and
+        // still going down.
+        assert!(
+            wait(Duration::from_secs(5), || position(&meters) < Some(2.0)),
+            "down to the start: {:?}",
+            position(&meters)
+        );
+        assert!(
+            wait(Duration::from_secs(5), || {
+                go_round_backwards(media, &settings);
+                position(&meters) > Some(SECONDS - 3.0)
+            }),
+            "round from the start: {:?}",
+            position(&meters)
+        );
+        let (from, started) = (position(&meters).unwrap(), Instant::now());
+        std::thread::sleep(Duration::from_millis(400));
+        let pace = (position(&meters).unwrap() - from) / started.elapsed().as_secs_f64();
+        assert!((-4.8..-3.2).contains(&pace), "{pace:.2}x still backwards");
+        media.pipeline.stop();
+        mix.stop();
+    }
+
+    /// Sought on a lap after the first, a looping file shows where it was
+    /// sought to and plays on from there at once.
+    #[test]
+    fn a_looping_file_sought_on_a_later_lap_plays_on_from_there() {
+        rig!(gpu, _compositor, compositor, mix, mixer_handle);
+        let fixture = fixture();
+        let mut item = item(fixture.0.clone());
+        if let SourceSettings::MediaFile(settings) = &mut item.settings {
+            settings.paused = false;
+            settings.looping = true;
+            settings.speed_percent = 400;
+            settings.duration = Some(Duration::from_secs_f64(SECONDS));
+        }
+        let outcome = open(
+            &gpu,
+            &compositor,
+            Some(&mixer_handle),
+            &MeterWake::new(|| {}),
+            &item,
+            VideoLayer::new(VideoRect::new(0, 0, WIDTH, HEIGHT)),
+        )
+        .expect("open the clip");
+        let OpenOutcome::Open(source) = outcome else {
+            panic!("the fixture is there");
+        };
+        let media = source.media_file.as_ref().unwrap();
+        let meters = Arc::clone(&media.meters);
+        assert!(wait(Duration::from_secs(5), || position(&meters)
+            > Some(SECONDS - 3.0)));
+        assert!(wait(Duration::from_secs(5), || position(&meters) < Some(1.0)));
+        assert!(wait(Duration::from_secs(5), || position(&meters) > Some(2.0)));
+        seek(&media.pipeline, 5.0);
+        std::thread::sleep(Duration::from_millis(100));
+        let (from, started) = (position(&meters), Instant::now());
+        assert!(
+            from.is_some_and(|from| (3.9..6.5).contains(&from)),
+            "sought to 5s, shows {from:?}"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let pace =
+            (position(&meters).unwrap_or(0.0) - from.unwrap()) / started.elapsed().as_secs_f64();
+        assert!((3.2..4.8).contains(&pace), "{pace:.2}x after the seek");
+        media.pipeline.stop();
+        mix.stop();
+    }
+
+    /// Turned round on a lap after the first, a looping file goes back from
+    /// where it is in that lap — not from the file's end, and not after a
+    /// wait.
+    #[test]
+    fn a_looping_file_turned_round_on_a_later_lap_goes_back_from_where_it_is() {
+        rig!(gpu, _compositor, compositor, mix, mixer_handle);
+        let fixture = fixture();
+        let mut item = item(fixture.0.clone());
+        if let SourceSettings::MediaFile(settings) = &mut item.settings {
+            settings.paused = false;
+            settings.looping = true;
+            settings.speed_percent = 400;
+            settings.duration = Some(Duration::from_secs_f64(SECONDS));
+        }
+        let outcome = open(
+            &gpu,
+            &compositor,
+            Some(&mixer_handle),
+            &MeterWake::new(|| {}),
+            &item,
+            VideoLayer::new(VideoRect::new(0, 0, WIDTH, HEIGHT)),
+        )
+        .expect("open the clip");
+        let OpenOutcome::Open(mut source) = outcome else {
+            panic!("the fixture is there");
+        };
+        let meters = Arc::clone(&source.media_file.as_ref().unwrap().meters);
+        // Past the end once, and a few seconds into the second lap.
+        assert!(wait(Duration::from_secs(5), || position(&meters)
+            > Some(SECONDS - 3.0)));
+        assert!(wait(Duration::from_secs(5), || position(&meters) < Some(1.0)));
+        assert!(wait(Duration::from_secs(5), || position(&meters) > Some(4.0)));
+        let turned_at = position(&meters).unwrap();
+        if let SourceSettings::MediaFile(settings) = &mut item.settings {
+            settings.backwards = true;
+        }
+        super::super::refresh_media_file(&mut source, &item, None);
+        std::thread::sleep(Duration::from_millis(300));
+        let (from, started) = (position(&meters).unwrap(), Instant::now());
+        assert!(
+            (turned_at - 2.0..turned_at + 0.5).contains(&from),
+            "went back from {from:.2}s, turned at {turned_at:.2}s"
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        let pace = (position(&meters).unwrap() - from) / started.elapsed().as_secs_f64();
+        assert!((-4.8..-3.2).contains(&pace), "{pace:.2}x backwards");
         source.media_file.as_ref().unwrap().pipeline.stop();
         mix.stop();
     }
