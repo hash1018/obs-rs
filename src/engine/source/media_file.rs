@@ -618,95 +618,121 @@ mod tests {
         };
     }
 
+    /// The fixture while a test holds it — see [`fixture`].
+    struct Fixture(PathBuf);
+
+    /// How many tests hold the fixture, and where it is while any does.
+    static HELD: std::sync::Mutex<(usize, Option<PathBuf>)> = std::sync::Mutex::new((0, None));
+
     /// Eight seconds of picture and tone, made here as media-pp's own tests
-    /// make theirs: nothing of the kind is checked in. Made once a process.
-    fn fixture() -> PathBuf {
-        static MADE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-        MADE.get_or_init(|| {
-            let directory = std::env::temp_dir().join("obs-rs-fixtures");
-            std::fs::create_dir_all(&directory).expect("fixture directory");
-            let path = directory.join(format!("media-file-seek.{}.mp4", std::process::id()));
-            let rate = ffmpeg::Rational::new(30, 1);
-            let video = TestVideoSource::new(
-                "fixture-video",
-                TestVideoOptions {
-                    width: WIDTH,
-                    height: HEIGHT,
-                    frame_rate: rate,
-                },
-            );
-            let audio = TestAudioSource::new(
-                "fixture-audio",
-                TestAudioOptions {
-                    sample_rate: 48_000,
-                    channels: 2,
-                    frequency: 440.0,
-                },
-            );
-            let video_encoder = SwEncoder::new(
-                "fixture-video-encoder",
-                SwEncoderOptions {
-                    codec: VideoCodec::OpenH264,
-                    width: WIDTH,
-                    height: HEIGHT,
-                    pixel_format: ffmpeg::format::Pixel::YUV420P,
-                    frame_rate: rate,
-                    bit_rate: 1_000_000,
-                    gop_size: GOP,
-                    max_b_frames: None,
-                },
-            )
-            .expect("video encoder");
-            let audio_encoder = SwAudioEncoder::new(
-                "fixture-audio-encoder",
-                SwAudioEncoderOptions {
-                    codec: AudioCodec::Aac,
-                    sample_rate: 48_000,
-                    channels: 2,
-                    bit_rate: 128_000,
-                },
-            )
-            .expect("audio encoder");
-            let mut muxer = FileMuxer::create(&path).expect("muxer");
-            let video_track = muxer.add_stream("video", &video_encoder).expect("track");
-            let audio_track = muxer.add_stream("audio", &audio_encoder).expect("track");
-            let mut sinks = muxer.open().expect("open muxer");
-            let video_sink = sinks.take(video_track).expect("video sink");
-            let audio_sink = sinks.take(audio_track).expect("audio sink");
-            let scaler = SwScaler::new(
-                "fixture-to-yuv",
-                ffmpeg::format::Pixel::YUV420P,
-                WIDTH,
-                HEIGHT,
-                ffmpeg::software::scaling::Flags::BILINEAR,
-            );
-            let builder = PipelineBuilder::new("fixture");
-            let (builder, ()) = builder
-                .add_source(video, move |source, context| {
-                    let branch = context
-                        .branch()
-                        .pipe(scaler)
-                        .pipe(video_encoder)
-                        .to(video_sink)?;
-                    context.attach(source, 0, branch)?;
-                    Ok(())
-                })
-                .expect("video branch");
-            let (builder, ()) = builder
-                .add_source(audio, move |source, context| {
-                    let branch = context.branch().pipe(audio_encoder).to(audio_sink)?;
-                    context.attach(source, 0, branch)?;
-                    Ok(())
-                })
-                .expect("audio branch");
-            let pipeline = builder.build();
-            pipeline.run().expect("run the fixture");
-            std::thread::sleep(Duration::from_secs_f64(SECONDS));
-            pipeline.stop();
-            drop(pipeline);
-            path
-        })
-        .clone()
+    /// make theirs: nothing of the kind is checked in.
+    ///
+    /// Made by the first test to ask and shared, then removed when the last
+    /// one holding it lets go. Both tests here read it and either can finish
+    /// first, so the one that ends cannot simply remove it: on a runner where
+    /// the seek test finished before the speed test's last open, that open
+    /// found no file.
+    fn fixture() -> Fixture {
+        let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = held.1.get_or_insert_with(make_fixture).clone();
+        held.0 += 1;
+        Fixture(path)
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            held.0 -= 1;
+            if held.0 == 0 {
+                let _ = std::fs::remove_file(&self.0);
+                held.1 = None;
+            }
+        }
+    }
+
+    fn make_fixture() -> PathBuf {
+        let directory = std::env::temp_dir().join("obs-rs-fixtures");
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        let path = directory.join(format!("media-file-seek.{}.mp4", std::process::id()));
+        let rate = ffmpeg::Rational::new(30, 1);
+        let video = TestVideoSource::new(
+            "fixture-video",
+            TestVideoOptions {
+                width: WIDTH,
+                height: HEIGHT,
+                frame_rate: rate,
+            },
+        );
+        let audio = TestAudioSource::new(
+            "fixture-audio",
+            TestAudioOptions {
+                sample_rate: 48_000,
+                channels: 2,
+                frequency: 440.0,
+            },
+        );
+        let video_encoder = SwEncoder::new(
+            "fixture-video-encoder",
+            SwEncoderOptions {
+                codec: VideoCodec::OpenH264,
+                width: WIDTH,
+                height: HEIGHT,
+                pixel_format: ffmpeg::format::Pixel::YUV420P,
+                frame_rate: rate,
+                bit_rate: 1_000_000,
+                gop_size: GOP,
+                max_b_frames: None,
+            },
+        )
+        .expect("video encoder");
+        let audio_encoder = SwAudioEncoder::new(
+            "fixture-audio-encoder",
+            SwAudioEncoderOptions {
+                codec: AudioCodec::Aac,
+                sample_rate: 48_000,
+                channels: 2,
+                bit_rate: 128_000,
+            },
+        )
+        .expect("audio encoder");
+        let mut muxer = FileMuxer::create(&path).expect("muxer");
+        let video_track = muxer.add_stream("video", &video_encoder).expect("track");
+        let audio_track = muxer.add_stream("audio", &audio_encoder).expect("track");
+        let mut sinks = muxer.open().expect("open muxer");
+        let video_sink = sinks.take(video_track).expect("video sink");
+        let audio_sink = sinks.take(audio_track).expect("audio sink");
+        let scaler = SwScaler::new(
+            "fixture-to-yuv",
+            ffmpeg::format::Pixel::YUV420P,
+            WIDTH,
+            HEIGHT,
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        );
+        let builder = PipelineBuilder::new("fixture");
+        let (builder, ()) = builder
+            .add_source(video, move |source, context| {
+                let branch = context
+                    .branch()
+                    .pipe(scaler)
+                    .pipe(video_encoder)
+                    .to(video_sink)?;
+                context.attach(source, 0, branch)?;
+                Ok(())
+            })
+            .expect("video branch");
+        let (builder, ()) = builder
+            .add_source(audio, move |source, context| {
+                let branch = context.branch().pipe(audio_encoder).to(audio_sink)?;
+                context.attach(source, 0, branch)?;
+                Ok(())
+            })
+            .expect("audio branch");
+        let pipeline = builder.build();
+        pipeline.run().expect("run the fixture");
+        std::thread::sleep(Duration::from_secs_f64(SECONDS));
+        pipeline.stop();
+        drop(pipeline);
+        path
     }
 
     fn item(path: PathBuf) -> SceneItemSnapshot {
@@ -775,7 +801,8 @@ mod tests {
     #[test]
     fn a_file_plays_at_its_speed_and_backwards() {
         rig!(gpu, _compositor, compositor, mix, mixer_handle);
-        let path = fixture();
+        let fixture = fixture();
+        let path = fixture.0.clone();
         let open_as = |tweak: &dyn Fn(&mut MediaFileSettings)| {
             let mut item = item(path.clone());
             if let SourceSettings::MediaFile(settings) = &mut item.settings {
@@ -844,7 +871,8 @@ mod tests {
     #[test]
     fn every_seek_puts_one_picture_through_and_holds_it_while_paused() {
         rig!(gpu, _compositor, compositor, mix, mixer_handle);
-        let path = fixture();
+        let fixture = fixture();
+        let path = fixture.0.clone();
 
         let outcome = open(
             &gpu,
@@ -940,8 +968,5 @@ mod tests {
 
         pipeline.stop();
         mix.stop();
-        // One file a process, and no other test reads it.
-        drop(source);
-        let _ = std::fs::remove_file(fixture());
     }
 }
