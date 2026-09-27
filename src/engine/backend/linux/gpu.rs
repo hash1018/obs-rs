@@ -17,8 +17,6 @@
 //!   `source::portal_capture`.
 //! - The Preview reaches wgpu through memory CUDA and Vulkan both hold, or,
 //!   on Vulkan, as a picture read back and written — see `preview`.
-//! - Only CUDA scales: a recording smaller than the Canvas goes through the
-//!   CPU on Vulkan — see `output`.
 //!
 //! # Choosing
 //!

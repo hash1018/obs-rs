@@ -12,7 +12,7 @@ use media_pp::color::ColorDescription;
 use media_pp::elements::{
     CudaCodec, CudaEncoder, CudaEncoderOptions, CudaFrameFormat, CudaScaler, CudaScalerInterp,
     PauseGate, SwEncoder, SwEncoderOptions, SwScaler, TimestampOrigin, VulkanCodec, VulkanEncoder,
-    VulkanEncoderOptions,
+    VulkanEncoderOptions, VulkanScaler, VulkanScalerInterp,
 };
 use media_pp::ffmpeg;
 use media_pp::queue::OverflowPolicy;
@@ -149,52 +149,33 @@ impl Backend {
         branch = branch.pipe(gate);
         // Only when the file is smaller than the canvas.
         let scaled = size != self.size;
-        // CUDA scales on the GPU, before anything else sees the frame.
-        if let (true, Gpu::Cuda(device)) = (scaled, &self.gpu) {
-            branch = branch.pipe(CudaScaler::new(
-                format!("{}-scale", kind.prefix()),
-                device,
-                width,
-                height,
-                // Downscaling a screen recording is exactly the quality-sensitive
-                // path that enum documents: nearest on 1080p text is
-                // visibly worse, and this runs on the GPU either way.
-                CudaScalerInterp::Lanczos,
-            ));
+        // Scaled on the GPU, before anything else sees the frame — whichever
+        // encoder, so a software one brings back the smaller picture.
+        // Downscaling a screen recording is exactly the quality-sensitive
+        // path Lanczos is for: anything cheaper on 1080p text is visibly
+        // worse, and this runs on the GPU either way.
+        if scaled {
+            let name = format!("{}-scale", kind.prefix());
+            branch = match &self.gpu {
+                Gpu::Cuda(device) => branch.pipe(CudaScaler::new(
+                    name,
+                    device,
+                    width,
+                    height,
+                    CudaScalerInterp::Lanczos,
+                )),
+                Gpu::Vulkan(device) => branch.pipe(VulkanScaler::new(
+                    name,
+                    device,
+                    width,
+                    height,
+                    VulkanScalerInterp::Lanczos,
+                )?),
+            };
         }
-        // Where the CPU scales instead — Vulkan has no scaler here — it is
-        // the same Lanczos, for the same reason.
-        let cpu_scale = if scaled && matches!(self.gpu, Gpu::Vulkan(_)) {
-            ffmpeg::software::scaling::Flags::LANCZOS
-        } else {
-            ffmpeg::software::scaling::Flags::BILINEAR
-        };
         branch = match encoder {
             RecordEncoder::Cuda(encoder) => branch.pipe(encoder),
-            RecordEncoder::Vulkan(encoder) => {
-                // A smaller file on Vulkan goes to the CPU to be scaled and
-                // comes back: the cost of recording below the Canvas's size
-                // there, which recording at it does not pay.
-                if scaled {
-                    branch = branch
-                        .pipe(
-                            self.gpu
-                                .download(format!("{}-download", kind.prefix()), ChainFormat::Nv12),
-                        )
-                        .pipe(SwScaler::new(
-                            format!("{}-scale", kind.prefix()),
-                            ffmpeg::format::Pixel::NV12,
-                            width,
-                            height,
-                            cpu_scale,
-                        ))
-                        .pipe(
-                            self.gpu
-                                .upload(format!("{}-upload", kind.prefix()), ChainFormat::Nv12),
-                        );
-                }
-                branch.pipe(encoder)
-            }
+            RecordEncoder::Vulkan(encoder) => branch.pipe(encoder),
             // A software encoder is not on the GPU and does not take NV12, so
             // the frames have to come back across the bus and be converted
             // before it sees them. That is the cost the choice carries, and it
@@ -209,7 +190,7 @@ impl Backend {
                     ffmpeg::format::Pixel::YUV420P,
                     width,
                     height,
-                    cpu_scale,
+                    ffmpeg::software::scaling::Flags::BILINEAR,
                 ))
                 .pipe(encoder),
         };

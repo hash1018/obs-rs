@@ -336,8 +336,8 @@ is there — it ships both the library and the PTX compiler, so no CUDA
 toolkit — and Vulkan on any other GPU, AMD's or Intel's through Mesa. The
 choice is made at startup; `OBSRS_GPU=vulkan` (or `cuda`) insists on one,
 which is how the Vulkan path is tried on an NVIDIA machine. What Vulkan does
-differently: a screen capture comes through system memory, the Preview is a
-readback, and a recording smaller than the Canvas is scaled on the CPU.
+differently: a screen capture comes through system memory, and the Preview is
+a readback.
 Windows uses D3D11 and has neither.
 
 ## Where it is up to
