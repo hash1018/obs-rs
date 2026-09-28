@@ -759,9 +759,9 @@ impl ObsApp {
                 if let Some(engine) = &self.engine {
                     // Through the ordinary stop, so the muxer sees an `Eos`
                     // and the encoder flushes what it was holding. Tearing the
-                    // pipeline down would finalize the file too — on
-                    // `ControlMsg::Stop`, which abandons rather than drains,
-                    // and the last frames go with it.
+                    // pipeline down would finalize the file too — on a stop,
+                    // which abandons rather than drains, and the last frames
+                    // go with it.
                     engine.stop_recording();
                 }
                 // So the close this sends is not intercepted again.

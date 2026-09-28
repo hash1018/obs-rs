@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(opened.load(Ordering::SeqCst), 1, "the second item joins");
 
         pushers.lock().unwrap()[0]
-            .push(MediaBuffer::Eos)
+            .finish()
             .expect("end the capture");
         assert!(
             until(|| ended(&registry, first) == Some(true)),
