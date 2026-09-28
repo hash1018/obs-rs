@@ -2413,7 +2413,7 @@ dependencies = [
 [[package]]
 name = "media-pp"
 version = "0.3.1"
-source = "git+https://github.com/hash1018/media-pp?rev=d1533fe86b12466420e54fa54161a2fb103e009b#d1533fe86b12466420e54fa54161a2fb103e009b"
+source = "git+https://github.com/hash1018/media-pp?rev=ec34b640d1b3a618a74e07be995fcbff02cbf13b#ec34b640d1b3a618a74e07be995fcbff02cbf13b"
 dependencies = [
  "ab_glyph",
  "arc-swap",
