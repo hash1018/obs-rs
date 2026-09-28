@@ -589,12 +589,13 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
+    use media_pp::buffer::MediaBuffer;
+    use media_pp::bus::BusEvent;
     #[cfg(target_os = "windows")]
     use media_pp::elements::D3d11VideoCompositor;
     use media_pp::elements::{
-        AudioCodec, AudioMixer, AudioMixerOptions, FileMuxer, SwAudioEncoder,
-        SwAudioEncoderOptions, SwEncoder, SwEncoderOptions, SwScaler, TestAudioOptions,
-        TestAudioSource, TestVideoOptions, TestVideoSource, VideoCodec, VideoCompositorOptions,
+        AppSource, AudioCodec, AudioMixer, AudioMixerOptions, FileMuxer, SwAudioEncoder,
+        SwAudioEncoderOptions, SwEncoder, SwEncoderOptions, VideoCodec, VideoCompositorOptions,
         VideoLayer, VideoRect,
     };
     use media_pp::pipeline::{PipelineBuilder, SeekMode};
@@ -702,27 +703,16 @@ mod tests {
         }
     }
 
+    /// Every picture and every sample is made here and handed over as fast
+    /// as the encoders take them, so the file is the same however busy the
+    /// machine is. Recorded from live test sources for `SECONDS` instead, a
+    /// loaded runner made fewer pictures in that time: a file of a second or
+    /// two, whose keyframes and end were not where the tests look for them.
     fn make_fixture() -> PathBuf {
         let directory = std::env::temp_dir().join("obs-rs-fixtures");
         std::fs::create_dir_all(&directory).expect("fixture directory");
         let path = directory.join(format!("media-file-seek.{}.mp4", std::process::id()));
         let rate = ffmpeg::Rational::new(30, 1);
-        let video = TestVideoSource::new(
-            "fixture-video",
-            TestVideoOptions {
-                width: WIDTH,
-                height: HEIGHT,
-                frame_rate: rate,
-            },
-        );
-        let audio = TestAudioSource::new(
-            "fixture-audio",
-            TestAudioOptions {
-                sample_rate: 48_000,
-                channels: 2,
-                frequency: 440.0,
-            },
-        );
         let video_encoder = SwEncoder::new(
             "fixture-video-encoder",
             SwEncoderOptions {
@@ -741,7 +731,7 @@ mod tests {
             "fixture-audio-encoder",
             SwAudioEncoderOptions {
                 codec: AudioCodec::Aac,
-                sample_rate: 48_000,
+                sample_rate: SAMPLE_RATE,
                 channels: 2,
                 bit_rate: 128_000,
             },
@@ -753,21 +743,12 @@ mod tests {
         let mut sinks = muxer.open().expect("open muxer");
         let video_sink = sinks.take(video_track).expect("video sink");
         let audio_sink = sinks.take(audio_track).expect("audio sink");
-        let scaler = SwScaler::new(
-            "fixture-to-yuv",
-            ffmpeg::format::Pixel::YUV420P,
-            WIDTH,
-            HEIGHT,
-            ffmpeg::software::scaling::Flags::BILINEAR,
-        );
+        let (video, pictures) = AppSource::new("fixture-video", 4);
+        let (audio, sound) = AppSource::new("fixture-audio", 4);
         let builder = PipelineBuilder::new("fixture");
         let (builder, ()) = builder
             .add_source(video, move |source, context| {
-                let branch = context
-                    .branch()
-                    .pipe(scaler)
-                    .pipe(video_encoder)
-                    .to(video_sink)?;
+                let branch = context.branch().pipe(video_encoder).to(video_sink)?;
                 context.attach(source, 0, branch)?;
                 Ok(())
             })
@@ -781,10 +762,76 @@ mod tests {
             .expect("audio branch");
         let pipeline = builder.build();
         pipeline.run().expect("run the fixture");
-        std::thread::sleep(Duration::from_secs_f64(SECONDS));
+
+        // Each picture's sound just ahead of it, worked out from the total
+        // so far so that it stays exact.
+        let frames = (SECONDS * 30.0).round() as i64;
+        let mut samples = 0;
+        for index in 0..frames {
+            let owed = (index + 1) * i64::from(SAMPLE_RATE) / 30;
+            sound
+                .push(MediaBuffer::Audio(Arc::new(tone(samples, owed - samples))))
+                .expect("push sound");
+            samples = owed;
+            pictures
+                .push(MediaBuffer::video(picture(index, rate)))
+                .expect("push picture");
+        }
+        pictures.finish().expect("end the picture");
+        sound.finish().expect("end the sound");
+        let finished = loop {
+            match pipeline.bus().recv_timeout(Duration::from_secs(30)) {
+                Ok(BusEvent::Finished) => break true,
+                Ok(BusEvent::Error { error, .. }) => panic!("writing the fixture: {error}"),
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        };
+        assert!(finished, "the fixture was written");
         pipeline.stop();
         drop(pipeline);
         path
+    }
+
+    const SAMPLE_RATE: u32 = 48_000;
+
+    /// Picture `index` of the fixture: a diagonal ramp that moves a step a
+    /// picture, so no two are alike.
+    fn picture(index: i64, rate: ffmpeg::Rational) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, WIDTH, HEIGHT);
+        let stride = frame.stride(0);
+        let plane = frame.data_mut(0);
+        for row in 0..HEIGHT as usize {
+            for col in 0..WIDTH as usize {
+                plane[row * stride + col] = ((col as i64 + row as i64 + index) % 256) as u8;
+            }
+        }
+        frame.data_mut(1).fill(128);
+        frame.data_mut(2).fill(128);
+        frame.set_pts(Some(index));
+        media_pp::buffer::set_time_base(&mut frame, rate.invert());
+        frame
+    }
+
+    /// `count` samples of a 440 Hz tone from sample `start` on, as the
+    /// fixture's sound.
+    fn tone(start: i64, count: i64) -> ffmpeg::frame::Audio {
+        let mut frame = ffmpeg::frame::Audio::new(
+            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+            count as usize,
+            ffmpeg::ChannelLayout::default(2),
+        );
+        frame.set_rate(SAMPLE_RATE);
+        let bytes = frame.data_mut(0);
+        for index in 0..count as usize {
+            let t = (start + index as i64) as f64 / f64::from(SAMPLE_RATE);
+            let sample = ((t * 440.0 * std::f64::consts::TAU).sin() as f32).to_ne_bytes();
+            bytes[index * 8..index * 8 + 4].copy_from_slice(&sample);
+            bytes[index * 8 + 4..index * 8 + 8].copy_from_slice(&sample);
+        }
+        frame.set_pts(Some(start));
+        media_pp::buffer::set_time_base(&mut frame, ffmpeg::Rational::new(1, SAMPLE_RATE as i32));
+        frame
     }
 
     fn item(path: PathBuf) -> SceneItemSnapshot {
