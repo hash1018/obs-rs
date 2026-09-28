@@ -186,4 +186,4 @@ features = [
 # released yet: the Vulkan backend the Linux build chooses where there is no
 # NVIDIA GPU. Back to the published crate once it carries that.
 [patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp", rev = "914a131fc5719d033073b2a8e7e6a10d66c33c9d" }
+media-pp = { git = "https://github.com/hash1018/media-pp", rev = "d1533fe86b12466420e54fa54161a2fb103e009b" }
