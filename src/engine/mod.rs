@@ -1764,13 +1764,10 @@ fn apply_command(
                 let Some(item) = scene.items.iter().find(|item| item.id == item_id) else {
                     continue;
                 };
-                let due = Instant::now()
-                    .checked_sub(retry_after(item))
-                    .unwrap_or_else(Instant::now);
                 open.insert(
                     item_id,
                     SourceState::Missing {
-                        since: due,
+                        since: already_due(item),
                         reason: None,
                     },
                 );
@@ -2241,6 +2238,24 @@ fn retry_after(item: &SceneItemSnapshot) -> Duration {
     }
 }
 
+/// Whether a `Missing` item has waited its [`retry_after`] since `since`.
+///
+/// Asked by every pass that could open one, not only `retry_missing`: a
+/// transition or a fade reconciles every tick, and a pass that opened
+/// whatever was missing asked a server that was not there thirty times in
+/// one 300 ms fade.
+fn due(since: Instant, item: &SceneItemSnapshot) -> bool {
+    since.elapsed() >= retry_after(item)
+}
+
+/// A `since` for an item that is to be opened on the next pass — one asked
+/// to reopen, or one whose chain has to be built again.
+fn already_due(item: &SceneItemSnapshot) -> Instant {
+    Instant::now()
+        .checked_sub(retry_after(item))
+        .unwrap_or_else(Instant::now)
+}
+
 /// Opens one Scene item, turning both kinds of "no Source" into a state.
 fn request_open(
     engine: &Engine<'_>,
@@ -2434,7 +2449,7 @@ fn retry_missing(
             };
             // Each on its own clock: a stream that asked to be left for a
             // minute must not be reconnected on the tick that suits a window.
-            if since.elapsed() < retry_after(item) {
+            if !due(*since, item) {
                 continue;
             }
             let layer = layer_for(item, item.transform, item.crop, (count - index) as i32);
@@ -2686,7 +2701,7 @@ fn reconcile(
     // Sources whose filter chain is no longer the one they were opened with.
     // Collected rather than reopened here: the arm that notices holds a
     // mutable borrow of `open`, and replacing an entry needs another.
-    let mut rebuild: Vec<SceneItemId> = Vec::new();
+    let mut rebuild: Vec<(SceneItemId, Instant)> = Vec::new();
     for (into, items) in places(snapshot) {
         let count = items.len();
         for (index, item) in items.iter().enumerate() {
@@ -2718,7 +2733,7 @@ fn reconcile(
                 Some(SourceState::Open(source)) if source.nested_in != into.scene() => {
                     source.source.stop();
                     engine.backend.remove_source(&source.name);
-                    rebuild.push(item.id);
+                    rebuild.push((item.id, already_due(item)));
                 }
                 Some(SourceState::Open(source)) => {
                     let _ = source.layer.set_layer(layer);
@@ -2736,7 +2751,7 @@ fn reconcile(
                         refresh_media_file(source, item, monitor.as_ref());
                     }
                     if refresh_filters(source, item) {
-                        rebuild.push(item.id);
+                        rebuild.push((item.id, already_due(item)));
                     }
                 }
                 Some(
@@ -2745,6 +2760,8 @@ fn reconcile(
                 // Already on its way, and asking again would only open a
                 // second one of whatever this is.
                 Some(SourceState::Opening) => {}
+                // Looked for again on its own clock — see `due`.
+                Some(SourceState::Missing { since, .. }) if !due(*since, item) => {}
                 Some(SourceState::Missing { .. }) | None => {
                     request_open(engine, mixer, open, item, layer, into);
                 }
@@ -2752,14 +2769,14 @@ fn reconcile(
         }
     }
 
-    for item_id in rebuild {
+    for (item_id, since) in rebuild {
         // Dropping the old one is what `insert` does here, and `Missing` in
         // the past is what makes the next pass open the new chain — the same
         // two steps `EngineCommand::ReopenSource` takes.
         open.insert(
             item_id,
             SourceState::Missing {
-                since: Instant::now(),
+                since,
                 reason: None,
             },
         );
@@ -3167,6 +3184,34 @@ mod tests {
             },
         );
         assert_eq!(retry_after(&window), MISSING_RETRY);
+    }
+
+    /// A Source that could not be found waits its own interval on every
+    /// pass, not only on `retry_missing`'s: a fade reconciles each tick, and
+    /// a stream whose server answered 404 was asked thirty-two times in one.
+    /// One to be opened on the next pass — reopened, or rebuilt — is due at
+    /// once.
+    #[test]
+    fn a_missing_source_waits_its_interval_on_every_pass() {
+        let stream = stream_item(1, Some(Duration::from_secs(5)));
+        assert!(!due(Instant::now(), &stream), "just found missing");
+        assert!(
+            due(already_due(&stream), &stream),
+            "marked to be opened again"
+        );
+
+        let window = window_item(
+            2,
+            WindowCaptureTarget::Window {
+                process: "firefox".into(),
+                title: "obs-rs".into(),
+            },
+        );
+        assert!(!due(Instant::now(), &window), "just found missing");
+        assert!(
+            due(already_due(&window), &window),
+            "marked to be opened again"
+        );
     }
 
     /// What the compositor is told to draw, from what the item stores.
