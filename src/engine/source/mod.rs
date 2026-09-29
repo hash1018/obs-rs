@@ -10,6 +10,14 @@
 //! [`display_capture`](super) is the exception this does not cover yet: it is
 //! two genuinely unlike implementations and keeps its own directory.
 
+// A platform with no compositor backend opens no Source, so what the kinds
+// share, and each kind's own helpers, go unused there — it is the platform
+// `open` functions that call them. Taken back off as a backend arrives.
+#![cfg_attr(
+    not(any(target_os = "linux", target_os = "windows")),
+    allow(dead_code, unused_imports)
+)]
+
 pub(in crate::engine) mod browser;
 pub(in crate::engine) mod color;
 pub(in crate::engine) mod decode_policy;

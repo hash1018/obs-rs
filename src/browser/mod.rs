@@ -41,6 +41,12 @@
 )]
 mod engine;
 
+// What a Browser Source is built from, which only a platform with a
+// compositor backend opens.
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows")),
+    allow(unused_imports)
+)]
 pub use engine::{
     AUDIO_CHANNELS, AUDIO_RATE, Heard, Held, NamedKey, OnAudio, Page, PageInput, PageOptions,
     Pressed, Runtime, helper_process, open_page,

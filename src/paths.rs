@@ -61,6 +61,9 @@ pub fn show_in_file_manager(directory: &Path) -> std::io::Result<()> {
     std::thread::spawn(move || {
         let program = if cfg!(target_os = "windows") {
             "explorer.exe"
+        } else if cfg!(target_os = "macos") {
+            // Finder, the way double-clicking the folder would.
+            "open"
         } else {
             "xdg-open"
         };

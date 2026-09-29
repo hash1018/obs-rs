@@ -15,6 +15,9 @@ pub(super) fn hold(path: &Path) -> io::Result<Option<File>> {
         .read(true)
         .write(true)
         .create(true)
+        // Not truncated on open, as on Linux: the holder clears it itself
+        // in `record_pid`.
+        .truncate(false)
         .open(path)?;
     Ok(Some(file))
 }

@@ -30,7 +30,7 @@ Capture is deliberately split in two, and both halves need writing:
 - `src/capture/<os>.rs` — what the user can pick. Enumerate targets, or return `SourcePicker::SystemDialog` where the system owns that choice. No `media-pp` in the screen-capture half; `audio_devices` and `watch_audio_devices` are the documented exceptions.
 - `src/engine/backend/<name>` — the compositor, the capture Sources that feed it, and how its frames reach wgpu. These three are one unit and cannot be mixed: `media-pp` compares memory domains when a branch is built, so a D3D11 capture cannot feed a CUDA compositor and no element converts between them. `engine/backend/mod.rs` documents what a backend must provide; `unsupported.rs` is what a platform gets until it has one, and it compiles.
 
-Linux (`engine/backend/linux`, CUDA or Vulkan) and Windows (`engine/backend/d3d11`) are written; macOS is what remains, and `media-pp` has no capture or compositor for it yet — `docs/macos.md` is where that stands. Nothing in `src/engine` above the backend should need changing for a new one.
+Linux (`engine/backend/linux`, CUDA or Vulkan) and Windows (`engine/backend/d3d11`) are written; macOS is what remains. It builds and starts on the unsupported backend, and `media-pp` now has what a macOS backend is made of — ScreenCaptureKit, VideoToolbox, a Metal compositor — so `docs/macos.md` is where that stands. Nothing in `src/engine` above the backend should need changing for a new one.
 
 Keep a platform's code beside the thing it implements rather than gathering it into one tree by virtue of being platform-specific. `src/paths` is the exception, and only because it implements nothing else.
 

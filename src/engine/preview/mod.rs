@@ -22,8 +22,11 @@
 //! Scene that is not changing sends nothing at all, so waiting for the next
 //! frame could mean waiting indefinitely.
 
+// A platform with no backend has nothing to preview: `Backend::start`
+// refuses there, and nothing else reaches for these.
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod platform;
 
 #[cfg(target_os = "linux")]
@@ -33,6 +36,7 @@ mod nv12;
 pub(in crate::engine) use nv12::Nv12Target;
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use platform::SharedTarget;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(in crate::engine) use platform::{PreviewRenderer, PreviewSurface};
 #[cfg(target_os = "linux")]
 pub(in crate::engine) use platform::{SharedNv12, Staging};

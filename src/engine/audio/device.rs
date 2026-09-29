@@ -239,7 +239,13 @@ pub(super) fn open_renderer(
 pub(super) fn open_renderer(
     _name: &str,
     _device: &str,
-) -> Result<(media_pp::elements::AppSink, media_pp::elements::AudioFormat), BackendError> {
+) -> Result<
+    (
+        Box<dyn media_pp::element::Sink>,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
     Err("no audio playback is written for this platform yet".into())
 }
 

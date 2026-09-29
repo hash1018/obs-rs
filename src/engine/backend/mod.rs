@@ -124,6 +124,7 @@ pub(super) const BACKGROUND: Color = Color::BLACK;
 /// The hardware entries never reach here — none is a software encoder and
 /// none has a `VideoCodec` at all — so they are folded into the one this
 /// crate would rather have if they somehow did.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> VideoCodec {
     use crate::settings::RecordingEncoder;
 
@@ -142,6 +143,7 @@ pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> Vide
 /// refuses a size because of it — so this is a plausible number rather than a
 /// meaningful one, and probing at the rate a recording would really use would
 /// tell us nothing extra.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(super) const PROBE_FPS: u32 = 60;
 
 /// Frames the recording branch may fall behind by before the compositor is
@@ -168,6 +170,7 @@ pub(super) const OUTPUT_SEND_TIMEOUT: std::time::Duration = std::time::Duration:
 /// Platform-independent even though what feeds it is not: both backends end
 /// the same way, at a `PauseGate` and a branch on their compositor's `Tee`.
 pub(super) struct VideoTrack {
+    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
     pub(super) branch: media_pp::graph::BranchId,
     pub(super) pause: media_pp::elements::PauseGateHandle,
 }

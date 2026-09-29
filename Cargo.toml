@@ -182,8 +182,16 @@ features = [
     "wgc-capture",
 ]
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# `flock`, for the single-instance lock, as on Linux.
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies.media-pp]
+version = "0.3"
+features = ["rnnoise"]
+
 # media-pp from its repository rather than crates.io, for what is not
 # released yet: the Vulkan backend the Linux build chooses where there is no
 # NVIDIA GPU. Back to the published crate once it carries that.
 [patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp", rev = "b6065f6127525248271552cbbdf3c02c3aad1283" }
+media-pp = { git = "https://github.com/hash1018/media-pp", rev = "151bfb445b5311fa256d55f4bdf1fe2ccc2bca5b" }

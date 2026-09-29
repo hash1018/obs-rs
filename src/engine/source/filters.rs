@@ -253,6 +253,22 @@ use linux as backend;
 #[cfg(target_os = "linux")]
 pub(in crate::engine) use linux::rack;
 
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+use unsupported as backend;
+
+/// A platform with no compositor backend opens no Source, so nothing there
+/// makes a rack to fill; this is only what `FilterRack` is written against.
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+mod unsupported {
+    use super::Filter;
+
+    pub(super) enum Backend {}
+
+    pub(super) fn build(backend: &Backend, _filters: &[Filter]) -> super::Built {
+        match *backend {}
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows {
     use media_pp::contract::MemoryDomain;

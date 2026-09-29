@@ -52,6 +52,10 @@ pub(in crate::engine) use streaming::{BroadcastRequest, connect};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows")),
+    path = "unsupported.rs"
+)]
 mod platform;
 
 pub(in crate::engine) use platform::PreparedOutput;
@@ -157,6 +161,9 @@ impl OutputKind {
 /// `encoding` methods — so that the encoders and the backend never have to
 /// know which of the two they are serving. The two differ in where the
 /// packets go and in nothing before that.
+// Read by the platform half that opens the encoder, which a platform with no
+// backend does not have.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub struct OutputEncoding {
     pub encoder: crate::settings::RecordingEncoder,
     /// The picture size to encode at, already resolved against the Canvas.

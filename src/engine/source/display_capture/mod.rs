@@ -17,8 +17,10 @@
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod platform;
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(in crate::engine) use platform::open;
 
 #[cfg(target_os = "windows")]

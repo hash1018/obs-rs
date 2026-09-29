@@ -72,7 +72,8 @@ runs:
     # hit. What keeps this one alive and reachable is therefore the CI workflow
     # running on every push and pull request; the tag-triggered docs build
     # restores what those runs wrote rather than maintaining its own.
-    # Both platforms use a dynamic triplet (x64-windows, x64-linux-dynamic):
+    # Every platform uses a dynamic triplet (x64-windows, x64-linux-dynamic,
+    # arm64-osx-dynamic):
     # linux's own default triplet (x64-linux) links statically, which would
     # trade the DLL-search problem below for chasing every transitive static
     # dependency (x264, opus, ...) FFmpeg's port pulls in.
@@ -95,7 +96,7 @@ runs:
       id: key
       shell: bash
       env:
-        TRIPLET: ${{ runner.os == 'Windows' && 'x64-windows' || 'x64-linux-dynamic' }}
+        TRIPLET: ${{ runner.os == 'Windows' && 'x64-windows' || runner.os == 'macOS' && 'arm64-osx-dynamic' || 'x64-linux-dynamic' }}
         REF: ${{ inputs.vcpkg-ref }}
         FEATURES: ${{ inputs.vcpkg-features }}
         PATCH: ${{ runner.os == 'Linux' && '-cuda-llvm' || '' }}
@@ -126,6 +127,14 @@ runs:
         sudo apt-get update
         sudo apt-get install -y build-essential curl zip unzip tar pkg-config \
           ninja-build nasm autoconf automake libtool python3 clang
+
+    # FFmpeg's `configure` finds OpenH264 through pkg-config; vcpkg fetches
+    # the rest of what it builds with itself. Homebrew leaves it as it is
+    # where the runner already has it.
+    - name: Install vcpkg build dependencies (macOS)
+      if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'macOS'
+      shell: bash
+      run: brew install pkgconf
 
     # The exit-code checks stop this step at the command that actually broke.
     # A native failure does not raise a PowerShell error, so without them the
@@ -184,6 +193,17 @@ runs:
         "$GITHUB_WORKSPACE/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         "$GITHUB_WORKSPACE/.vcpkg/vcpkg" install "ffmpeg[${{ inputs.vcpkg-features }}]:x64-linux-dynamic"
         rm -rf "$GITHUB_WORKSPACE/.vcpkg/installed/x64-linux-dynamic/debug"
+
+    # The port enables VideoToolbox and AudioToolbox on macOS by itself, which
+    # is what media-pp's macOS backend decodes and encodes with.
+    - name: Install FFmpeg development libraries (macOS)
+      if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        "$GITHUB_WORKSPACE/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        "$GITHUB_WORKSPACE/.vcpkg/vcpkg" install "ffmpeg[${{ inputs.vcpkg-features }}]:arm64-osx-dynamic"
+        rm -rf "$GITHUB_WORKSPACE/.vcpkg/installed/arm64-osx-dynamic/debug"
 
     # Export `FFMPEG_DIR`, not `VCPKG_ROOT`: `ffmpeg-sys-next` reads it before
     # it attempts any vcpkg or pkg-config discovery, so the pinned tree becomes
@@ -262,6 +282,34 @@ runs:
         # is `LD_LIBRARY_PATH`, the direct counterpart of the Windows PATH
         # fix above (same STATUS_DLL_NOT_FOUND-shaped failure otherwise).
         echo "LD_LIBRARY_PATH=$prefix/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+    - name: Export FFMPEG_DIR (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        prefix="$GITHUB_WORKSPACE/.vcpkg/installed/arm64-osx-dynamic"
+        if [ ! -f "$prefix/include/libavcodec/avcodec.h" ]; then
+          echo "no FFmpeg headers under $prefix" >&2
+          exit 1
+        fi
+        if ! compgen -G "$prefix/lib/libavcodec*.dylib" > /dev/null; then
+          echo "no FFmpeg shared libraries under $prefix" >&2
+          exit 1
+        fi
+        # Recorded so a future header mismatch is diagnosable from the log.
+        grep -E '#define\s+LIBAVCODEC_VERSION_(MAJOR|MINOR)\s' \
+          "$prefix"/include/libavcodec/version*.h
+        echo "FFMPEG_DIR=$prefix" >> "$GITHUB_ENV"
+
+        # vcpkg names each dylib `@rpath/...`, so a test binary finds them
+        # only through an rpath of its own. `DYLD_FALLBACK_LIBRARY_PATH`, the
+        # counterpart of the Linux fix above, would not arrive: macOS strips
+        # `DYLD_*` from a protected binary's environment, and every step runs
+        # through `/bin/bash`. Doctests are linked by rustdoc, which reads
+        # its own flags.
+        echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$prefix/lib" >> "$GITHUB_ENV"
+        echo "RUSTDOCFLAGS=-C link-arg=-Wl,-rpath,$prefix/lib" >> "$GITHUB_ENV"
 
     # Only reached on a miss, after Export FFMPEG_DIR validated the tree, so
     # this never caches a truncated or wrong-version build. Runs before this

@@ -27,6 +27,10 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuScope {
     /// This process's own share, from per-process engine counters.
+    ///
+    /// Constructed by the Windows and Linux samplers; a platform with none
+    /// reads usage as unknown and never makes one.
+    #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
     Process,
     /// Every process on the adapter. Used only where no per-process counter
     /// exists — NVIDIA's Linux driver exposes neither `drm-engine-*` fdinfo

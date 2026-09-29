@@ -1,51 +1,47 @@
 # Porting obs-rs to macOS
 
-Where macOS stands, what the port has to add, and in what order. Written
-from a read of the tree at `d3464e2` on a Linux machine; nothing here has
-been built on a Mac yet. Correct it as the first build does.
+Where macOS stands, what the port has to add, and in what order. First
+written from a read of the tree at `d3464e2` on a Linux machine; corrected
+as the port goes on a Mac.
 
-Most of the work is in media-pp, which has no capture, audio output or GPU
-backend for macOS: see `docs/macos.md` in that repository, which also has
-the machine setup — Xcode Command Line Tools, Homebrew, Rust with CI's
-toolchain, and an FFmpeg 8. What follows is this application's half.
+`media-pp` has what a macOS backend is made of now: ScreenCaptureKit display
+and window capture, AVFoundation cameras, Core Audio capture and playback,
+VideoToolbox decode, encode, upload and download, and on its frames a Metal
+compositor, filters (scale, convert, chroma key, effects), `MetalRenderer` for
+an application's own Metal drawing and `MetalSharedTextureSource` for another
+producer's `IOSurface`s. Its `docs/building/macos.md` has the machine setup —
+the Xcode Command Line Tools, Rust, and FFmpeg 8.0.1. What follows is this
+application's half.
 
-## Where macOS stands: it does not build
+## Where macOS stands: it builds and starts, with no engine
 
-`AGENTS.md` says a platform without a backend gets `engine/backend/unsupported.rs`
-and compiles. That stopped being true as the other two backends grew. By
-reading, a macOS build fails on:
+`cargo build --no-default-features` builds on a Mac, the tests pass, and the
+application starts: window, docks, project and settings. `Backend::start`
+answers the unsupported backend's refusal, so `app.rs` keeps `engine: None`
+— no Preview, no capture, no recording. What made that so:
 
-1. **`src/engine/preview/mod.rs:25-27, 36`** — `mod platform;` has `path`s for
-   Linux and Windows only, and `PreviewRenderer`/`PreviewSurface` are
-   re-exported unconditionally.
-2. **`src/engine/output/mod.rs:53-57`** — the same: `mod platform;` and
-   `PreparedOutput`.
-3. **`src/engine/source/display_capture/mod.rs:18-22`** — `mod platform;` and
-   `open`.
-4. **`src/engine/source/window_capture/mod.rs:25-34`** — `mod platform;` and
-   `open`.
-5. **`src/engine/source/filters.rs:168, 203`** — the `backend` alias the
-   filter rack is built on exists for Windows and Linux only.
-6. **`src/engine/source/pushed.rs:25`** — imports `filled_rack`, which
-   `source/mod.rs:96-127` defines for Windows and Linux only.
-7. **`src/engine/audio/filters.rs:37-41`** — uses `NoiseSuppressor`, which
-   media-pp exports only with `rnnoise`; macOS's media-pp dependency
-   (`Cargo.toml:94-99`) has no features at all.
-8. **`src/engine/backend/unsupported.rs`** no longer matches what the engine
-   calls — last changed before screenshots and nested Scenes (see below).
-9. **Dead code under `-D warnings`.** Helpers only the platform `open`
-   functions use become unused: `software_codec` and `PROBE_FPS` in
-   `backend/mod.rs`; `new_rack`, `chroma_key_options`, `video_effect` in
-   `source/filters.rs`; the private helpers of the text, color, drawing,
-   image, rtsp, media_file and browser Sources.
-
-More may turn up once these are fixed. Making the tree build on macOS with
-the unsupported backend is the first step of the port, and keeping it
-building is what a macOS CI job is for.
+- Every `mod platform;` without a macOS arm — `preview`, `display_capture`,
+  `window_capture` — compiles on Windows and Linux only, and `output` has an
+  `unsupported.rs` holding what the engine calls of a backend's output half.
+- `backend/unsupported.rs` matches what the engine calls: `Layer::set_opacity`
+  and `latest_frame`, `RunningSource::stats`, the `preview` and `size`
+  fields, `open_source`'s `into: Target`.
+- The filter rack has an uninhabited `backend` there, and `filled_rack` is
+  only imported where it exists.
+- What goes unused without a backend is allowed to be:
+  `engine::source` as a whole, and item by item elsewhere, each under
+  `cfg_attr(not(any(target_os = "linux", target_os = "windows")), …)` — to be
+  taken back off as the macOS backend starts using them.
+- macOS takes media-pp's `rnnoise` like the other platforms.
+- The single-instance lock is `flock`, as on Linux (`instance/macos.rs`);
+  raising the running copy is not written yet.
+- `paths::show_in_file_manager` runs `open`.
+- CI builds, lints and tests it on `macos-15`, with `setup-ffmpeg` taught
+  `arm64-osx-dynamic`.
 
 ## Setting up
 
-The machine setup is in media-pp's `docs/macos.md`. For this repository:
+The machine setup is in media-pp's `docs/building/macos.md`. For this repository:
 
 - **Build without the browser engine**: `cargo build --no-default-features`.
   `cef` is a dependency on Windows and Linux only, so `browser` does nothing
@@ -71,23 +67,6 @@ The machine setup is in media-pp's `docs/macos.md`. For this repository:
   recordings go to `~/Movies`, as `src/paths.rs` already says. Unlike Linux
   there is no `XDG_*` variable to point a test run elsewhere, so a test run
   uses the real project; copy it aside first if it matters.
-
-## Step 1: build on macOS with the unsupported backend
-
-- Give each `mod platform;` above a macOS arm — an `unsupported.rs` beside it,
-  or a real `macos.rs` once there is one — and give `filled_rack`, the filter
-  rack's `backend`, and each `pub use platform::…` the same.
-- Add `rnnoise` to the media-pp features macOS gets. It is pure Rust.
-- Bring `unsupported.rs` up to what the engine calls (next section).
-- Silence the dead helpers the way the tree already does it:
-  `#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]`
-  — and remove those allowances again as the macOS backend starts using them.
-- Fix `paths::show_in_file_manager`, which runs `xdg-open` everywhere but
-  Windows; macOS has `open`.
-
-The app then starts with no Preview and no engine (`Backend::start`
-returns `Err`, so `app.rs` keeps `engine: None`), which is the baseline to
-build on.
 
 ## The backend contract, as the engine calls it
 
@@ -236,15 +215,13 @@ stored shapes.
 
 ## A suggested order
 
-1. Step 1 above: build on macOS with the unsupported backend, and add a
-   macOS CI job that keeps it building (`macos-latest` runners are Apple
-   silicon).
-2. `src/capture/macos.rs` enumeration, `show_in_file_manager`, single
-   instance, disk space — small, and independent of media-pp.
+1. ~~Build on macOS with the unsupported backend, and a macOS CI job that
+   keeps it building.~~ Done — see *Where macOS stands*.
+2. `src/capture/macos.rs` enumeration, disk space, raising the running
+   copy — small, and independent of media-pp.
 3. With media-pp's Core Audio pieces: the mixer's devices.
-4. With media-pp's system-memory ScreenCaptureKit and camera sources: a
-   first backend on the software compositor, and a readback Preview. Slow,
-   but everything above the backend gets exercised.
-5. With media-pp's Metal backend: the real backend, the `IOSurface` Preview,
+4. The Metal backend, straight away rather than a software one first, since
+   media-pp has it all now: ScreenCaptureKit and camera capture as
+   VideoToolbox frames, `MetalVideoCompositor`, the `IOSurface` Preview, and
    VideoToolbox recording.
-6. Hotkeys, resource usage, and the browser engine; then packaging.
+5. Hotkeys, resource usage, and the browser engine; then packaging.

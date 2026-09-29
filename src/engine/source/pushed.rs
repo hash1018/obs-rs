@@ -21,9 +21,9 @@
 use media_pp::elements::AppSourceHandle;
 
 use crate::engine::backend::{BackendError, Layer, RunningSource};
-use crate::engine::source::{
-    FilledRack, OpenSource, PushedContent, PushedSurface, SourceFilters, filled_rack, filters,
-};
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use crate::engine::source::{FilledRack, filled_rack, filters};
+use crate::engine::source::{OpenSource, PushedContent, PushedSurface, SourceFilters};
 use crate::snapshots::SceneItemSnapshot;
 
 /// A pushed Source's pipeline, running and waiting for its first picture.
