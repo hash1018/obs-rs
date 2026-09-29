@@ -13,7 +13,7 @@ producer's `IOSurface`s. Its `docs/building/macos.md` has the machine setup —
 the Xcode Command Line Tools, Rust, and FFmpeg 8.0.1. What follows is this
 application's half.
 
-## Where macOS stands: a Metal backend, without captures yet
+## Where macOS stands: a Metal backend, with its captures
 
 The backend is `engine/backend/macos`: the Linux backend's shape with one
 GPU in it. `macos::gpu` is Linux's `Gpu`, `Compositor` and `Layer` over
@@ -45,9 +45,32 @@ Source, which has the Linux shape and, with no engine here, says so.
   caption test has a Metal twin, and the media file tests — seeking, speed,
   playing backwards, looping — run here too.
 
-Not yet: the display, window and camera captures and what the user picks
-them from (`src/capture`), the mixer's devices, disk space, resource usage,
-global hotkeys, raising the running copy, the browser engine and packaging.
+- **Captures.** A Display Capture and a Window Capture are one
+  ScreenCaptureKit stream (`source/screen_capture.rs`), handing on the
+  pixel buffers it draws as BGRA VideoToolbox frames — nothing copied or
+  converted before the compositor — and shared between the items showing
+  one display or one window, as Windows shares its captures: a stream with a
+  `Tee` that grows a branch per item. Nothing refuses a second stream here,
+  so this is Windows' plain saving rather than its display's necessity, and
+  none of Linux's portal reasons for not sharing apply. A display is found
+  by the id its stored name carries (`Built-in Display (1)`), a window by
+  its application and title as on Windows; either not there is `Absent`,
+  and a stream that ends — a window closed, a display disconnected — puts
+  its items back to be looked for. A camera is AVFoundation's, its pixel
+  buffers handed on as NV12, and shared the same way
+  (`video_capture/macos.rs`).
+- **What the user picks from** (`capture/macos.rs`) is listed through Core
+  Graphics rather than ScreenCaptureKit, which would ask for screen
+  recording: displays with their bounds in points, and every application
+  window at the normal level on any Space — its title only once screen
+  recording is allowed, and one off screen only where it has a title. Cameras and their modes are `media-pp`'s.
+- Checked on a Mac: a display shown twice from one stream, a window on
+  another Space and the built-in camera composited beside the rest at 60
+  fps. The registry's tests are the Windows display's, on the main display;
+  they need screen recording and skip without it.
+
+Not yet: the mixer's devices, disk space, resource usage, global hotkeys,
+raising the running copy, the browser engine and packaging.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -152,21 +175,9 @@ made, without a copy through system memory where the platform allows:
 
 ## Capture, and what the user picks
 
-`src/capture/mod.rs` already falls back for every function on an OS it does
-not know, and `source_picker()` answers `SourcePicker::SystemDialog` there.
-Its own docs describe macOS as enumerable through `SCShareableContent` once
-permission is granted, which is the better answer: a `src/capture/macos.rs`
-that enumerates displays, windows, audio devices and processes, cameras and
-their modes, and watches audio devices — as `windows.rs` and `linux.rs` do.
-
-Until then the `SystemDialog` answer has knock-on effects to know about:
-"Add Display Capture" asks for `OpenSystemDisplayPicker`, which only Linux
-handles (`app.rs:776-783`), so the button does nothing; "Add Window Capture"
-adds a Wayland-shaped `Portal { restore_token: None }` target; and the
-projector's screen list and the Properties dock's desktop picture are empty.
-With enumeration, the existing `DisplayCaptureTarget::MonitorName` and
-`WindowCaptureTarget::Window { process, title }` fit macOS and need no new
-stored shapes.
+Done — see *Where macOS stands*. The existing
+`DisplayCaptureTarget::MonitorName` and `WindowCaptureTarget::Window
+{ process, title }` fit macOS, so no stored shape is new.
 
 ## The rest, piece by piece
 
@@ -233,10 +244,9 @@ stored shapes.
 
 1. ~~Build on macOS with the unsupported backend, and a macOS CI job that
    keeps it building.~~ Done — see *Where macOS stands*.
-2. `src/capture/macos.rs` enumeration, disk space, raising the running
-   copy — small, and independent of media-pp.
+2. Disk space and raising the running copy — small, and independent of
+   media-pp. (`src/capture/macos.rs` is done.)
 3. With media-pp's Core Audio pieces: the mixer's devices.
 4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
-   recording.~~ Done. Then its captures: ScreenCaptureKit and the camera as
-   VideoToolbox frames.
+   recording, and its captures.~~ Done.
 5. Hotkeys, resource usage, and the browser engine; then packaging.

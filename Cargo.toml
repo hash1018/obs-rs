@@ -190,6 +190,26 @@ libc = "0.2"
 # media-pp's, deliberately: one `objc2-metal` in the tree is one set of
 # types, which is what lets a texture from either be handed to the other.
 objc2 = "0.6"
+# The displays and windows a capture can be pointed at — see `capture::macos`.
+# Core Graphics rather than `media-pp`'s ScreenCaptureKit listing, which asks
+# for screen-recording permission.
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFCGTypes",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std",
+    "libc",
+    "CGDirectDisplay",
+    "CGDisplayConfiguration",
+    "CGError",
+    "CGGeometry",
+    "CGWindow",
+] }
 objc2-metal = { version = "0.3", default-features = false, features = [
     "std",
     "MTLBlitCommandEncoder",
@@ -210,7 +230,7 @@ pollster = "1"
 # buffers, and the Metal compositor, filters and VideoToolbox encoder take them.
 [target.'cfg(target_os = "macos")'.dependencies.media-pp]
 version = "0.3"
-features = ["metal", "rnnoise"]
+features = ["metal", "rnnoise", "screencapturekit-capture", "avfoundation-capture"]
 
 # media-pp from its repository rather than crates.io, for what is not
 # released yet: the Vulkan backend the Linux build chooses where there is no

@@ -10,9 +10,8 @@
 mod gpu;
 
 use crate::engine::TARGET_FPS;
-use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
@@ -23,7 +22,6 @@ use media_pp::{
     ffmpeg,
     pipeline::Pipeline,
     queue::OverflowPolicy,
-    rate::FrameRateHandle,
 };
 
 use crate::domain::SourceKind;
@@ -48,9 +46,12 @@ pub(in crate::engine) struct Backend {
     pub(in crate::engine) gpu: Gpu,
     pub(in crate::engine) size: [u32; 2],
     pub(in crate::engine) compositor: Compositor,
-    /// Every open capture's rate control, keyed by the name it was
-    /// registered with — see the Linux twin.
-    pub(in crate::engine) capture_rates: Mutex<HashMap<String, FrameRateHandle>>,
+    /// Every display and window being captured, each once however many
+    /// items show it — see `source::screen_capture`.
+    pub(in crate::engine) screens: Arc<source::screen_capture::ScreenRegistry>,
+    /// The cameras this backend has open, each once however many items show
+    /// it — see `source::video_capture`.
+    pub(in crate::engine) cameras: Arc<source::video_capture::CameraRegistry>,
     /// Every Scene being composited for another Scene — see
     /// `source::scene`.
     scenes: Arc<source::scene::SceneRegistry>,
@@ -154,7 +155,8 @@ impl Backend {
         Ok(Self {
             gpu,
             size,
-            capture_rates: Mutex::new(HashMap::new()),
+            screens: Arc::new(source::screen_capture::ScreenRegistry::default()),
+            cameras: Arc::new(source::video_capture::CameraRegistry::default()),
             scenes: Arc::new(source::scene::SceneRegistry::default()),
             compositor: handle,
             preview,
@@ -189,28 +191,15 @@ impl Backend {
         self.scenes
             .open
             .each(|composition| composition.extra.remove_source(name));
-        self.capture_rates
-            .lock()
-            .expect("capture rates poisoned")
-            .remove(name);
     }
 
     /// Tells the compositor and every open capture to emit at `fps` — see
-    /// the Linux twin.
+    /// the D3D11 twin, which reaches its captures the same way, through the
+    /// registry that shares them.
     pub(in crate::engine) fn set_frame_rate(&self, fps: u32) -> bool {
-        let rate = ffmpeg::Rational::new(fps as i32, 1);
-        for capture in self
-            .capture_rates
-            .lock()
-            .expect("capture rates poisoned")
-            .values()
-        {
-            if let Err(error) = capture.set(rate) {
-                tracing::warn!("a capture kept its rate: {error}");
-            }
-        }
+        self.screens.set_frame_rate(fps);
         self.compositor
-            .set_frame_rate(rate)
+            .set_frame_rate(ffmpeg::Rational::new(fps as i32, 1))
             .inspect_err(|error| tracing::warn!("the compositor kept its rate: {error}"))
             .is_ok()
     }
@@ -258,8 +247,19 @@ impl Backend {
         compositor: &Compositor,
     ) -> Result<OpenOutcome, BackendError> {
         match item.kind {
-            SourceKind::DisplayCapture | SourceKind::WindowCapture | SourceKind::VideoCapture => {
-                Err(source::unsupported_kind(item))
+            SourceKind::DisplayCapture => source::display_capture::open(
+                &self.screens,
+                &self.gpu,
+                compositor,
+                item,
+                layer,
+                fps,
+            ),
+            SourceKind::WindowCapture => {
+                source::window_capture::open(&self.screens, &self.gpu, compositor, item, layer, fps)
+            }
+            SourceKind::VideoCapture => {
+                source::video_capture::open(&self.gpu, compositor, &self.cameras, item, layer)
             }
             SourceKind::MediaFile => source::media_file::open(
                 &self.gpu,
@@ -304,7 +304,7 @@ pub(in crate::engine) enum RunningSource {
     /// A pipeline this item alone owns, such as a Color Source's pusher.
     Owned(Arc<Pipeline>),
     /// One branch of something other items may also be drawing from: a
-    /// camera, or a Scene composited for another.
+    /// display, a window, a camera, or a Scene composited for another.
     Shared {
         capture: Arc<dyn SharedCapture>,
         key: String,

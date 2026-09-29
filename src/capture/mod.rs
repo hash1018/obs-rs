@@ -12,9 +12,10 @@
 //! - **Linux/X11** permits enumeration through EWMH and XRandR. **Wayland**
 //!   does not: `xdg-desktop-portal` shows *its own* picker and hands back only
 //!   what the user chose. That is the security model, not a missing API.
-//! - **macOS** does return a list (`SCShareableContent`), but only after the
-//!   user has granted screen-recording permission, so the list can be empty
-//!   for a reason that is not "nothing to capture".
+//! - **macOS** lets a process enumerate displays and windows through Core
+//!   Graphics, as Windows does — but a window's title is there only once the
+//!   user has granted screen-recording permission, so it can be empty for a
+//!   reason that is not "untitled".
 //!
 //! [`SourcePicker`] is that fork, named once here so the UI can branch on it
 //! instead of a Windows-shaped list leaking into the rest of the app.
@@ -42,6 +43,8 @@ use crate::domain::AudioSourceKind;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
@@ -214,7 +217,11 @@ pub fn video_capture_devices() -> Vec<VideoCaptureTarget> {
     {
         linux::video_capture_devices()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::video_capture_devices()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -238,7 +245,11 @@ pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode>
     {
         linux::video_capture_modes(device)
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::video_capture_modes(device)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = device;
         Vec::new()
@@ -433,7 +444,11 @@ pub fn displays() -> Vec<MonitorRect> {
     {
         linux::displays()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::displays()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -465,7 +480,14 @@ pub fn source_picker() -> SourcePicker {
     {
         linux::source_picker()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        SourcePicker::Enumerated {
+            windows: macos::windows(),
+            monitors: macos::monitors(),
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         SourcePicker::SystemDialog
     }

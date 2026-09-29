@@ -34,6 +34,9 @@ pub(in crate::engine) mod portal_capture;
 pub(in crate::engine) mod pushed;
 pub(in crate::engine) mod rtsp;
 pub(in crate::engine) mod scene;
+/// The one capture a Display Capture and a Window Capture both are on macOS.
+#[cfg(target_os = "macos")]
+pub(in crate::engine) mod screen_capture;
 pub(in crate::engine) mod shared;
 pub(in crate::engine) mod sound;
 pub(in crate::engine) mod text;
@@ -385,10 +388,13 @@ pub(in crate::engine) fn input_name(item: &SceneItemSnapshot) -> String {
 
 /// Convenience for a backend that has no Source of a given kind yet.
 ///
-/// Unused on Windows, where the D3D11 backend now opens every kind there is —
-/// which is why its own match has no fallback arm any more, and why adding a
+/// Unused on Windows, Linux and macOS, whose backends open every kind there is —
+/// which is why their matches have no fallback arm any more, and why adding a
 /// ninth kind will stop that build until somebody decides what it does.
-#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
+    allow(dead_code)
+)]
 pub(in crate::engine) fn unsupported_kind(item: &SceneItemSnapshot) -> BackendError {
     format!("{:?} is not connected to the compositor yet", item.kind).into()
 }

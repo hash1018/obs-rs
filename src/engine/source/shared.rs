@@ -13,9 +13,11 @@
 //! compositor's own rate can change without the duplication being reopened.
 //! That is `E` here, and nothing in this module reads it.
 //!
-//! Windows shares both kinds. Linux shares cameras — which fail there
-//! outright, the second reader refused as busy — and opens a display per
-//! SceneItem, for the reasons the Linux backend's `RunningSource` gives.
+//! Windows and macOS share both kinds — macOS a window too, as Windows does,
+//! and for the plain saving rather than because anything refuses a second
+//! stream. Linux shares cameras — which fail there outright, the second
+//! reader refused as busy — and opens a display per SceneItem, for the
+//! reasons the Linux backend's `RunningSource` gives.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -91,9 +93,10 @@ pub(in crate::engine) struct Shared<E> {
     running: bool,
     /// Whatever the kind that opened this keeps beside it.
     ///
-    /// Read only by the Windows display — a camera keeps nothing — so a
-    /// Linux build, which shares cameras alone, never reads it.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    /// Read only by the Windows display and the macOS screen streams — a
+    /// camera keeps nothing — so a Linux build, which shares cameras alone,
+    /// never reads it.
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
     pub(in crate::engine) extra: E,
 }
 

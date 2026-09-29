@@ -21,6 +21,7 @@
 //! ```text
 //! MfCaptureSource   ─ Queue ─ D3d11Upload ─ compositor input   (Windows)
 //! V4l2CaptureSource ─ Queue ─ CudaUpload  ─ compositor input   (Linux)
+//! AvFoundationCaptureSource ─ Queue ─────── compositor input   (macOS)
 //! ```
 //!
 //! The camera hands over NV12 in system memory — Media Foundation's own
@@ -37,10 +38,14 @@
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "linux")]
 pub(in crate::engine) use linux::{CameraRegistry, open};
+#[cfg(target_os = "macos")]
+pub(in crate::engine) use macos::{CameraRegistry, open};
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use windows::{CameraRegistry, open};
