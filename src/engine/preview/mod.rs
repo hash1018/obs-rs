@@ -8,6 +8,9 @@
 //! through Vulkan external memory on CUDA, and written from a readback on
 //! Vulkan.
 //!
+//! macOS copies the Metal compositor's NV12 planes into the textures that
+//! pass reads, on the GPU, and resolves them as Linux does.
+//!
 //! Neither half shares a line with the other, which is why each gets a file
 //! rather than a `#[cfg]` inside one. What they do share is their shape: a
 //! `PreviewSurface` both the pipeline's renderer and the `Backend` hold, and
@@ -26,17 +29,20 @@
 // refuses there, and nothing else reaches for these.
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg_attr(target_os = "macos", path = "macos.rs")]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 mod platform;
 
-#[cfg(target_os = "linux")]
+// The NV12 resolve pass, which the Metal compositor's NV12 goes through as
+// the CUDA and Vulkan compositors' does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod nv12;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) use nv12::Nv12Target;
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use platform::SharedTarget;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub(in crate::engine) use platform::{PreviewRenderer, PreviewSurface};
 #[cfg(target_os = "linux")]
 pub(in crate::engine) use platform::{SharedNv12, Staging};

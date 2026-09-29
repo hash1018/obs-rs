@@ -285,8 +285,9 @@ impl Backend {
                 Ok(RecordEncoder::Hardware { encoder, input })
             }
             // Vulkan Video takes Vulkan frames, and this compositor's are
-            // Direct3D's: Linux's alone.
+            // Direct3D's: Linux's alone. VideoToolbox is the Mac's.
             RecordingEncoder::Vulkan => Err("Vulkan Video records only on Linux".into()),
+            RecordingEncoder::VideoToolbox => Err("VideoToolbox records only on macOS".into()),
             other => Ok(RecordEncoder::Software(SwEncoder::with_color(
                 format!("{}-encode", kind.prefix()),
                 SwEncoderOptions {

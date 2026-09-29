@@ -463,7 +463,7 @@ pub(in crate::engine) fn open(
     }))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) fn open(
     gpu: &crate::engine::backend::Gpu,
     handle: &crate::engine::backend::Compositor,
@@ -582,9 +582,13 @@ pub(in crate::engine) fn open(
 /// decoding and a mixer taking the sound. Each seek has to put one picture
 /// through to the compositor and hold it while paused, or play on from it,
 /// and nothing from before a seek may be shown after it.
-// Both backends: the D3D11 compositor with D3D11VA on Windows, CUDA or
-// Vulkan on Linux — each `open` as the engine calls it there.
-#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+// Every backend: the D3D11 compositor with D3D11VA on Windows, CUDA or
+// Vulkan on Linux, Metal with VideoToolbox on macOS — each `open` as the
+// engine calls it there.
+#[cfg(all(
+    test,
+    any(target_os = "windows", target_os = "linux", target_os = "macos")
+))]
 mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -626,7 +630,7 @@ mod tests {
             let _turn = crate::engine::backend::Gpu::test_turn(
                 crate::engine::backend::Gpu::asked_for_vulkan(),
             );
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             let $gpu = match crate::engine::backend::Gpu::open() {
                 Ok(gpu) => gpu,
                 Err(error) => {
@@ -645,7 +649,7 @@ mod tests {
             #[cfg(target_os = "windows")]
             let ($compositor_element, $compositor) =
                 D3d11VideoCompositor::new("test-compositor", &$gpu, options).expect("compositor");
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             let ($compositor_element, $compositor) = $gpu
                 .compositor(
                     "test-compositor".to_owned(),

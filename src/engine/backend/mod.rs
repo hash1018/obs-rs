@@ -9,6 +9,7 @@
 //! CUDA    PipeWire open_gpu   → CudaConverter → CudaVideoCompositor   → shared buffer → NV12 resolve
 //! Vulkan  PipeWire open (CPU) → VulkanUpload  → VulkanVideoCompositor → readback      → NV12 resolve
 //! D3D11   DxgiCaptureSource   → (no convert)  → D3d11VideoCompositor  → shared texture
+//! Metal   ScreenCaptureKit    → (no convert)  → MetalVideoCompositor  → plane copy    → NV12 resolve
 //! ```
 //!
 //! Linux has two of these and picks one as it starts — CUDA on an NVIDIA
@@ -63,8 +64,9 @@ use media_pp::elements::VideoCodec;
 
 #[cfg_attr(target_os = "linux", path = "linux/mod.rs")]
 #[cfg_attr(target_os = "windows", path = "d3d11/mod.rs")]
+#[cfg_attr(target_os = "macos", path = "macos/mod.rs")]
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows")),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     path = "unsupported.rs"
 )]
 mod platform;
@@ -72,7 +74,9 @@ mod platform;
 pub(in crate::engine) use platform::{Backend, Layer, RunningSource};
 /// Linux composites on CUDA or on Vulkan, chosen as it starts, so what a
 /// Source builds its elements from is one of the two — see `linux::gpu`.
-#[cfg(target_os = "linux")]
+/// macOS has the same shape with one API in it, Metal — see `macos::gpu` —
+/// which is what lets a Source be written once for both.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) use platform::{Compositor, Gpu};
 
 /// The device the D3D11 backend composites on, for the one test outside this
@@ -102,7 +106,10 @@ pub(in crate::engine) type BackendError = Box<dyn Error + Send + Sync>;
 ///
 /// Shared by both backends because a pipeline is a pipeline; the two differ
 /// in what else a `RunningSource` can be, not in this.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(in crate::engine) fn pipeline_ended(pipeline: &media_pp::pipeline::Pipeline) -> bool {
     while let Some(message) = pipeline.bus().try_recv_message() {
         if matches!(message.event, media_pp::bus::BusEvent::Finished) {
@@ -116,7 +123,10 @@ pub(in crate::engine) fn pipeline_ended(pipeline: &media_pp::pipeline::Pipeline)
 ///
 /// Part of what this module offers a backend rather than something every
 /// backend must take, which is why it can be unused on one.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(super) const BACKGROUND: Color = Color::BLACK;
 
 /// Which of `VideoCodec`'s H.264 entries a software choice maps to.
@@ -124,7 +134,10 @@ pub(super) const BACKGROUND: Color = Color::BLACK;
 /// The hardware entries never reach here — none is a software encoder and
 /// none has a `VideoCodec` at all — so they are folded into the one this
 /// crate would rather have if they somehow did.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> VideoCodec {
     use crate::settings::RecordingEncoder;
 
@@ -133,7 +146,8 @@ pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> Vide
         RecordingEncoder::OpenH264
         | RecordingEncoder::Nvenc
         | RecordingEncoder::MediaFoundation
-        | RecordingEncoder::Vulkan => VideoCodec::OpenH264,
+        | RecordingEncoder::Vulkan
+        | RecordingEncoder::VideoToolbox => VideoCodec::OpenH264,
     }
 }
 
@@ -143,13 +157,19 @@ pub(super) fn software_codec(encoder: crate::settings::RecordingEncoder) -> Vide
 /// refuses a size because of it — so this is a plausible number rather than a
 /// meaningful one, and probing at the rate a recording would really use would
 /// tell us nothing extra.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(super) const PROBE_FPS: u32 = 60;
 
 /// Frames the recording branch may fall behind by before the compositor is
 /// made to wait — at 60 fps, about an eighth of a second of slack for an
 /// encoder that hiccups.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(super) const OUTPUT_QUEUE_DEPTH: usize = 8;
 
 /// How long the compositor waits for room in that queue before giving up on
@@ -162,7 +182,10 @@ pub(super) const OUTPUT_QUEUE_DEPTH: usize = 8;
 /// other branch. A timeout arrives on the bus as an error naming this
 /// branch, which is what makes an overloaded encoder visible instead of
 /// silent.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(super) const OUTPUT_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The recording's video branch while one is running.
@@ -170,7 +193,10 @@ pub(super) const OUTPUT_SEND_TIMEOUT: std::time::Duration = std::time::Duration:
 /// Platform-independent even though what feeds it is not: both backends end
 /// the same way, at a `PauseGate` and a branch on their compositor's `Tee`.
 pub(super) struct VideoTrack {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+        allow(dead_code)
+    )]
     pub(super) branch: media_pp::graph::BranchId,
     pub(super) pause: media_pp::elements::PauseGateHandle,
 }

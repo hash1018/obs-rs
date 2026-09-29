@@ -18,26 +18,27 @@ pub fn helper_process() -> Option<i32> {
 
 /// What a page would hand over, so the callback a Source writes has the same
 /// shape wherever it is compiled — a texture handle on Windows, pixels on
-/// Linux, as `cef.rs` has them.
-#[cfg(not(target_os = "linux"))]
+/// Linux, as `cef.rs` has them, and on macOS the Linux shape, since its
+/// Browser Source is the Linux one.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub struct Painted {
     pub handle: isize,
     pub size: [u32; 2],
 }
 
 /// See the other platforms' twin.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub struct Painted<'a> {
     pub pixels: &'a [u8],
     pub size: [u32; 2],
 }
 
 /// What a page would do with each picture it drew.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub type OnPaint = std::sync::Arc<dyn Fn(Painted) + Send + Sync>;
 
 /// What a page would do with each picture it drew.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub type OnPaint = std::sync::Arc<dyn for<'a> Fn(Painted<'a>) + Send + Sync>;
 
 /// The page that cannot exist here. Uninhabited, so the `Option<Page>` every

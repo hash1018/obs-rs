@@ -21,7 +21,7 @@
 use media_pp::elements::AppSourceHandle;
 
 use crate::engine::backend::{BackendError, Layer, RunningSource};
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use crate::engine::source::{FilledRack, filled_rack, filters};
 use crate::engine::source::{OpenSource, PushedContent, PushedSurface, SourceFilters};
 use crate::snapshots::SceneItemSnapshot;
@@ -85,7 +85,7 @@ pub(in crate::engine) fn wire(
 
 /// The same on Linux's GPU, CUDA or Vulkan — see the Direct3D half for what
 /// it is and why it is BGRA throughout.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) fn wire(
     name: &str,
     gpu: &crate::engine::backend::Gpu,

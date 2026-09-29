@@ -1,4 +1,5 @@
-//! Turning the compositor's NV12 output into something egui can sample.
+//! Turning the compositor's NV12 output into something egui can sample —
+//! on Linux, and on macOS, whose Metal compositor draws the same NV12.
 //!
 //! egui draws one texture; NV12 is two planes at different resolutions and a
 //! colour space that is not RGB. Converting on the CPU would undo the reason
@@ -12,8 +13,11 @@
 //! [`super::platform`] — so the upload is two `copy_buffer_to_texture` calls
 //! in the same submission as the pass, and nothing here crosses the bus. On
 //! Vulkan the frame has come back to system memory and is written into them
-//! as it is: [`Nv12Target::write`], then [`Nv12Target::resolve`].
+//! as it is: [`Nv12Target::write`], then [`Nv12Target::resolve`]. On macOS
+//! the compositor's own planes are copied into them on the GPU — see
+//! [`Nv12Target::planes`] — and then resolved the same way.
 
+#[cfg(target_os = "linux")]
 use super::platform::SharedNv12;
 
 /// Both compositors document their NV12 as BT.709 limited-range Y'CbCr from
@@ -191,10 +195,25 @@ impl Nv12Target {
         &self._output
     }
 
+    /// The two planes a frame is resolved from, luma and chroma, for a
+    /// platform that fills them itself — macOS copies the compositor's
+    /// planes into them on the GPU — before [`Self::resolve`].
+    #[cfg(target_os = "macos")]
+    pub(in crate::engine) fn planes(&self) -> (&wgpu::Texture, &wgpu::Texture) {
+        (&self.luma, &self.chroma)
+    }
+
+    /// The frame size the planes were made for.
+    #[cfg(target_os = "macos")]
+    pub(in crate::engine) fn size(&self) -> [u32; 2] {
+        self.size
+    }
+
     /// Resolves the frame now in the shared buffer into the output texture.
     ///
     /// Returns `false` when the buffer was built for a different size, which
     /// would otherwise paint a torn picture rather than fail.
+    #[cfg(target_os = "linux")]
     pub(in crate::engine) fn draw(
         &self,
         device: &wgpu::Device,
@@ -231,6 +250,7 @@ impl Nv12Target {
     ///
     /// Returns `false` for a frame of another size, or planes too short for
     /// it, which would otherwise paint a torn picture rather than fail.
+    #[cfg(target_os = "linux")]
     pub(in crate::engine) fn write(
         &self,
         queue: &wgpu::Queue,
@@ -306,6 +326,7 @@ impl Nv12Target {
 }
 
 /// Moves one plane out of the shared buffer and into its texture.
+#[cfg(target_os = "linux")]
 fn copy_plane(
     encoder: &mut wgpu::CommandEncoder,
     buffer: &wgpu::Buffer,

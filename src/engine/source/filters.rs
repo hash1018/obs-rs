@@ -248,17 +248,17 @@ use windows as backend;
 #[cfg(target_os = "windows")]
 pub(in crate::engine) use windows::rack;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use linux as backend;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) use linux::rack;
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 use unsupported as backend;
 
 /// A platform with no compositor backend opens no Source, so nothing there
 /// makes a rack to fill; this is only what `FilterRack` is written against.
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod unsupported {
     use super::Filter;
 
@@ -371,7 +371,7 @@ mod windows {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux {
     use media_pp::element::Filter as PpFilter;
     use media_pp::elements::Rack;

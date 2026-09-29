@@ -114,6 +114,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     pin_windows_backend(&mut options);
+    pin_metal_backend(&mut options);
     request_vulkan_interop(&mut options);
 
     eframe::run_native(
@@ -228,6 +229,22 @@ fn pin_windows_backend(options: &mut eframe::NativeOptions) {
 
 #[cfg(not(target_os = "windows"))]
 fn pin_windows_backend(_options: &mut eframe::NativeOptions) {}
+
+/// Restricts wgpu to Metal on macOS.
+///
+/// What wgpu picks there anyway, and named so it is the only outcome: the
+/// Preview copies the compositor's planes into wgpu's textures with a Metal
+/// blit, on wgpu's own Metal queue, which is written against no other
+/// backend.
+#[cfg(target_os = "macos")]
+fn pin_metal_backend(options: &mut eframe::NativeOptions) {
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pin_metal_backend(_options: &mut eframe::NativeOptions) {}
 
 /// Asks wgpu for the one Vulkan extension the CUDA interop needs, on Linux.
 ///

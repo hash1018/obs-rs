@@ -52,8 +52,9 @@ pub(in crate::engine) use streaming::{BroadcastRequest, connect};
 
 #[cfg_attr(target_os = "linux", path = "linux.rs")]
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
+#[cfg_attr(target_os = "macos", path = "macos.rs")]
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows")),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     path = "unsupported.rs"
 )]
 mod platform;
@@ -163,7 +164,10 @@ impl OutputKind {
 /// packets go and in nothing before that.
 // Read by the platform half that opens the encoder, which a platform with no
 // backend does not have.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub struct OutputEncoding {
     pub encoder: crate::settings::RecordingEncoder,
     /// The picture size to encode at, already resolved against the Canvas.

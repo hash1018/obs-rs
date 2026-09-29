@@ -1,10 +1,11 @@
-//! A Scene inside a Scene, on Linux.
+//! A Scene inside a Scene, on Linux and macOS — both composite through a
+//! `backend::Gpu`.
 //!
 //! The Windows half's own docs say what this is for and why it is one
 //! picture rather than a bundle of layers; what differs here is the
 //! compositor. The Canvas is composed in NV12, which has no alpha at all,
 //! so a composition meant to be laid over another asks for a BGRA canvas
-//! instead — which both of this platform's compositors, CUDA and Vulkan,
+//! instead — which every compositor behind a `Gpu`, CUDA, Vulkan and Metal,
 //! can make. That is what lets an overlay Scene leave the Scene under it
 //! showing.
 

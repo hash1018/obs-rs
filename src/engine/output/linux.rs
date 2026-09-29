@@ -263,11 +263,12 @@ impl Backend {
             // one that is not the compositor's cannot be fed: NVENC while
             // compositing on Vulkan — an NVIDIA GPU told to, see `Gpu` — and
             // Vulkan Video while compositing on CUDA. Media Foundation is
-            // Windows' own.
+            // Windows' own, and VideoToolbox the Mac's.
             (
                 RecordingEncoder::Nvenc
                 | RecordingEncoder::Vulkan
-                | RecordingEncoder::MediaFoundation,
+                | RecordingEncoder::MediaFoundation
+                | RecordingEncoder::VideoToolbox,
                 _,
             ) => Err(format!(
                 "{} is not available while compositing with {}",

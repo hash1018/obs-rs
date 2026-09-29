@@ -516,10 +516,10 @@ pub(in crate::engine) fn open(
 /// Pictures held between the browser and the upload. Two, for the reason the
 /// Windows twin gives: the compositor takes the newest, and a deeper queue
 /// would only hold pictures it has already replaced.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PICTURE_QUEUE_DEPTH: usize = 2;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) fn open(
     gpu: &crate::engine::backend::Gpu,
     handle: &crate::engine::backend::Compositor,
@@ -696,7 +696,7 @@ pub(in crate::engine) fn open(
 /// divided pixel by pixel. Measured on a 1080p page with three large
 /// translucent shapes turning, the copy took 9.5 ms a picture dividing
 /// pixel by pixel.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn straighten(from: &[u8], frame: &mut media_pp::ffmpeg::frame::Video, width: usize) {
     let stride = frame.stride(0);
     let rows = from.chunks_exact(width * 4);
@@ -722,7 +722,7 @@ fn straighten(from: &[u8], frame: &mut media_pp::ffmpeg::frame::Video, width: us
 }
 
 /// [`unpremultiplied`] over whole pixels, one at a time.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn straighten_pixels(from: &[u8], into: &mut [u8]) {
     let (pixels, _) = from.as_chunks::<4>();
     let (slots, _) = into.as_chunks_mut::<4>();
@@ -735,7 +735,7 @@ fn straighten_pixels(from: &[u8], into: &mut [u8]) {
 ///
 /// A multiplication by a reciprocal kept per alpha, rather than a division
 /// per channel, which was most of what a translucent pixel cost.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn unpremultiplied([blue, green, red, alpha]: [u8; 4]) -> [u8; 4] {
     match alpha {
         0 => [0; 4],
@@ -751,7 +751,7 @@ fn unpremultiplied([blue, green, red, alpha]: [u8; 4]) -> [u8; 4] {
 
 /// `255 / alpha` in 16.16 fixed point, for every alpha — see
 /// [`unpremultiplied`]. Never looked up for an alpha of zero.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const RECIPROCALS: [u32; 256] = {
     let mut table = [0u32; 256];
     let mut alpha = 1;
@@ -769,7 +769,7 @@ mod tests {
     /// Half-covered white arrives as half-grey with half alpha, and has to
     /// leave as white — anything else is the compositor darkening every
     /// translucent edge of a page by its alpha a second time.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn premultiplied_colour_is_divided_back_out() {
         use super::unpremultiplied;
@@ -788,7 +788,7 @@ mod tests {
 
     /// The reciprocal is the division it replaces, for every colour under
     /// every alpha a premultiplied pixel can have.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_reciprocal_agrees_with_dividing() {
         use super::unpremultiplied;
@@ -805,7 +805,7 @@ mod tests {
     }
 
     /// Rows are copied into a frame whose rows are wider than the page's.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_page_lands_row_by_row_in_a_wider_frame() {
         use media_pp::ffmpeg;

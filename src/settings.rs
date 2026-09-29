@@ -506,6 +506,11 @@ pub enum RecordingEncoder {
     /// exposes. Only there: its frames have to be Vulkan's, so neither a
     /// Windows machine nor one compositing on CUDA can feed it.
     Vulkan,
+    /// `h264_videotoolbox`, fed the compositor's frames directly — the media
+    /// engine every Mac has. Only there: its frames are Core Video pixel
+    /// buffers, which only the macOS compositor makes.
+    #[serde(rename = "videotoolbox")]
+    VideoToolbox,
     /// `libopenh264` — Cisco's encoder, whose licence terms are why it is the
     /// software H.264 encoder most FFmpeg builds carry.
     OpenH264,
@@ -517,10 +522,11 @@ pub enum RecordingEncoder {
 impl RecordingEncoder {
     /// In preference order, which is also the order the Settings dialog
     /// lists them and the order [`Self::best_of`] falls through.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Nvenc,
         Self::MediaFoundation,
         Self::Vulkan,
+        Self::VideoToolbox,
         Self::OpenH264,
         Self::X264,
     ];
@@ -528,7 +534,10 @@ impl RecordingEncoder {
     /// Whether reaching this encoder means copying frames back from the GPU
     /// and converting them.
     pub fn is_software(self) -> bool {
-        !matches!(self, Self::Nvenc | Self::MediaFoundation | Self::Vulkan)
+        !matches!(
+            self,
+            Self::Nvenc | Self::MediaFoundation | Self::Vulkan | Self::VideoToolbox
+        )
     }
 
     /// The most preferred of `available`, or `None` when it is empty.
@@ -553,6 +562,7 @@ impl RecordingEncoder {
             Self::Nvenc => "NVENC (h264_nvenc)",
             Self::MediaFoundation => "Media Foundation (h264_mf)",
             Self::Vulkan => "Vulkan Video (h264_vulkan)",
+            Self::VideoToolbox => "VideoToolbox (h264_videotoolbox)",
             Self::OpenH264 => "OpenH264 (libopenh264)",
             Self::X264 => "x264 (libx264)",
         }
@@ -941,6 +951,7 @@ mod tests {
         for (encoder, written) in [
             (RecordingEncoder::Nvenc, "nvenc"),
             (RecordingEncoder::Vulkan, "vulkan"),
+            (RecordingEncoder::VideoToolbox, "videotoolbox"),
             (RecordingEncoder::OpenH264, "open-h264"),
             (RecordingEncoder::X264, "x264"),
         ] {

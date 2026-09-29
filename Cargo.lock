@@ -2422,8 +2422,10 @@ dependencies = [
  "ashpd",
  "async-io",
  "bindgen",
+ "block2 0.6.2",
  "crossbeam-channel",
  "crossbeam-queue",
+ "dispatch2",
  "enumflags2",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -2432,6 +2434,15 @@ dependencies = [
  "libloading 0.8.9",
  "naga",
  "nnnoiseless",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "pipewire",
  "pkg-config",
  "pollster 1.0.1",
@@ -2735,6 +2746,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
 ]
 
 [[package]]
@@ -2822,6 +2834,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-video"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d425caf1df73233f29fd8a5c3e5edbc30d2d4307870f802d18f00d83dc5141a6"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2-core-foundation",
+ "objc2-io-surface",
+]
+
+[[package]]
 name = "objc2-encode"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2896,7 +2919,9 @@ dependencies = [
  "bitflags 2.13.1",
  "block2 0.6.2",
  "objc2 0.6.4",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
 ]
 
 [[package]]
@@ -3009,6 +3034,8 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "media-pp",
+ "objc2 0.6.4",
+ "objc2-metal 0.3.2",
  "png",
  "pollster 1.0.1",
  "raw-window-handle",

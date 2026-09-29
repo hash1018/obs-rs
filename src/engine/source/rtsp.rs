@@ -302,7 +302,7 @@ pub(in crate::engine) fn open(
     }))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) fn open(
     gpu: &crate::engine::backend::Gpu,
     handle: &crate::engine::backend::Compositor,

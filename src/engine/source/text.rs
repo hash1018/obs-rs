@@ -360,7 +360,7 @@ pub(in crate::engine) fn open(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) fn open(
     gpu: &crate::engine::backend::Gpu,
     handle: &crate::engine::backend::Compositor,
@@ -615,6 +615,132 @@ mod tests {
         // BT.709 limited-range red is Y=63, and white glyphs are Y=235. The
         // corners are the assertion that matters: they are where an opaque
         // caption would have painted its own background over the red.
+        let at = |row: u32, column: u32| luma[(row * width + column) as usize];
+        for (row, column) in [
+            (0, 0),
+            (0, width - 1),
+            (height - 1, 0),
+            (height - 1, width - 1),
+        ] {
+            assert_eq!(
+                at(row, column),
+                63,
+                "the caption painted over the background at {row},{column}"
+            );
+        }
+        let lit = luma.iter().filter(|value| **value > 150).count();
+        assert!(
+            lit > 50,
+            "the glyph did not reach the canvas ({lit} pixels)"
+        );
+    }
+
+    /// The macOS twin of the Linux test above: the same NV12 canvas, so the
+    /// same luma values, on the Metal compositor.
+    ///
+    /// ```text
+    /// AppSource(BGRA) ─ VideoToolboxUpload ─┐
+    ///                                       ├─ MetalVideoCompositor ─ VideoToolboxDownload ─ AppSink
+    ///                   (a red background) ─┘
+    /// ```
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_caption_reaches_the_metal_canvas_without_a_rectangle_around_it() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use media_pp::color::Color;
+        use media_pp::elements::{
+            AppSink, AppSource, MetalVideoCompositor, MetalVideoCompositorInput,
+            VideoCompositorOptions, VideoLayer, VideoRect, VideoToolboxDevice,
+            VideoToolboxDownload, VideoToolboxFrameFormat, VideoToolboxUpload,
+        };
+
+        if a_font().is_none() {
+            eprintln!("skipped: no font on this machine to draw with");
+            return;
+        }
+        let Ok(device) = VideoToolboxDevice::new() else {
+            eprintln!("skipped: no VideoToolbox on this machine");
+            return;
+        };
+
+        let (width, height) = (256u32, 128u32);
+        let (compositor, handle) = MetalVideoCompositor::with_format(
+            "text-test",
+            &device,
+            VideoCompositorOptions {
+                mode: media_pp::elements::RenderMode::Live,
+                width,
+                height,
+                frame_rate: ffmpeg::Rational::new(30, 1),
+                background: Color::new(255, 0, 0),
+                background_alpha: 255,
+            },
+            VideoToolboxFrameFormat::Nv12,
+        )
+        .expect("compositor");
+
+        let mut caption = settings("H", TextAlignment::Centre);
+        caption.size = [width as f32, height as f32];
+        caption.font_size = 64.0;
+        let frame = text_bgra(width, height, &caption).expect("draw the caption");
+
+        let (source, pusher) = AppSource::new("caption", 1);
+        let upload = VideoToolboxUpload::new("caption-upload", &device);
+        let MetalVideoCompositorInput { sink, .. } = handle
+            .add_source(
+                "caption",
+                VideoLayer::new(VideoRect::new(0, 0, width, height)),
+            )
+            .expect("add the caption layer");
+        let (feeding, ()) = Pipeline::new("caption-in", source, move |source, context| {
+            let branch = context.branch().pipe(upload).to(sink)?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("source pipeline");
+        feeding.run().expect("run the source");
+        pusher.push(frame).expect("push the caption");
+
+        let (composed, arrived) = mpsc::channel();
+        let download = VideoToolboxDownload::new("download");
+        let sink = AppSink::new("out", move |buffer: MediaBuffer| {
+            if let MediaBuffer::Video(frame) = &buffer {
+                let stride = frame.stride(0);
+                let data = frame.data(0);
+                let luma: Vec<u8> = (0..height as usize)
+                    .flat_map(|row| data[row * stride..row * stride + width as usize].to_vec())
+                    .collect();
+                let _ = composed.send(luma);
+            }
+            Ok(())
+        });
+        let (composing, ()) = Pipeline::new("compose", compositor, move |source, context| {
+            let branch = context.branch().pipe(download).to(sink)?;
+            context.attach(source, 0, branch)?;
+            Ok(())
+        })
+        .expect("compositor pipeline");
+        composing.run().expect("run the compositor");
+
+        // Waiting for a frame that has it, for the reason the Linux twin
+        // gives.
+        let mut with_caption = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let Ok(luma) = arrived.recv_timeout(Duration::from_secs(5)) else {
+                break;
+            };
+            if luma.iter().any(|value| *value > 150) {
+                with_caption = Some(luma);
+                break;
+            }
+        }
+        feeding.stop();
+        composing.stop();
+        let luma = with_caption.expect("no composited frame carried the caption");
+
         let at = |row: u32, column: u32| luma[(row * width + column) as usize];
         for (row, column) in [
             (0, 0),

@@ -13,31 +13,47 @@ producer's `IOSurface`s. Its `docs/building/macos.md` has the machine setup —
 the Xcode Command Line Tools, Rust, and FFmpeg 8.0.1. What follows is this
 application's half.
 
-## Where macOS stands: it builds and starts, with no engine
+## Where macOS stands: a Metal backend, without captures yet
 
-`cargo build --no-default-features` builds on a Mac, the tests pass, and the
-application starts: window, docks, project and settings. `Backend::start`
-answers the unsupported backend's refusal, so `app.rs` keeps `engine: None`
-— no Preview, no capture, no recording. What made that so:
+The backend is `engine/backend/macos`: the Linux backend's shape with one
+GPU in it. `macos::gpu` is Linux's `Gpu`, `Compositor` and `Layer` over
+VideoToolbox frames drawn with Metal — `VideoToolboxUpload` and
+`VideoToolboxDownload`, `MetalConverter`, `MetalChromaKey`,
+`MetalVideoEffect`, `DecodeTarget::VideoToolbox`, `MetalVideoCompositor` — so
+every Source written against that interface is the same code on both: Color,
+Drawing, Text, Image (`pushed::wire`), media files, streams, the filter rack,
+nested Scenes (`scene/gpu.rs`, which was `scene/linux.rs`) and the Browser
+Source, which has the Linux shape and, with no engine here, says so.
 
-- Every `mod platform;` without a macOS arm — `preview`, `display_capture`,
-  `window_capture` — compiles on Windows and Linux only, and `output` has an
-  `unsupported.rs` holding what the engine calls of a backend's output half.
-- `backend/unsupported.rs` matches what the engine calls: `Layer::set_opacity`
-  and `latest_frame`, `RunningSource::stats`, the `preview` and `size`
-  fields, `open_source`'s `into: Target`.
-- The filter rack has an uninhabited `backend` there, and `filled_rack` is
-  only imported where it exists.
-- What goes unused without a backend is allowed to be:
-  `engine::source` as a whole, and item by item elsewhere, each under
-  `cfg_attr(not(any(target_os = "linux", target_os = "windows")), …)` — to be
-  taken back off as the macOS backend starts using them.
-- macOS takes media-pp's `rnnoise` like the other platforms.
-- The single-instance lock is `flock`, as on Linux (`instance/macos.rs`);
-  raising the running copy is not written yet.
-- `paths::show_in_file_manager` runs `open`.
-- CI builds, lints and tests it on `macos-15`, with `setup-ffmpeg` taught
-  `arm64-osx-dynamic`.
+- **The Canvas is NV12**, BT.709 at limited range, as on Linux.
+- **The Preview** (`preview/macos.rs`) is handed each frame by `media-pp`'s
+  `MetalRenderer` as Metal textures over its `IOSurface`, made on wgpu's own
+  device; their planes are copied with a Metal blit on wgpu's own queue into
+  the two textures `nv12`'s resolve pass reads, and resolved as on Linux.
+  Nothing goes through system memory. wgpu is pinned to Metal in `main.rs`.
+  The planes are written through wgpu once when they are made: wgpu clears a
+  texture it has never seen written before the first pass that reads it, and
+  it does not see a Metal blit.
+- **Recording** (`output/macos.rs`) is VideoToolbox (`RecordingEncoder::VideoToolbox`,
+  new), fed the compositor's NV12 as it is, or a software encoder after a
+  download; a smaller file is scaled with `MetalScaler`. Screenshots are the
+  Linux twin's.
+- Checked on a Mac: a Color, a Text and a looping media file composited and
+  shown at 60 fps; recordings through VideoToolbox (with NVENC stored and
+  falling back to it) and OpenH264, 1920x1080 at 60, BT.709 tagged; a
+  screenshot. The Preview has a test that reads back what it resolved, the
+  caption test has a Metal twin, and the media file tests — seeking, speed,
+  playing backwards, looping — run here too.
+
+Not yet: the display, window and camera captures and what the user picks
+them from (`src/capture`), the mixer's devices, disk space, resource usage,
+global hotkeys, raising the running copy, the browser engine and packaging.
+
+What step 1 did, before there was a backend: every `mod platform;` without a
+macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
+single-instance lock is `flock` (`instance/macos.rs`), `show_in_file_manager`
+runs `open`, and CI builds, lints and tests on `macos-15` with `setup-ffmpeg`
+taught `arm64-osx-dynamic`.
 
 ## Setting up
 
@@ -220,8 +236,7 @@ stored shapes.
 2. `src/capture/macos.rs` enumeration, disk space, raising the running
    copy — small, and independent of media-pp.
 3. With media-pp's Core Audio pieces: the mixer's devices.
-4. The Metal backend, straight away rather than a software one first, since
-   media-pp has it all now: ScreenCaptureKit and camera capture as
-   VideoToolbox frames, `MetalVideoCompositor`, the `IOSurface` Preview, and
-   VideoToolbox recording.
+4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
+   recording.~~ Done. Then its captures: ScreenCaptureKit and the camera as
+   VideoToolbox frames.
 5. Hotkeys, resource usage, and the browser engine; then packaging.

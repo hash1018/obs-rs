@@ -44,15 +44,15 @@ mod engine;
 // What a Browser Source is built from, which only a platform with a
 // compositor backend opens.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows")),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     allow(unused_imports)
 )]
 pub use engine::{
     AUDIO_CHANNELS, AUDIO_RATE, Heard, Held, NamedKey, OnAudio, Page, PageInput, PageOptions,
     Pressed, Runtime, helper_process, open_page,
 };
-// Named only by the Linux Source, whose paint callback has to spell out the
-// picture's lifetime; the Windows one never names it, and an export nothing
-// reads is a warning there.
-#[cfg(target_os = "linux")]
+// Named only by the Linux Source — which macOS shares — whose paint callback
+// has to spell out the picture's lifetime; the Windows one never names it,
+// and an export nothing reads is a warning there.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use engine::Painted;

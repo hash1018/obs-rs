@@ -340,9 +340,10 @@ differently: a screen capture comes through system memory, and the Preview is
 a readback.
 Windows uses D3D11 and has neither.
 
-**macOS builds and starts, and composites nothing yet**: the window, the
-project and the settings work, and there is no Preview, capture or recording
-until its backend is written — see `docs/macos.md`. FFmpeg for it is set up as
+**macOS composites on Metal**, over VideoToolbox frames, and records with
+VideoToolbox: Color, Text, Image, Drawing, media file, stream and Scene
+Sources work, and the display, window and camera captures are not written
+yet — see `docs/macos.md`. FFmpeg for it is set up as
 [media-pp's macOS notes](https://github.com/hash1018/media-pp/blob/main/docs/building/macos.md)
 describe; the browser engine is Windows and Linux only, so build it with
 `--no-default-features`.

@@ -14,7 +14,7 @@
 // share, and each kind's own helpers, go unused there — it is the platform
 // `open` functions that call them. Taken back off as a backend arrives.
 #![cfg_attr(
-    not(any(target_os = "linux", target_os = "windows")),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     allow(dead_code, unused_imports)
 )]
 
@@ -119,7 +119,7 @@ pub(in crate::engine) fn filled_rack(
 /// The same, on Linux's GPU, CUDA or Vulkan. Neither platform takes a
 /// size: every filter is per pixel and the bridge in front of them follows
 /// the frames.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in crate::engine) fn filled_rack(
     name: &str,
     gpu: &crate::engine::backend::Gpu,
@@ -375,7 +375,10 @@ pub(in crate::engine) struct MediaMeters {
 }
 
 /// The name a SceneItem's compositor input is registered under.
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub(in crate::engine) fn input_name(item: &SceneItemSnapshot) -> String {
     format!("scene-item-{}", item.id.0)
 }
