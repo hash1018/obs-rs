@@ -69,8 +69,16 @@ Source, which has the Linux shape and, with no engine here, says so.
   fps. The registry's tests are the Windows display's, on the main display;
   they need screen recording and skip without it.
 
-Not yet: the mixer's devices, disk space, resource usage, global hotkeys,
-raising the running copy, the browser engine and packaging.
+- **Audio** (`engine/audio/device.rs`, `capture/macos.rs`): the mixer's
+  inputs and outputs are Core Audio's — an output captured through a process
+  tap on it, as WASAPI loops back a render endpoint — and an application's
+  sound through a tap on that process (macOS 14.2 and newer). Monitoring
+  plays through `CoreAudioRenderer`. Devices are stored by their UID, and
+  watched for by a poll, as on Linux. Checked on a Mac: both default
+  channels open, and a recording made while a sound played carries it.
+
+Not yet: disk space, resource usage, global hotkeys, raising the running
+copy, the browser engine and packaging.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -181,9 +189,6 @@ Done — see *Where macOS stands*. The existing
 
 ## The rest, piece by piece
 
-- **Audio** (`engine/audio/device.rs`): `open_capture` and `open_renderer`
-  fall back to an error on macOS, so the mixer runs with no device. Needs
-  media-pp's Core Audio capture and renderer.
 - **Recording encoders** (`settings.rs:490-548`): `RecordingEncoder` has no
   VideoToolbox entry. Adding one touches `ALL`, `label`, and
   `software_codec`'s exhaustive match in `backend/mod.rs:127-137`.
@@ -246,7 +251,7 @@ Done — see *Where macOS stands*. The existing
    keeps it building.~~ Done — see *Where macOS stands*.
 2. Disk space and raising the running copy — small, and independent of
    media-pp. (`src/capture/macos.rs` is done.)
-3. With media-pp's Core Audio pieces: the mixer's devices.
+3. ~~With media-pp's Core Audio pieces: the mixer's devices.~~ Done.
 4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
    recording, and its captures.~~ Done.
 5. Hotkeys, resource usage, and the browser engine; then packaging.

@@ -230,7 +230,14 @@ pollster = "1"
 # buffers, and the Metal compositor, filters and VideoToolbox encoder take them.
 [target.'cfg(target_os = "macos")'.dependencies.media-pp]
 version = "0.3"
-features = ["metal", "rnnoise", "screencapturekit-capture", "avfoundation-capture"]
+features = [
+    "metal",
+    "rnnoise",
+    "screencapturekit-capture",
+    "avfoundation-capture",
+    "coreaudio-capture",
+    "coreaudio-renderer",
+]
 
 # media-pp from its repository rather than crates.io, for what is not
 # released yet: the Vulkan backend the Linux build chooses where there is no

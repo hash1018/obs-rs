@@ -1,8 +1,9 @@
 //! Which endpoint a source opens, and opening it.
 //!
 //! The only part of the audio graph that is different on each platform, and
-//! the difference is confined to one function with three bodies: WASAPI on
-//! Windows, PipeWire on Linux, and a refusal anywhere else.
+//! the difference is confined to one function with four bodies: WASAPI on
+//! Windows, PipeWire on Linux, Core Audio on macOS, and a refusal anywhere
+//! else.
 //!
 //! # Falling back rather than failing
 //!
@@ -161,7 +162,56 @@ pub(super) fn open_capture(
     )?)
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub(super) fn open_capture(
+    name: &str,
+    kind: AudioSourceKind,
+    device: Option<&str>,
+    processes: &[AudioProcessTarget],
+) -> Result<
+    (
+        media_pp::elements::CoreAudioCaptureSource,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
+    use media_pp::elements::{
+        CoreAudioCaptureOptions, CoreAudioCaptureSource, CoreAudioDevice, CoreAudioDeviceKind,
+    };
+
+    let wanted = match kind {
+        // What an output plays is captured through a Core Audio process
+        // tap on it, as WASAPI loops back a render endpoint.
+        AudioSourceKind::Output => CoreAudioDeviceKind::Output,
+        AudioSourceKind::Input => CoreAudioDeviceKind::Input,
+        // A process, by the executable the channel stored — see the
+        // Windows half.
+        AudioSourceKind::Application => {
+            let executable = device.ok_or("no application has been chosen for this channel")?;
+            let process = find(processes, executable)
+                .ok_or_else(|| format!("{executable} is not running"))?;
+            return Ok(CoreAudioCaptureSource::open_process(name, process.id)?);
+        }
+    };
+    // By the device's UID, which survives a replug and a restart where its
+    // object id does not — see `capture::AudioDeviceTarget::id`.
+    let devices: Vec<CoreAudioDevice> = CoreAudioCaptureSource::list_devices()?
+        .into_iter()
+        .filter(|device| device.kind == wanted)
+        .collect();
+    let device = pick(
+        devices,
+        device,
+        |device| &device.uid,
+        |device| device.is_default,
+    )?;
+    Ok(CoreAudioCaptureSource::open(
+        name,
+        CoreAudioCaptureOptions { device },
+    )?)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub(super) fn open_capture(
     _name: &str,
     _kind: AudioSourceKind,
@@ -235,7 +285,30 @@ pub(super) fn open_renderer(
     )?)
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub(super) fn open_renderer(
+    name: &str,
+    device: &str,
+) -> Result<
+    (
+        media_pp::elements::CoreAudioRenderer,
+        media_pp::elements::AudioFormat,
+    ),
+    BackendError,
+> {
+    use media_pp::elements::{CoreAudioRenderer, CoreAudioRendererOptions};
+
+    let device = CoreAudioRenderer::list_devices()?
+        .into_iter()
+        .find(|candidate| candidate.uid == device)
+        .ok_or("the monitoring device is not there any more")?;
+    Ok(CoreAudioRenderer::open(
+        name,
+        CoreAudioRendererOptions { device },
+    )?)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub(super) fn open_renderer(
     _name: &str,
     _device: &str,
@@ -255,7 +328,7 @@ pub(super) fn open_renderer(
 /// Falling back rather than failing: a device that was unplugged should leave
 /// the source working on whatever replaced it, which is what somebody who
 /// never opened the picker would already have.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 fn pick<T>(
     devices: Vec<T>,
     stored: Option<&str>,

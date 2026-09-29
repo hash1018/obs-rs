@@ -11,7 +11,8 @@
 //! and a display's is the `CGDirectDisplayID` it captures by, so what is
 //! listed here is what the captures open.
 //!
-//! Cameras are read through `media-pp`, as on the other platforms.
+//! Cameras and audio devices are read through `media-pp`, as on the other
+//! platforms.
 
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect,
@@ -23,7 +24,15 @@ use objc2_core_graphics::{
     kCGWindowName, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
 };
 
-use super::{MonitorRect, MonitorTarget, VideoCaptureTarget, WindowTarget};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use super::{
+    AudioDeviceTarget, AudioProcessTarget, MonitorRect, MonitorTarget, VideoCaptureTarget,
+    WindowTarget,
+};
+use crate::domain::AudioSourceKind;
 
 /// More displays than a Mac can drive at once.
 const MAX_DISPLAYS: u32 = 32;
@@ -212,6 +221,128 @@ pub fn video_capture_modes(device: &str) -> Vec<crate::domain::VideoCaptureMode>
             framerate_denominator: format.frame_rate.denominator().max(1) as u32,
         })
         .collect()
+}
+
+/// Every audio device there is to capture — see
+/// [`crate::capture::audio_devices`] — read through `media-pp`.
+///
+/// An output is listed as something to capture the playback of, through a
+/// Core Audio process tap, as a Windows render endpoint is through loopback.
+/// What is stored is the device's UID, which survives a replug and a
+/// restart where its object id does not.
+pub fn audio_devices() -> Vec<AudioDeviceTarget> {
+    use media_pp::elements::{CoreAudioCaptureSource, CoreAudioDeviceKind};
+
+    match CoreAudioCaptureSource::list_devices() {
+        Ok(devices) => devices
+            .into_iter()
+            .map(|device| AudioDeviceTarget {
+                id: device.uid,
+                name: device.name,
+                kind: match device.kind {
+                    CoreAudioDeviceKind::Output => AudioSourceKind::Output,
+                    CoreAudioDeviceKind::Input => AudioSourceKind::Input,
+                },
+                is_default: device.is_default,
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!("could not list audio devices: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Every application Core Audio has as a client — one that has played or
+/// recorded sound since it started — see [`crate::capture::audio_processes`].
+///
+/// Not this application, whose own monitoring output a capture of it would
+/// only play back, and not one that would not give its name, which is what a
+/// channel stores and looks it up by again.
+pub fn audio_processes() -> Vec<AudioProcessTarget> {
+    let processes = match media_pp::elements::CoreAudioCaptureSource::list_processes() {
+        Ok(processes) => processes,
+        Err(error) => {
+            tracing::warn!("could not list the applications playing audio: {error}");
+            return Vec::new();
+        }
+    };
+    let own = std::process::id();
+    processes
+        .into_iter()
+        .filter(|process| process.id != own && !process.executable.is_empty())
+        .map(|process| AudioProcessTarget {
+            id: process.id,
+            executable: process.executable,
+        })
+        .collect()
+}
+
+/// Watches for audio devices appearing or going, calling `on_change` each
+/// time the set is not what it was.
+///
+/// A poll, as on Linux, and for the reason that half gives: Core Audio does
+/// publish property listeners, but reaching them means registering a block
+/// on the HAL's own run loop, where re-enumerating every couple of seconds
+/// answers the only question asked of it.
+pub fn watch_audio_devices(on_change: impl Fn() + Send + 'static) -> Option<AudioDeviceWatch> {
+    // A channel rather than a flag and a sleep: dropping the sender wakes
+    // the thread out of its wait at once — see the Linux twin.
+    let (stop, stopped) = mpsc::channel::<()>();
+    let worker = thread::Builder::new()
+        .name("audio-devices".to_owned())
+        .spawn(move || {
+            let mut known = device_identity();
+            while matches!(
+                stopped.recv_timeout(POLL_INTERVAL),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                let current = device_identity();
+                if current != known {
+                    known = current;
+                    on_change();
+                }
+            }
+        })
+        .inspect_err(|error| tracing::warn!("could not watch audio devices: {error}"))
+        .ok()?;
+    Some(AudioDeviceWatch {
+        stop: Some(stop),
+        worker: Some(worker),
+    })
+}
+
+/// How long a device can be plugged in before the mixer notices — the
+/// Linux twin's two seconds.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// What the poll compares: UIDs and which is default, in enumeration order,
+/// so a name changing does not read as a device arriving.
+fn device_identity() -> Vec<(String, bool)> {
+    audio_devices()
+        .into_iter()
+        .map(|device| (device.id, device.is_default))
+        .collect()
+}
+
+/// What holds a device watch open — see [`watch_audio_devices`].
+pub struct AudioDeviceWatch {
+    /// `Option` so `Drop` can take it. Nothing is sent on it; dropping it is
+    /// the signal.
+    stop: Option<mpsc::Sender<()>>,
+    /// `Option` for the same reason: `Drop` has to take the handle to join.
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for AudioDeviceWatch {
+    fn drop(&mut self) {
+        // The sender first, or the join waits for a thread waiting for it —
+        // see the Linux twin.
+        self.stop = None;
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 #[cfg(test)]

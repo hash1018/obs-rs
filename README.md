@@ -343,8 +343,8 @@ Windows uses D3D11 and has neither.
 **macOS composites on Metal**, over VideoToolbox frames, and records with
 VideoToolbox: every Source works but the Browser — the display, window and
 camera captures through ScreenCaptureKit and AVFoundation among them, which
-need the screen-recording and camera permissions — while the mixer's
-devices are not written yet; see `docs/macos.md`. FFmpeg for it is set up as
+need the screen-recording and camera permissions — and the mixer records
+Core Audio's inputs, outputs and applications; see `docs/macos.md`. FFmpeg for it is set up as
 [media-pp's macOS notes](https://github.com/hash1018/media-pp/blob/main/docs/building/macos.md)
 describe; the browser engine is Windows and Linux only, so build it with
 `--no-default-features`.

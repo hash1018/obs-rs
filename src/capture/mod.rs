@@ -136,7 +136,11 @@ pub fn audio_devices() -> Vec<AudioDeviceTarget> {
     {
         linux::audio_devices()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::audio_devices()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -158,11 +162,13 @@ pub struct AudioProcessTarget {
 /// Whether this platform can capture one application at all — what decides
 /// whether the mixer offers a channel that does.
 ///
-/// Windows has process loopback, and PipeWire has the application's own
-/// playback stream to link a capture to. Anywhere else the dock stays as it
-/// was rather than offering a channel that could never open.
+/// Windows has process loopback, PipeWire has the application's own playback
+/// stream to link a capture to, and macOS a Core Audio process tap — from
+/// macOS 14.2; on an earlier one, opening such a channel says it cannot.
+/// Anywhere else the dock stays as it was rather than offering a channel
+/// that could never open.
 pub const fn captures_applications() -> bool {
-    cfg!(target_os = "windows") || cfg!(target_os = "linux")
+    cfg!(target_os = "windows") || cfg!(target_os = "linux") || cfg!(target_os = "macos")
 }
 
 /// Every application this platform can capture the sound of on its own.
@@ -185,7 +191,11 @@ pub fn audio_processes() -> Vec<AudioProcessTarget> {
     {
         linux::audio_processes()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::audio_processes()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -401,7 +411,11 @@ pub fn watch_audio_devices(
     {
         linux::watch_audio_devices(on_change)
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::watch_audio_devices(on_change)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = on_change;
         None
@@ -417,7 +431,9 @@ pub fn watch_audio_devices(
 pub type AudioDeviceWatch = windows::AudioDeviceWatch;
 #[cfg(target_os = "linux")]
 pub type AudioDeviceWatch = linux::AudioDeviceWatch;
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub type AudioDeviceWatch = macos::AudioDeviceWatch;
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub struct AudioDeviceWatch;
 
 /// Where this session's displays are, for deciding whether a remembered
