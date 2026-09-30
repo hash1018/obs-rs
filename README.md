@@ -297,6 +297,22 @@ installed entry instead. Moving the folder afterwards breaks the entry, since
 it records where the executable is; run the script again, or
 `--uninstall` to remove it.
 
+**macOS**
+
+- A Mac with Apple silicon, on macOS 12.3 or newer; capturing what other
+  applications play needs 14.2.
+- Move `obs-rs.app` to Applications, or run it where it is. It carries its
+  own FFmpeg.
+- The app is signed ad hoc rather than by a registered developer, so the
+  first time macOS says it cannot check it for malicious software. Open
+  **System Settings → Privacy & Security** and choose *Open Anyway* beside
+  obs-rs, once.
+- macOS asks for each permission the first time it is needed, under
+  obs-rs's own name: screen recording for a Display or Window Capture, the
+  camera, the microphone, and Input Monitoring for a hotkey that works while
+  another application has focus.
+- No Browser Source yet: the browser engine is not in the macOS build.
+
 ## Building
 
 ```bash

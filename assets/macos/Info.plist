@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The application bundle's description of itself. `make-app.sh` copies it
+  into `obs-rs.app` and writes the version in from Cargo.toml, so the
+  version here is only a placeholder.
+
+  The usage descriptions are what the system shows when it asks whether
+  obs-rs may use the camera, the microphone, and what other applications
+  play. Without one the request is refused outright rather than asked.
+  Screen recording and Input Monitoring have no such string: the system
+  words those itself. `ko.lproj/InfoPlist.strings` gives the same three in
+  Korean.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ko</string>
+	</array>
+	<key>CFBundleDisplayName</key>
+	<string>obs-rs</string>
+	<key>CFBundleName</key>
+	<string>obs-rs</string>
+	<key>CFBundleExecutable</key>
+	<string>obs-rs</string>
+	<key>CFBundleIconFile</key>
+	<string>obs-rs</string>
+	<!-- `APP_ID` in main.rs. -->
+	<key>CFBundleIdentifier</key>
+	<string>io.github.hash1018.obs-rs</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.video</string>
+	<!-- ScreenCaptureKit's own floor. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>12.3</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>obs-rs shows your camera in the scenes you record and stream.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>obs-rs records and streams sound from your microphone.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>obs-rs records and streams the sound other applications play.</string>
+</dict>
+</plist>

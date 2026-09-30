@@ -320,17 +320,113 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-  # One job publishes, after both have built. Letting each platform attach its
-  # own archive would have them racing: two concurrent jobs that each find no
-  # release for this tag can each create one, and the tag ends up with two
-  # drafts holding one archive apiece.
+  # An `.app`, zipped with the licences beside it rather than inside: a file
+  # added to a signed bundle after signing breaks its signature.
   #
-  # A `workflow_dispatch` run stops before this. It builds both archives and
+  # What it can and cannot promise:
+  #
+  # - Apple silicon only, as every Mac this build is for — see docs/macos.md.
+  # - Signed ad hoc, not by a developer, and not notarized: that needs a paid
+  #   Apple Developer account. Gatekeeper asks about a downloaded copy the
+  #   first time; the README says how to let it open.
+  # - No browser engine. CEF on macOS is a bundle of its own, with helper
+  #   applications, which this does not build yet; a Browser Source says so
+  #   rather than showing a page.
+  # - Nothing here has run it, as with the Linux archive: the checks below
+  #   confirm the bundle is complete and self-contained, not that it works.
+  macos:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # The CI workflow's macOS FFmpeg: the port's defaults, which include
+      # VideoToolbox and AudioToolbox, and OpenH264.
+      - name: Set up FFmpeg
+        uses: ./.github/actions/setup-ffmpeg
+        with:
+          vcpkg-features: openh264
+
+      - name: Cache downloaded crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # `make-app.sh` copies FFmpeg in, points every library at the bundle's
+      # own, signs it, and fails if anything still points outside — see the
+      # script. It is also how a bundle is made on a Mac of one's own.
+      - name: Stage the archive
+        run: |
+          set -euo pipefail
+          stage="dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-arm64-macos"
+          mkdir -p "$stage/licenses"
+          assets/macos/make-app.sh target/release/obs-rs "$stage/obs-rs.app"
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md README.md "$stage"
+          find "$FFMPEG_DIR/share" -name copyright -print0 |
+            while IFS= read -r -d '' file; do
+              cp "$file" "$stage/licenses/$(basename "$(dirname "$file")").txt"
+            done
+          find "$stage" -type f -exec ls -l {} +
+
+      - name: Check the archive is complete
+        run: |
+          set -euo pipefail
+          stage="dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-arm64-macos"
+          app="$stage/obs-rs.app"
+          compgen -G "$app/Contents/Frameworks/libavcodec*.dylib" > /dev/null \
+            || { echo "no FFmpeg libraries in the bundle" >&2; exit 1; }
+          compgen -G "$stage/licenses/*.txt" > /dev/null \
+            || { echo "no bundled licences in the archive" >&2; exit 1; }
+          [ -f "$app/Contents/Resources/obs-rs.icns" ] \
+            || { echo "no icon in the bundle" >&2; exit 1; }
+          # Without a usage description the system refuses the camera or
+          # the microphone outright rather than asking.
+          for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            plutil -extract "$key" raw "$app/Contents/Info.plist" > /dev/null \
+              || { echo "no $key in Info.plist" >&2; exit 1; }
+          done
+          codesign --verify --deep --strict "$app"
+
+      # `ditto` rather than `zip`: it keeps the bundle's symlinks, modes and
+      # extended attributes as Finder's own compression does, and a signed
+      # bundle unpacked without them no longer verifies.
+      - name: Pack
+        run: |
+          set -euo pipefail
+          stage="dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-arm64-macos"
+          ditto -c -k --keepParent "$stage" "$stage.zip"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-rs-arm64-macos
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # One job publishes, after every platform has built. Letting each attach
+  # its own archive would have them racing: concurrent jobs that each find no
+  # release for this tag can each create one, and the tag ends up with
+  # several drafts holding one archive apiece.
+  #
+  # A `workflow_dispatch` run stops before this. It builds every archive and
   # leaves them as artifacts, publishing nothing — which is how the workflow
   # gets tried without cutting a tag.
   publish:
     if: github.ref_type == 'tag'
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-26.04
     steps:
       # For `docs/release-notes/`, which is where the body below comes from.

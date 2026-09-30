@@ -1,0 +1,4 @@
+/* What the system shows, in Korean, when obs-rs asks for each — see Info.plist. */
+NSCameraUsageDescription = "obs-rs가 녹화하고 방송하는 장면에 카메라를 보여 줍니다.";
+NSMicrophoneUsageDescription = "obs-rs가 마이크 소리를 녹음하고 방송합니다.";
+NSAudioCaptureUsageDescription = "obs-rs가 다른 앱에서 재생되는 소리를 녹음하고 방송합니다.";

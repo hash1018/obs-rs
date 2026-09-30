@@ -103,8 +103,27 @@ Source, which has the Linux shape and, with no engine here, says so.
   has focus. Key codes are places on the keyboard, named for the US
   layout's letters. Checked on a Mac: a screenshot key taken with Finder in
   front, once allowed.
+- **Packaging** (`assets/macos/`): `make-app.sh` makes `obs-rs.app` from a
+  built executable — `Info.plist` with the bundle identifier, Cargo.toml's
+  version and the camera, microphone and audio-capture usage strings (in
+  Korean too, `ko.lproj`), an icon made from `obs-rs.png`, and every
+  library the executable loads that is not the system's copied into
+  `Contents/Frameworks`, found by following load commands. Each is renamed
+  `@rpath/...`, every search path that named the build machine is taken
+  out — left in, a library would load from there on the machine that
+  built it — and the bundle is signed ad hoc. `release.yml` runs it and
+  zips the bundle with the licences beside it. Checked on a Mac: every
+  FFmpeg library, openh264 included, loads from inside the bundle.
 
-Not yet: the browser engine and packaging.
+  Worth running locally too: a permission belongs to the application that
+  asked, and from a terminal that is the terminal. An ad-hoc signature
+  identifies a build by its hash, so the system asks again for each new
+  build of the bundle. The minimum version in `Info.plist` is
+  ScreenCaptureKit's, 12.3; only macOS 26 has run it.
+
+Not yet: the browser engine, and notarization, which needs a paid Apple
+Developer account — until then Gatekeeper asks about a downloaded copy
+once.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -135,7 +154,8 @@ The machine setup is in media-pp's `docs/building/macos.md`. For this repository
   from a terminal, the grant goes to the terminal (or the editor that
   started it), and a capture that was refused hands over black frames or
   nothing rather than an error — check the setting before debugging the
-  code. A signed `.app` with its own identity comes later (see Packaging).
+  code. Run as a bundle (`assets/macos/make-app.sh`), the grant is
+  obs-rs's own — see *Packaging* above.
 - **The data directory** is `~/Library/Application Support/obs-rs`, and
   recordings go to `~/Movies`, as `src/paths.rs` already says. Unlike Linux
   there is no `XDG_*` variable to point a test run elsewhere, so a test run
@@ -230,22 +250,6 @@ Done — see *Where macOS stands*. The existing
   `/System/Library/Fonts/AppleSDGothicNeo.ttc`, which is also the Text
   Source's default.
 
-## Packaging, later
-
-- An `.app` bundle with an `Info.plist` naming the bundle identifier and the
-  usage strings the system shows when asking for permission
-  (`NSCameraUsageDescription`, `NSMicrophoneUsageDescription`), so the
-  permissions belong to obs-rs rather than to a terminal.
-- FFmpeg inside the bundle, with the dylibs' install names rewritten to
-  `@rpath` or `@executable_path` — the counterpart of the Linux archive's
-  `$ORIGIN/lib`.
-- Signing and notarization, without which Gatekeeper refuses a downloaded
-  app. That needs a paid Apple Developer account; an ad-hoc signature is
-  enough on the machine that built it.
-- A macOS job in `release.yml`, and the `setup-ffmpeg` action taught an
-  `arm64-osx-dynamic` triplet with the same LGPL feature set the other
-  archives ship.
-
 ## A suggested order
 
 1. ~~Build on macOS with the unsupported backend, and a macOS CI job that
@@ -256,4 +260,5 @@ Done — see *Where macOS stands*. The existing
 4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
    recording, and its captures.~~ Done.
 5. ~~Resource usage and global hotkeys.~~ Done.
-6. The browser engine; then packaging.
+6. ~~Packaging.~~ Done, signed ad hoc.
+7. A native menu bar, then the browser engine.

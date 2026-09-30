@@ -27,7 +27,9 @@ way:
   On Linux `vulkan` is added too, for the Vulkan backend a machine without
   NVIDIA's driver composites on: it adds the Khronos Vulkan headers,
   Apache-2.0 and MIT, and FFmpeg opens the system's Vulkan loader at run
-  time.
+  time. On macOS `nvcodec` is left out — there is nothing NVIDIA on a Mac —
+  and the port's defaults already build against Apple's VideoToolbox and
+  AudioToolbox, which are the system's.
 - **One configure flag of our own, on Linux.** The Linux build adds
   `--enable-cuda-llvm` to what the port's `nvcodec` feature passes, so that
   FFmpeg's CUDA filters are built — the Linux compositor scales every layer
@@ -36,7 +38,11 @@ way:
   `--enable-nonfree` and would make the libraries undistributable.
 - **Dynamic linking only.** obs-rs loads these as DLLs or shared objects and
   never links them statically, which is what keeps the LGPL's relinking
-  requirement satisfiable.
+  requirement satisfiable. On macOS they sit in the bundle's
+  `Contents/Frameworks`, where their install names are rewritten to
+  `@rpath/...` so the bundle finds its own copies; replacing one is still
+  replacing a file, and re-signing the bundle ad hoc
+  (`codesign --force --sign - obs-rs.app`) afterwards.
 
 ### Where the source is
 
@@ -48,8 +54,8 @@ release and names an immutable vcpkg tag:
 |---|---|
 | FFmpeg version | 8.0.1 |
 | vcpkg tag | `2026.01.16` |
-| port | `ffmpeg[openh264,nvcodec]` (with its default features), and `vulkan` on Linux |
-| triplet | `x64-windows`, `x64-linux-dynamic` |
+| port | `ffmpeg[openh264,nvcodec]` (with its default features), and `vulkan` on Linux; `ffmpeg[openh264]` on macOS |
+| triplet | `x64-windows`, `x64-linux-dynamic`, `arm64-osx-dynamic` |
 | Linux only | `--enable-cuda-llvm` added to the port's `nvcodec` options |
 
 Building `microsoft/vcpkg` at that tag with those options reproduces the
@@ -67,7 +73,7 @@ hand-maintained second copy could fall out of step with them.
 
 ## The browser engine
 
-Both archives carry Chromium, through the Chromium Embedded Framework:
+The Windows and Linux archives carry Chromium, through the Chromium Embedded Framework:
 `libcef.dll` on Windows and `libcef.so` on Linux, and the data it reads — the
 resource and locale packs, the ICU table, the V8 snapshot, and the graphics
 libraries it falls back through. A Browser Source is what it is for, and the
@@ -79,7 +85,8 @@ CEF itself is BSD-3-Clause and Chromium is BSD-3-Clause with a long list of
 its own third-party components under their own permissive terms. The binary
 distribution states all of it in `CREDITS.html`, which the archive carries as
 `licenses/chromium-credits.html` rather than being summarised here — the same
-reasoning as vcpkg's copyright files above.
+reasoning as vcpkg's copyright files above. The macOS archive has no browser
+engine yet, and carries none of this.
 
 Built from source, this comes from the [`cef`](https://crates.io/crates/cef)
 crate, whose build script downloads the matching CEF binary distribution. A
