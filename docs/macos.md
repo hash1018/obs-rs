@@ -138,8 +138,12 @@ Source, which takes a page's pixels as on Linux.
   bundle's `Contents/Frameworks`, loaded at run time from the path the
   running executable implies, with Chromium's processes as helper
   applications beside it — `obs-rs Helper.app` and its `(GPU)`,
-  `(Renderer)`, `(Plugin)` and `(Alerts)` siblings, each running this
-  executable, which tells from `--type=` that it is one. CEF runs on the
+  `(Renderer)`, `(Plugin)` and `(Alerts)` siblings, each running
+  `obs-rs-helper` (`src/bin/obs-rs-helper.rs`): the framework loaded and
+  CEF's `execute_process` called with the switches obs-rs starts Chromium
+  with (`browser/page_app.rs`), 474 KB where obs-rs is 24 MB — which took
+  the release bundle from 474 MB to 363 MB, nearly all of it the framework
+  now. CEF runs on the
   main thread, as a Mac requires: it is initialized once winit has made the
   application object (`browser::start_on_main_thread`), after giving that
   object a subclass that answers `CrAppControlProtocol` — winit insists on
@@ -156,11 +160,11 @@ Source, which takes a page's pixels as on Linux.
   which makes `target/<profile>/obs-rs.app` with `make-app.sh --dev` — the
   executable cloned in, the framework copied once and kept, FFmpeg left
   where the build found it; a fraction of a second after the first — and
-  runs the executable inside it, as this terminal's child. The release
-  bundle's helpers are copies of the executable, whose library search path
-  is rewritten for where they are. Checked on a Mac: a page drawn into the
-  Preview at 60 fps from a development bundle, and a release bundle's
-  helpers running with none crashing.
+  runs the executable inside it, as this terminal's child. Its helpers run
+  obs-rs itself, which is a helper too when Chromium starts it as one, and
+  is what `cargo run` has just built; each is a clone, never a hard link —
+  see `make-app.sh` for what a link broke. Checked on a Mac: a page drawn
+  into the Preview from a development bundle and from a release bundle.
 
 Not yet: notarization, which needs a paid Apple Developer account — until
 then Gatekeeper asks about a downloaded copy once.

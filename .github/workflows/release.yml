@@ -330,9 +330,8 @@ jobs:
   #   Apple Developer account. Gatekeeper asks about a downloaded copy the
   #   first time; the README says how to let it open.
   # - The browser engine is CEF's framework inside the bundle, with the
-  #   helper applications Chromium runs its processes as — each a copy of
-  #   the executable, since a helper is a bundle of its own and a bundle's
-  #   executable cannot be a link.
+  #   helper applications Chromium runs its processes as, each running
+  #   `obs-rs-helper` — built beside obs-rs by the same `cargo build`.
   # - Nothing here has run it, as with the Linux archive: the checks below
   #   confirm the bundle is complete and self-contained, not that it works.
   macos:
@@ -419,6 +418,11 @@ jobs:
             || { echo "no browser engine helpers in the bundle" >&2; exit 1; }
           [ -f "$stage/licenses/chromium-credits.html" ] \
             || { echo "no browser engine licence in the archive" >&2; exit 1; }
+          # The helpers run `obs-rs-helper`, not a copy of all of obs-rs —
+          # five of which is what the bundle carried before it existed.
+          ! cmp -s "$app/Contents/MacOS/obs-rs" \
+            "$app/Contents/Frameworks/obs-rs Helper.app/Contents/MacOS/obs-rs Helper" \
+            || { echo "the helpers are copies of obs-rs; obs-rs-helper was not built" >&2; exit 1; }
           # Without a usage description the system refuses the camera or
           # the microphone outright rather than asking.
           for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do

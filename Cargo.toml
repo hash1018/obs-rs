@@ -7,6 +7,8 @@ license = "MIT OR Apache-2.0"
 # Read at compile time for the About box, so the address shown is the one
 # this crate publishes rather than a second copy to keep in step.
 repository = "https://github.com/hash1018/obs-rs"
+# `cargo run` means the application; the other binary is its browser helper.
+default-run = "obs-rs"
 
 [features]
 default = ["browser"]
@@ -15,8 +17,16 @@ default = ["browser"]
 # `cef` fetches Chromium's binary distribution, a few hundred megabytes of
 # it, and copies the runtime beside the executable. Someone building only to
 # work on the compositor can turn that off with `--no-default-features`.
-# Windows and Linux; on every other platform this enables nothing.
+# Windows, Linux and macOS; on every other platform this enables nothing.
 browser = ["dep:cef"]
+
+# The browser engine's helper executable inside a macOS bundle — see its own
+# docs. Built everywhere the engine is, since Cargo has no per-target binary,
+# and does nothing but on a Mac.
+[[bin]]
+name = "obs-rs-helper"
+path = "src/bin/obs-rs-helper.rs"
+required-features = ["browser"]
 
 [dependencies]
 # Turns a font and a string into per-pixel coverage, for a Text Source. Named

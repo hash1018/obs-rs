@@ -29,9 +29,8 @@
 #   libraries by absolute path.
 # - Puts the browser engine in, where the build has one: CEF's framework in
 #   `Contents/Frameworks`, and beside it the helper applications Chromium
-#   starts its render, GPU and other processes as — each this same
-#   executable, which tells from its arguments that it is one (see
-#   `browser`). The framework is the one `cef-dll-sys` fetched into
+#   starts its render, GPU and other processes as — each running
+#   `obs-rs-helper`, built beside the executable (see its docs). The framework is the one `cef-dll-sys` fetched into
 #   `CEF_PATH`, for the version Cargo.lock names; without one the bundle has
 #   no browser engine, and says so when a Browser Source is opened.
 # - Signs every library and then the bundle, ad hoc. Rewriting a load
@@ -151,15 +150,23 @@ add_browser_engine() {
         cp -Rc "$framework" "$frameworks/" 2> /dev/null || cp -R "$framework" "$frameworks/"
         [ $dev -eq 1 ] && echo "$cef_version" > "$stamp"
     fi
-    # What each helper runs: the bundle's executable, which is also every
-    # helper — see `browser`. A copy searches the bundle's libraries from
-    # where it is, three directories further in than the original, so the
-    # copies' search path is rewritten once, here, under a name `otool` and
-    # `install_name_tool` read as a file: they take `name(member)` for a
-    # member of an archive, which is what `obs-rs Helper (GPU)` looks like.
-    # A development bundle's links still search the build's FFmpeg.
+    # What each helper runs. For a release bundle, `obs-rs-helper` — built
+    # beside the executable, a fraction of its size, and loading nothing but
+    # the framework. For a development bundle, obs-rs itself, which is a
+    # helper too when started as one and is what `cargo run` has just built;
+    # its links still search the build's FFmpeg. A release build without
+    # the helper falls back to obs-rs as well, with its search path moved
+    # three directories further in, where the copies are.
     local helper_binary=$binary
-    if [ $dev -eq 0 ]; then
+    local built_helper
+    built_helper="$(dirname "$executable")/obs-rs-helper"
+    if [ $dev -eq 0 ] && [ -x "$built_helper" ]; then
+        helper_binary=$built_helper
+    elif [ $dev -eq 0 ]; then
+        echo "no obs-rs-helper beside $executable: the helpers are copies of obs-rs" >&2
+        # `otool` and `install_name_tool` take `name(member)` for a member of
+        # an archive, which is what `obs-rs Helper (GPU)` looks like, so the
+        # copy is rewritten once, here, under a name they read as a file.
         helper_binary="$scratch/helper"
         cp "$binary" "$helper_binary"
         install_name_tool -rpath @executable_path/../Frameworks @executable_path/../../.. \
