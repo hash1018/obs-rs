@@ -13,6 +13,8 @@ use std::{
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -28,9 +30,12 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 pub enum GpuScope {
     /// This process's own share, from per-process engine counters.
     ///
-    /// Constructed by the Windows and Linux samplers; a platform with none
+    /// Constructed by the Windows, Linux and macOS samplers; a platform with none
     /// reads usage as unknown and never makes one.
-    #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "linux", target_os = "macos")),
+        allow(dead_code)
+    )]
     Process,
     /// Every process on the adapter. Used only where no per-process counter
     /// exists — NVIDIA's Linux driver exposes neither `drm-engine-*` fdinfo
@@ -103,6 +108,8 @@ impl ResourceManager {
                 let mut sampler = windows::ProcessResourceSampler::new();
                 #[cfg(target_os = "linux")]
                 let mut sampler = linux::ProcessResourceSampler::new();
+                #[cfg(target_os = "macos")]
+                let mut sampler = macos::ProcessResourceSampler::new();
 
                 while !worker_stop.load(Ordering::Acquire) {
                     thread::park_timeout(SAMPLE_INTERVAL);
@@ -112,9 +119,13 @@ impl ResourceManager {
 
                     #[cfg(target_os = "windows")]
                     let usage = sampler.sample();
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
                     let usage = sampler.sample();
-                    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+                    #[cfg(not(any(
+                        target_os = "windows",
+                        target_os = "linux",
+                        target_os = "macos"
+                    )))]
                     let usage = ResourceUsage::default();
 
                     if sender.send(usage).is_err() {
@@ -147,7 +158,10 @@ impl Drop for ResourceManager {
     }
 }
 
-#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+#[cfg(all(
+    test,
+    any(target_os = "windows", target_os = "linux", target_os = "macos")
+))]
 mod tests {
     use std::time::Instant;
 

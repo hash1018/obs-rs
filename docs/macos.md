@@ -87,9 +87,15 @@ Source, which has the Linux shape and, with no engine here, says so.
   Command and shown as a Mac shows them (`⌥⇧⌘F9`), while a settings file
   still says `Ctrl+R`, so it means the same keys on every platform
   (`hotkey.rs`).
+- **Resource usage** (`resources/macos.rs`): CPU is `getrusage` over every
+  core, as Linux reads it; memory is the physical footprint Activity
+  Monitor shows, with no committed figure beside it; the GPU is this
+  process's own, from the GPU time its driver clients have been charged in
+  the I/O Registry, where Activity Monitor reads it — the kernel's own
+  per-task GPU figure reads zero on Apple silicon. Checked on a Mac: 17% of
+  the GPU for the process while the whole device read 28%.
 
-Not yet: resource usage, global hotkeys, the browser engine and
-packaging.
+Not yet: global hotkeys, the browser engine and packaging.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -203,9 +209,6 @@ Done — see *Where macOS stands*. The existing
 - **Recording encoders** (`settings.rs:490-548`): `RecordingEncoder` has no
   VideoToolbox entry. Adding one touches `ALL`, `label`, and
   `software_codec`'s exhaustive match in `backend/mod.rs:127-137`.
-- **Resource usage** (`src/resources`): CPU, GPU and memory read blank. Needs
-  a sampler (`proc_pid_rusage` / `task_info` for the process; GPU through
-  IOKit is harder).
 - **Global hotkeys** (`hotkey/global.rs`): none on macOS. A
   `CGEventTap`-based keyboard can implement the same polling
   `tracker::Keyboard` trait Windows uses, and needs the Accessibility
@@ -250,4 +253,5 @@ Done — see *Where macOS stands*. The existing
 3. ~~With media-pp's Core Audio pieces: the mixer's devices.~~ Done.
 4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
    recording, and its captures.~~ Done.
-5. Hotkeys, resource usage, and the browser engine; then packaging.
+5. Global hotkeys and the browser engine; then packaging. (Resource usage
+   is done.)
