@@ -5,6 +5,7 @@
 # executable.
 #
 #   assets/macos/make-app.sh target/release/obs-rs dist/obs-rs.app
+#   assets/macos/make-app.sh --dev target/debug/obs-rs target/debug/obs-rs.app
 #
 # Worth running on a Mac of one's own too, not only by the release job: the
 # system gives a permission — the camera, screen recording, Input Monitoring —
@@ -26,10 +27,23 @@
 #   whatever FFmpeg was built with: vcpkg's already say `@rpath/...` and are
 #   found through the build's rpath, while one built by hand names its
 #   libraries by absolute path.
+# - Puts the browser engine in, where the build has one: CEF's framework in
+#   `Contents/Frameworks`, and beside it the helper applications Chromium
+#   starts its render, GPU and other processes as — each this same
+#   executable, which tells from its arguments that it is one (see
+#   `browser`). The framework is the one `cef-dll-sys` fetched into
+#   `CEF_PATH`, for the version Cargo.lock names; without one the bundle has
+#   no browser engine, and says so when a Browser Source is opened.
 # - Signs every library and then the bundle, ad hoc. Rewriting a load
 #   command invalidates the signature the linker gave it, and Apple silicon
 #   runs nothing unsigned. An ad-hoc signature is not a developer's:
 #   Gatekeeper still asks about a downloaded copy — see the README.
+#
+# `--dev` makes the bundle `cargo run` runs instead — see `run-app.sh` —
+# which only has to be the shape CEF needs, on this machine, fast: the
+# executable is linked in rather than copied, the framework is copied once
+# and kept, and FFmpeg stays where the build found it, so there is nothing to
+# rewrite and nothing to sign beyond what the linker signed.
 #
 # Needs only what a Mac with the Command Line Tools has: otool,
 # install_name_tool, codesign, plutil, sips and iconutil. Bash 3.2, which
@@ -37,8 +51,13 @@
 
 set -euo pipefail
 
+dev=0
+if [ "${1:-}" = "--dev" ]; then
+    dev=1
+    shift
+fi
 if [ $# -ne 2 ]; then
-    echo "usage: $0 <executable> <output.app>" >&2
+    echo "usage: $0 [--dev] <executable> <output.app>" >&2
     exit 2
 fi
 
@@ -53,14 +72,27 @@ if [ -z "$version" ]; then
     exit 1
 fi
 
-rm -rf "$app"
+if [ $dev -eq 0 ]; then
+    rm -rf "$app"
+fi
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
 contents="$app/Contents"
 frameworks="$contents/Frameworks"
 mkdir -p "$contents/MacOS" "$contents/Resources" "$frameworks"
 
+# The executable at `$2`, from `$1`: a copy of its own for a bundle that
+# leaves this machine, a second name for the same file for one that does not.
+place() {
+    if [ $dev -eq 1 ] && ln -f "$1" "$2" 2> /dev/null; then
+        return
+    fi
+    cp "$1" "$2"
+    chmod u+w "$2"
+}
+
 binary="$contents/MacOS/obs-rs"
-cp "$executable" "$binary"
-chmod u+w "$binary"
+place "$executable" "$binary"
 
 cp "$here/Info.plist" "$contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$contents/Info.plist"
@@ -70,18 +102,102 @@ cp -R "$here/ko.lproj" "$contents/Resources/"
 
 # The icon, at every size the source has pixels for. Finder draws the
 # larger ones from the 256-pixel image.
-iconset=$(mktemp -d)/obs-rs.iconset
-mkdir -p "$iconset"
-for size in 16 32 128 256; do
-    sips -z "$size" "$size" "$root/assets/obs-rs.png" \
-        --out "$iconset/icon_${size}x${size}.png" > /dev/null
-done
-for size in 16 128; do
-    double=$((size * 2))
-    cp "$iconset/icon_${double}x${double}.png" "$iconset/icon_${size}x${size}@2x.png"
-done
-iconutil -c icns "$iconset" -o "$contents/Resources/obs-rs.icns"
-rm -rf "$(dirname "$iconset")"
+make_icon() {
+    local iconset size double
+    iconset="$scratch/obs-rs.iconset"
+    mkdir -p "$iconset"
+    for size in 16 32 128 256; do
+        sips -z "$size" "$size" "$root/assets/obs-rs.png" \
+            --out "$iconset/icon_${size}x${size}.png" > /dev/null
+    done
+    for size in 16 128; do
+        double=$((size * 2))
+        cp "$iconset/icon_${double}x${double}.png" "$iconset/icon_${size}x${size}@2x.png"
+    done
+    iconutil -c icns "$iconset" -o "$contents/Resources/obs-rs.icns"
+}
+if [ $dev -eq 0 ] || [ ! -f "$contents/Resources/obs-rs.icns" ]; then
+    make_icon
+fi
+
+# The browser engine and its helper applications, where there is one.
+add_browser_engine() {
+    local cef_version framework role name helper suffix
+    cef_version=$(sed -n '/^name = "cef-dll-sys"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' "$root/Cargo.lock")
+    framework=
+    if [ -n "${CEF_PATH:-}" ] && [ -n "$cef_version" ] && [ -d "$CEF_PATH/$cef_version" ]; then
+        framework=$(find "$CEF_PATH/$cef_version" -maxdepth 2 -type d \
+            -name "Chromium Embedded Framework.framework" | head -n 1)
+    fi
+    if [ -z "$framework" ]; then
+        echo "no browser engine: no CEF $cef_version under CEF_PATH (${CEF_PATH:-unset})" >&2
+        return
+    fi
+    # Copied once for a development bundle — it is 300 MB, and the same on
+    # every build of one version — and marked with that version.
+    local stamp="$app/.cef-version"
+    if [ $dev -eq 0 ] || [ "$(cat "$stamp" 2> /dev/null)" != "$cef_version" ]; then
+        rm -rf "$frameworks/Chromium Embedded Framework.framework"
+        # A clone where the disk can make one, which costs no space.
+        cp -Rc "$framework" "$frameworks/" 2> /dev/null || cp -R "$framework" "$frameworks/"
+        [ $dev -eq 1 ] && echo "$cef_version" > "$stamp"
+    fi
+    # What each helper runs: the bundle's executable, which is also every
+    # helper — see `browser`. A copy searches the bundle's libraries from
+    # where it is, three directories further in than the original, so the
+    # copies' search path is rewritten once, here, under a name `otool` and
+    # `install_name_tool` read as a file: they take `name(member)` for a
+    # member of an archive, which is what `obs-rs Helper (GPU)` looks like.
+    # A development bundle's links still search the build's FFmpeg.
+    local helper_binary=$binary
+    if [ $dev -eq 0 ]; then
+        helper_binary="$scratch/helper"
+        cp "$binary" "$helper_binary"
+        install_name_tool -rpath @executable_path/../Frameworks @executable_path/../../.. \
+            "$helper_binary" 2> /dev/null
+    fi
+    # The names Chromium looks for, beside the framework: the executable's
+    # own name and one of these.
+    for role in "" " (GPU)" " (Renderer)" " (Plugin)" " (Alerts)"; do
+        name="obs-rs Helper$role"
+        suffix=$(echo "$role" | tr -d ' ()' | tr '[:upper:]' '[:lower:]')
+        helper="$frameworks/$name.app/Contents"
+        mkdir -p "$helper/MacOS"
+        place "$helper_binary" "$helper/MacOS/$name"
+        cat > "$helper/Info.plist" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>$name</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.hash1018.obs-rs.helper${suffix:+.$suffix}</string>
+	<key>CFBundleName</key>
+	<string>$name</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$version</string>
+	<key>CFBundleVersion</key>
+	<string>$version</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.3</string>
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>
+PLIST
+    done
+}
+
+if [ $dev -eq 1 ]; then
+    add_browser_engine
+    echo "made $app ($version, for this machine)"
+    exit 0
+fi
 
 # A file's own search path, as its load commands state it.
 rpaths_of() {
@@ -189,20 +305,34 @@ for path in "${rpaths[@]+"${rpaths[@]}"}"; do
 done
 install_name_tool -add_rpath @executable_path/../Frameworks "$binary" 2> /dev/null
 
+# After the executable is what it will be, since the helpers are copies of it.
+add_browser_engine
+
 # `--force` because the linker signed each already; codesign says it is
 # replacing that signature, which is the point, on every one.
 for library in "$frameworks"/*.dylib; do
     codesign --force --sign - "$library" 2> /dev/null
 done
+if [ -d "$frameworks/Chromium Embedded Framework.framework" ]; then
+    codesign --force --sign - "$frameworks/Chromium Embedded Framework.framework" 2> /dev/null
+    for helper in "$frameworks"/*.app; do
+        codesign --force --sign - "$helper" 2> /dev/null
+    done
+fi
 codesign --force --sign - "$app" 2> /dev/null
 codesign --verify --deep --strict "$app"
 
 # Nothing may still point outside the bundle, by name or by search path:
 # that is a library that works on this machine and nowhere else — or worse,
 # works here from a copy the bundle does not carry.
-for file in "$binary" "$frameworks"/*.dylib; do
-    outside=$( (otool -L "$file" | tail -n +2 | awk '{ print $1 }'; rpaths_of "$file") |
-        grep -v -e '^/System/' -e '^/usr/lib/' -e '^@rpath/' -e '^@executable_path/../Frameworks$' ||
+for file in "$binary" "$frameworks"/*.dylib "$frameworks"/*.app/Contents/MacOS/*; do
+    [ -e "$file" ] || continue
+    # Through a name without parentheses — see the helpers above.
+    ln -sf "$file" "$scratch/inspected"
+    outside=$( (otool -L "$scratch/inspected" | tail -n +2 | awk '{ print $1 }'
+        rpaths_of "$scratch/inspected") |
+        grep -v -e '^/System/' -e '^/usr/lib/' -e '^@rpath/' \
+            -e '^@executable_path/../Frameworks$' -e '^@executable_path/../../..$' ||
         true)
     if [ -n "$outside" ]; then
         echo "$file still loads from outside the bundle:" >&2

@@ -95,7 +95,7 @@ winresource = "0.1"
 # the libcef it fetched, where Windows compiles CEF's C++ wrapper with CMake
 # and Ninja — and a page is drawn on the CPU rather than handed over as a
 # texture: see `browser`.
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 cef = { version = "152.3", optional = true, default-features = false, features = [
     # Puts libcef and its resources beside the executable, which is what a
     # build here has to run against and the first half of what a package
@@ -216,8 +216,10 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
     "std",
     "CFArray",
     "CFCGTypes",
+    "CFDate",
     "CFDictionary",
     "CFNumber",
+    "CFRunLoop",
     "CFString",
 ] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = [

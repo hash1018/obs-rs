@@ -52,11 +52,11 @@ bottom.](docs/screenshot.png)
   back and tried again on its own, at an interval you choose, or left alone
   entirely if you turn that off. TCP or UDP, because no one transport gets
   through every network.
-- **Browser.** A web page as a source, on Windows and Linux: an overlay, an
-  alert box, a chat window. It is rendered off-screen by Chromium; on
-  Windows it is handed over as a GPU texture, so the page reaches the
-  compositor without a copy through system memory, and on Linux as its
-  pixels, which are copied up. Either way its transparency is real
+- **Browser.** A web page as a source: an overlay, an alert box, a chat
+  window. It is rendered off-screen by Chromium; on Windows it is handed
+  over as a GPU texture, so the page reaches the compositor without a copy
+  through system memory, and on Linux and macOS as its pixels, which are
+  copied up. Either way its transparency is real
   transparency, not a black rectangle. Address, size and frame rate are set in the Properties dock.
   Whatever the page plays gets a channel in the audio mixer, like a media
   file's sound: it is recorded, and heard as well if you switch monitoring
@@ -311,7 +311,6 @@ it records where the executable is; run the script again, or
   obs-rs's own name: screen recording for a Display or Window Capture, the
   camera, the microphone, and Input Monitoring for a hotkey that works while
   another application has focus.
-- No Browser Source yet: the browser engine is not in the macOS build.
 
 ## Building
 
@@ -343,7 +342,28 @@ Or install Ninja properly — `winget install Ninja-build.Ninja` — and it is o
 On Linux the default build fetches the same engine and builds nothing of it:
 the `cef` crate links against the library it downloaded, so there is no CMake
 or Ninja to install. The engine is put beside the executable, which finds it
-there. To skip all of it, on either platform, while working on something else:
+there.
+
+On macOS it needs CMake and Ninja, as on Windows, and the engine is a
+framework only an application bundle can carry, so `cargo run` runs obs-rs
+from one: `.cargo/config.toml` hands the executable to
+`assets/macos/run-app.sh`, which puts it in `target/<profile>/obs-rs.app`
+beside the framework and runs it there. It is still this terminal's process
+— its output is here and Ctrl+C stops it — and the terminal is what the
+screen-recording and camera permissions are given to, which a rebuild does
+not undo.
+
+Wherever it is fetched to is kept only as long as the build directory is,
+unless `CEF_PATH` names somewhere else; `cargo clean` then leaves it alone,
+where otherwise it is fetched again. Setting it for every build is one line
+in `~/.cargo/config.toml`:
+
+```toml
+[env]
+CEF_PATH = "/home/you/.local/cef"
+```
+
+To skip all of it, on any platform, while working on something else:
 
 ```bash
 cargo run --release --no-default-features
@@ -359,13 +379,13 @@ a readback.
 Windows uses D3D11 and has neither.
 
 **macOS composites on Metal**, over VideoToolbox frames, and records with
-VideoToolbox: every Source works but the Browser — the display, window and
-camera captures through ScreenCaptureKit and AVFoundation among them, which
-need the screen-recording and camera permissions — and the mixer records
-Core Audio's inputs, outputs and applications; see `docs/macos.md`. FFmpeg for it is set up as
+VideoToolbox: every Source works — the display, window and camera captures
+through ScreenCaptureKit and AVFoundation among them, which need the
+screen-recording and camera permissions — and the mixer records Core
+Audio's inputs, outputs and applications; see `docs/macos.md`. FFmpeg for it
+is set up as
 [media-pp's macOS notes](https://github.com/hash1018/media-pp/blob/main/docs/building/macos.md)
-describe; the browser engine is Windows and Linux only, so build it with
-`--no-default-features`.
+describe.
 
 ## Where it is up to
 

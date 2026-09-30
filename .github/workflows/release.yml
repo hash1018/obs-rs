@@ -329,13 +329,18 @@ jobs:
   # - Signed ad hoc, not by a developer, and not notarized: that needs a paid
   #   Apple Developer account. Gatekeeper asks about a downloaded copy the
   #   first time; the README says how to let it open.
-  # - No browser engine. CEF on macOS is a bundle of its own, with helper
-  #   applications, which this does not build yet; a Browser Source says so
-  #   rather than showing a page.
+  # - The browser engine is CEF's framework inside the bundle, with the
+  #   helper applications Chromium runs its processes as — each a copy of
+  #   the executable, since a helper is a bundle of its own and a bundle's
+  #   executable cannot be a link.
   # - Nothing here has run it, as with the Linux archive: the checks below
   #   confirm the bundle is complete and self-contained, not that it works.
   macos:
     runs-on: macos-15
+    env:
+      # The same as the CI workflow, for the same reason — see there.
+      # `make-app.sh` finds the framework there too.
+      CEF_PATH: ${{ github.workspace }}/../cef
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -362,6 +367,17 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
+      # What builds CEF's C++ wrapper — see the CI workflow.
+      - name: Set up Ninja
+        run: brew install ninja
+
+      - name: Cache the browser engine
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
+
       - name: Build
         run: cargo build --release --locked
 
@@ -375,6 +391,9 @@ jobs:
           mkdir -p "$stage/licenses"
           assets/macos/make-app.sh target/release/obs-rs "$stage/obs-rs.app"
           cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md README.md "$stage"
+          # The distribution's own licence file, as the other archives carry.
+          cef=$(find "$CEF_PATH" -maxdepth 3 -name CREDITS.html | head -n 1)
+          cp "$cef" "$stage/licenses/chromium-credits.html"
           find "$FFMPEG_DIR/share" -name copyright -print0 |
             while IFS= read -r -d '' file; do
               cp "$file" "$stage/licenses/$(basename "$(dirname "$file")").txt"
@@ -392,6 +411,14 @@ jobs:
             || { echo "no bundled licences in the archive" >&2; exit 1; }
           [ -f "$app/Contents/Resources/obs-rs.icns" ] \
             || { echo "no icon in the bundle" >&2; exit 1; }
+          # Without these a Browser Source has no engine: the framework, and
+          # the helper Chromium starts a page's renderer as.
+          [ -d "$app/Contents/Frameworks/Chromium Embedded Framework.framework" ] \
+            || { echo "no browser engine in the bundle" >&2; exit 1; }
+          [ -x "$app/Contents/Frameworks/obs-rs Helper (Renderer).app/Contents/MacOS/obs-rs Helper (Renderer)" ] \
+            || { echo "no browser engine helpers in the bundle" >&2; exit 1; }
+          [ -f "$stage/licenses/chromium-credits.html" ] \
+            || { echo "no browser engine licence in the archive" >&2; exit 1; }
           # Without a usage description the system refuses the camera or
           # the microphone outright rather than asking.
           for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do

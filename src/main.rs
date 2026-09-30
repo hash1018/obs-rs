@@ -120,7 +120,12 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "obs-rs",
         options,
-        Box::new(move |cc| Ok(Box::new(ObsApp::new(cc, store, settings)))),
+        Box::new(move |cc| {
+            // The first moment the window's event loop exists, which is when
+            // a Mac can start its browser engine — see `browser`.
+            browser::start_on_main_thread();
+            Ok(Box::new(ObsApp::new(cc, store, settings)))
+        }),
     )
 }
 

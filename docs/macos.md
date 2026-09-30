@@ -23,7 +23,7 @@ VideoToolbox frames drawn with Metal — `VideoToolboxUpload` and
 every Source written against that interface is the same code on both: Color,
 Drawing, Text, Image (`pushed::wire`), media files, streams, the filter rack,
 nested Scenes (`scene/gpu.rs`, which was `scene/linux.rs`) and the Browser
-Source, which has the Linux shape and, with no engine here, says so.
+Source, which takes a page's pixels as on Linux.
 
 - **The Canvas is NV12**, BT.709 at limited range, as on Linux.
 - **The Preview** (`preview/macos.rs`) is handed each frame by `media-pp`'s
@@ -134,9 +134,36 @@ Source, which has the Linux shape and, with no engine here, says so.
   `objc2` rather than a menu crate: nothing else here needs one, and it
   keeps each key under the rules above.
 
-Not yet: the browser engine, and notarization, which needs a paid Apple
-Developer account — until then Gatekeeper asks about a downloaded copy
-once.
+- **The browser engine** (`browser/cef_mac.rs`) is CEF's framework in the
+  bundle's `Contents/Frameworks`, loaded at run time from the path the
+  running executable implies, with Chromium's processes as helper
+  applications beside it — `obs-rs Helper.app` and its `(GPU)`,
+  `(Renderer)`, `(Plugin)` and `(Alerts)` siblings, each running this
+  executable, which tells from `--type=` that it is one. CEF runs on the
+  main thread, as a Mac requires: it is initialized once winit has made the
+  application object (`browser::start_on_main_thread`), after giving that
+  object a subclass that answers `CrAppControlProtocol` — winit insists on
+  its own class, which the subclass still is — and it is pumped by a
+  run-loop timer in every mode, so it goes on while a menu is open. A page
+  arrives as pixels, as on Linux, through the same Source; the
+  `IOSurface` Chromium can hand over instead is the next step, through
+  media-pp's `MetalSharedTextureSource`. Chromium's cookie key is kept with
+  the profile (`--use-mock-keychain`) rather than in the login keychain,
+  which would otherwise ask, over whatever is being recorded.
+
+  Only a bundle has it, so `cargo run` runs obs-rs from one:
+  `.cargo/config.toml` hands the executable to `assets/macos/run-app.sh`,
+  which makes `target/<profile>/obs-rs.app` with `make-app.sh --dev` — the
+  executable linked in, the framework copied once and kept, FFmpeg left
+  where the build found it; a fraction of a second after the first — and
+  runs the executable inside it, as this terminal's child. The release
+  bundle's helpers are copies of the executable, whose library search path
+  is rewritten for where they are. Checked on a Mac: a page drawn into the
+  Preview at 60 fps from a development bundle, and a release bundle's
+  helpers running with none crashing.
+
+Not yet: notarization, which needs a paid Apple Developer account — until
+then Gatekeeper asks about a downloaded copy once.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -148,9 +175,10 @@ taught `arm64-osx-dynamic`.
 
 The machine setup is in media-pp's `docs/building/macos.md`. For this repository:
 
-- **Build without the browser engine**: `cargo build --no-default-features`.
-  `cef` is a dependency on Windows and Linux only, so `browser` does nothing
-  on a Mac yet anyway, and the build is much smaller without it.
+- **The browser engine** needs CMake and Ninja, which build CEF's C++
+  wrapper, and fetches CEF's distribution into `CEF_PATH` — set it outside
+  `target/` (see the README) or `cargo clean` throws it away. Without it:
+  `cargo build --no-default-features`.
 - **media-pp from the sibling checkout while both change.** `Cargo.toml`'s
   `[patch.crates-io]` pins media-pp to a git revision. For a change made in
   both at once, point it at the checkout for the duration —
@@ -248,12 +276,6 @@ Done — see *Where macOS stands*. The existing
 
 ## The rest, piece by piece
 
-- **Browser Source** (`src/browser`): macOS gets `absent.rs`, which works.
-  CEF on macOS needs an `.app` bundle with its helper apps and framework in
-  place — the largest single piece, and the one to leave for last. Touches
-  the `cef` target gate, `browser/mod.rs:35, 39`, `paths.rs` (cache dir),
-  `build.rs`, `cef.rs`'s paint arms, and `engine/mod.rs:2893` (premultiplied
-  alpha is decided per platform).
 - **Fonts** (`i18n/font.rs`): already has macOS's
   `/System/Library/Fonts/AppleSDGothicNeo.ttc`, which is also the Text
   Source's default.
@@ -270,4 +292,4 @@ Done — see *Where macOS stands*. The existing
 5. ~~Resource usage and global hotkeys.~~ Done.
 6. ~~Packaging.~~ Done, signed ad hoc.
 7. ~~A native menu bar.~~ Done.
-8. The browser engine.
+8. ~~The browser engine.~~ Done, drawing on the CPU; the GPU path is next.

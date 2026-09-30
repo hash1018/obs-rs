@@ -73,20 +73,22 @@ hand-maintained second copy could fall out of step with them.
 
 ## The browser engine
 
-The Windows and Linux archives carry Chromium, through the Chromium Embedded Framework:
-`libcef.dll` on Windows and `libcef.so` on Linux, and the data it reads — the
+Every archive carries Chromium, through the Chromium Embedded Framework:
+`libcef.dll` on Windows, `libcef.so` on Linux and `Chromium Embedded
+Framework.framework` inside the macOS bundle, and the data it reads — the
 resource and locale packs, the ICU table, the V8 snapshot, and the graphics
-libraries it falls back through. A Browser Source is what it is for, and the
-executable links the library directly, so the archive does not start without
-it. The Linux copy has its debug information stripped; nothing else about it
-is changed.
+libraries it falls back through. A Browser Source is what it is for. On
+Windows and Linux the executable links the library directly, so the archive
+does not start without it; on macOS it is loaded at run time, and the
+bundle's helper applications are Chromium's processes. The Linux copy has
+its debug information stripped and the macOS one is signed again, ad hoc,
+with the bundle; nothing else about either is changed.
 
 CEF itself is BSD-3-Clause and Chromium is BSD-3-Clause with a long list of
 its own third-party components under their own permissive terms. The binary
 distribution states all of it in `CREDITS.html`, which the archive carries as
 `licenses/chromium-credits.html` rather than being summarised here — the same
-reasoning as vcpkg's copyright files above. The macOS archive has no browser
-engine yet, and carries none of this.
+reasoning as vcpkg's copyright files above.
 
 Built from source, this comes from the [`cef`](https://crates.io/crates/cef)
 crate, whose build script downloads the matching CEF binary distribution. A

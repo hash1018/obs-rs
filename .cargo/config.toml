@@ -1,0 +1,5 @@
+# `cargo run` on macOS runs obs-rs from inside an application bundle, which
+# is the only place its browser engine can be loaded from — see
+# `assets/macos/run-app.sh`. Everything else cargo runs is left as it is.
+[target.'cfg(target_os = "macos")']
+runner = "assets/macos/run-app.sh"

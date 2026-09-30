@@ -180,6 +180,9 @@ jobs:
   macos:
     # Apple silicon, as every Mac this application's macOS build is for.
     runs-on: macos-15
+    env:
+      # As on Linux — see there.
+      CEF_PATH: ${{ github.workspace }}/../cef
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -206,8 +209,21 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
-      # The browser engine is Windows and Linux only, so `browser` enables
-      # nothing here and there is no CEF to cache.
+      # What builds CEF's C++ wrapper, as on Windows: on a Mac the crate
+      # compiles it with CMake, which the runner has, and Ninja, which it
+      # does not.
+      - name: Set up Ninja
+        run: brew install ninja
+
+      # As on the other two: a few hundred megabytes that change only when
+      # the pinned `cef` does.
+      - name: Cache the browser engine
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../cef
+          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cef-${{ runner.os }}-
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

@@ -13,7 +13,13 @@
 //! a GPU buffer there too, but as a dmabuf, and the Linux compositor is CUDA,
 //! which cannot open one — getting it there is a Vulkan import and an export
 //! CUDA *can* read, which is a bridge of its own. [`Painted`] is shaped for
-//! whichever this platform has.
+//! whichever this platform has. macOS takes pixels as Linux does, for now.
+//!
+//! # macOS
+//!
+//! CEF there is a framework inside the application bundle, loaded at run
+//! time, and it runs on the main thread rather than one of its own — see
+//! `cef_mac.rs`, which is what is different about it.
 
 use std::{
     collections::HashMap,
@@ -23,7 +29,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
-    thread::{self, JoinHandle},
+    thread,
     time::Duration,
 };
 
@@ -37,6 +43,13 @@ use cef::args::Args;
 use cef::*;
 
 use crate::paths;
+
+#[cfg(not(target_os = "macos"))]
+use std::thread::JoinHandle;
+
+#[cfg(target_os = "macos")]
+#[path = "cef_mac.rs"]
+mod mac;
 
 /// How long the runtime thread waits between turns of CEF's message pump.
 ///
@@ -62,6 +75,7 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// Generous on purpose: it unpacks resources and starts child processes the
 /// first time, and a machine's virus scanner has an opinion about all of it.
+#[cfg(not(target_os = "macos"))]
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Runs this process's job if it is one of CEF's child processes, and hands
@@ -76,6 +90,13 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// `--type=` arguments Chromium launched it with, which is what
 /// `execute_process` reads.
 pub fn helper_process() -> Option<i32> {
+    // The framework first, which every CEF call below goes through. With none
+    // to load this process has no browser engine; a helper without one has
+    // no job, and must not go on to be a second obs-rs.
+    #[cfg(target_os = "macos")]
+    if !mac::load_framework() {
+        return mac::is_helper().then_some(1);
+    }
     // Before any other CEF call, in every process that makes one — it is what
     // binds this build to the version of libcef.dll actually loaded.
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
@@ -141,6 +162,14 @@ wrap_app! {
                 // that platform incompatible with Vulkan. Headless draws the
                 // same pictures at the same cost with neither, and does not
                 // care which kind of session obs-rs itself is running in.
+                // macOS: the same key, which Chromium otherwise keeps in the
+                // login keychain — and asking for it there is the system's
+                // own dialog asking to let obs-rs use "Chromium Safe
+                // Storage", over whatever is being recorded. The mock
+                // keychain keeps it with the profile, as the basic store
+                // does on Linux.
+                #[cfg(target_os = "macos")]
+                command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
                 #[cfg(target_os = "linux")]
                 command_line.append_switch_with_value(
                     Some(&CefString::from("ozone-platform")),
@@ -159,12 +188,70 @@ wrap_app! {
 /// CEF down, which is why `main` keeps it for the whole run: CEF cannot be
 /// initialized twice in one process, so this is a once-per-process thing that
 /// ends with the process.
+#[cfg(not(target_os = "macos"))]
 pub struct Runtime {
     stop: Arc<AtomicBool>,
     /// `Some` until [`Drop`] takes it to join.
     thread: Option<JoinHandle<()>>,
 }
 
+/// The browser engine, on macOS: nothing of its own to hold, since CEF runs
+/// on the main thread there — see [`start_on_main_thread`]. Dropping it shuts
+/// CEF down, on the main thread, where `main` drops it.
+#[cfg(target_os = "macos")]
+pub struct Runtime {
+    /// Not `Send`: it has to be dropped on the thread CEF runs on.
+    _main_thread: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(target_os = "macos")]
+impl Runtime {
+    /// Takes the requests for the browser engine from now on, or answers
+    /// `None` where there is none — an executable run outside its bundle,
+    /// which has no framework to load.
+    ///
+    /// Does not initialize CEF: on a Mac that has to wait for the window's
+    /// event loop to have made the application object, which is what
+    /// [`start_on_main_thread`] is called for. A page asked for meanwhile
+    /// waits for it.
+    pub fn start() -> Option<Self> {
+        if !mac::framework_loaded() {
+            tracing::info!(
+                "no browser engine: it is loaded from inside obs-rs.app, and this is not \
+                 running from one"
+            );
+            return None;
+        }
+        let (commands_tx, commands_rx) = mpsc::channel();
+        if COMMANDS.set(commands_tx).is_err() {
+            tracing::error!("the browser engine has already been started in this process");
+            return None;
+        }
+        mac::WAITING.with(|waiting| *waiting.borrow_mut() = Some(commands_rx));
+        Some(Self {
+            _main_thread: std::marker::PhantomData,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        mac::stop();
+        tracing::info!("browser engine stopped");
+    }
+}
+
+/// Initializes the browser engine on the main thread, where macOS has it —
+/// once the window's event loop has made the application object, which is
+/// what the window's creation is the first moment of. Nothing anywhere else,
+/// where it has a thread of its own.
+pub fn start_on_main_thread() {
+    #[cfg(target_os = "macos")]
+    mac::start();
+}
+
+#[cfg(not(target_os = "macos"))]
 impl Runtime {
     /// Starts the engine, or answers `None` if it could not start.
     ///
@@ -225,6 +312,7 @@ impl Runtime {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -281,7 +369,7 @@ pub struct Painted {
 /// padding — and premultiplied, as Chromium composites: a pixel's colour has
 /// already been multiplied by its alpha. Borrowed for the call; what keeps
 /// them has to copy them.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub struct Painted<'a> {
     pub pixels: &'a [u8],
     pub size: [u32; 2],
@@ -294,7 +382,7 @@ pub struct Painted<'a> {
 pub type OnPaint = Arc<dyn Fn(Painted) + Send + Sync>;
 
 /// What a page does with each picture it draws — see the Windows twin.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub type OnPaint = Arc<dyn for<'a> Fn(Painted<'a>) + Send + Sync>;
 
 /// What a page hands over when it has made a sound: one slice of samples per
@@ -623,7 +711,7 @@ wrap_render_handler! {
                     );
                 }
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 // The page itself, not a popup a `<select>` opened over it:
                 // a popup is a picture of its own, drawn to be laid on top at
@@ -667,13 +755,13 @@ wrap_render_handler! {
             }
             // Never asked for here — see `shared_texture_enabled` where a page
             // is opened — so one arriving is worth saying, once.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 let _ = info;
                 if !self.warned.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
-                        "the browser engine handed over a GPU buffer, which obs-rs cannot take \
-                         on Linux; the page will show nothing"
+                        "the browser engine handed over a GPU buffer, which obs-rs does not take \
+                         on this platform; the page will show nothing"
                     );
                 }
             }
@@ -1022,7 +1110,25 @@ fn close(browser: &Browser) {
 ///
 /// All three have to happen on this one thread — CEF's is the thread that
 /// initialized it — which is the whole reason this is a thread and not a call.
+#[cfg(not(target_os = "macos"))]
 fn run(stop: &AtomicBool, ready: &mpsc::Sender<bool>, commands: &mpsc::Receiver<Command>) {
+    if !initialize_engine() {
+        let _ = ready.send(false);
+        return;
+    }
+    let _ = ready.send(true);
+
+    let mut open: HashMap<PageId, Browser> = HashMap::new();
+    while !stop.load(Ordering::Acquire) {
+        turn(commands, &mut open);
+        thread::sleep(PUMP_INTERVAL);
+    }
+    finish(&mut open);
+}
+
+/// Initializes CEF on the calling thread, which is from then on its own, and
+/// says whether it did.
+fn initialize_engine() -> bool {
     // Called again here rather than relying on `helper_process`: this is the
     // first CEF call on this thread's own path through the library, and it is
     // cheap and idempotent.
@@ -1068,27 +1174,30 @@ fn run(stop: &AtomicBool, ready: &mpsc::Sender<bool>, commands: &mpsc::Receiver<
     ) != 1
     {
         tracing::error!("the browser engine refused to initialize");
-        let _ = ready.send(false);
-        return;
+        return false;
     }
-    let _ = ready.send(true);
+    true
+}
 
-    let mut open: HashMap<PageId, Browser> = HashMap::new();
-    while !stop.load(Ordering::Acquire) {
-        // Before the pump rather than after: a page asked for on the last
-        // turn is created on this one, and a closed browser gets this turn's
-        // pump to finish closing in.
-        for command in commands.try_iter() {
-            apply(command, &mut open);
-        }
-        do_message_loop_work();
-        thread::sleep(PUMP_INTERVAL);
+/// One turn: what was asked for, then CEF's own work.
+///
+/// Commands before the pump rather than after: a page asked for on the last
+/// turn is created on this one, and a closed browser gets this turn's pump
+/// to finish closing in.
+fn turn(commands: &mpsc::Receiver<Command>, open: &mut HashMap<PageId, Browser>) {
+    for command in commands.try_iter() {
+        apply(command, open);
     }
+    do_message_loop_work();
+}
 
-    // Every page closed before CEF is shut down, and pumped afterwards: a
-    // browser is not gone when `close_browser` returns, it is gone a few
-    // turns of the message loop later, and shutting down with one still open
-    // is how a browser process is left behind.
+/// Closes every page and shuts CEF down, on its own thread.
+///
+/// Every page closed before CEF is shut down, and pumped afterwards: a
+/// browser is not gone when `close_browser` returns, it is gone a few turns
+/// of the message loop later, and shutting down with one still open is how a
+/// browser process is left behind.
+fn finish(open: &mut HashMap<PageId, Browser>) {
     for (_, browser) in open.drain() {
         close(&browser);
     }
@@ -1096,6 +1205,5 @@ fn run(stop: &AtomicBool, ready: &mpsc::Sender<bool>, commands: &mpsc::Receiver<
         do_message_loop_work();
         thread::sleep(PUMP_INTERVAL);
     }
-
     shutdown();
 }

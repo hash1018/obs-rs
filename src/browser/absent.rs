@@ -81,6 +81,9 @@ impl Runtime {
     }
 }
 
+/// Nothing to start, with no engine.
+pub fn start_on_main_thread() {}
+
 /// What a page would hand over when it made a sound.
 pub struct Heard<'a> {
     pub planes: &'a [&'a [f32]],
