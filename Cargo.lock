@@ -3129,6 +3129,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "png",
  "pollster 1.0.1",

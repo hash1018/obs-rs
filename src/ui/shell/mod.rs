@@ -1,6 +1,8 @@
 mod edit;
 pub(super) mod hotkeys;
 mod menu_bar;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod status_bar;
 
 use eframe::egui;
@@ -104,6 +106,19 @@ pub fn show(
         &resources.global_hotkeys,
         actions,
     );
+    // At the top of the screen on a Mac, where its menus are; in the window
+    // everywhere else.
+    #[cfg(target_os = "macos")]
+    native_menu::show(
+        ui.ctx(),
+        state,
+        &resources.snapshots.status,
+        &resources.snapshots.history,
+        &resources.settings.hotkeys,
+        resources.i18n,
+        actions,
+    );
+    #[cfg(not(target_os = "macos"))]
     menu_bar::show(
         ui,
         state,

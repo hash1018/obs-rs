@@ -15,6 +15,14 @@ language-korean = Korean
 menu-help = Help
 menu-about = About obs-rs
 menu-show-logs = Show Logs
+# The macOS menu bar's own: the application menu and the Window menu.
+menu-hide-app = Hide obs-rs
+menu-hide-others = Hide Others
+menu-show-all = Show All
+menu-quit-app = Quit obs-rs
+menu-window = Window
+menu-minimize = Minimize
+menu-zoom = Zoom
 about-description = Live capture and recording, built with media-pp.
 
 dock-scenes = Scenes

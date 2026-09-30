@@ -121,6 +121,19 @@ Source, which has the Linux shape and, with no engine here, says so.
   build of the bundle. The minimum version in `Info.plist` is
   ScreenCaptureKit's, 12.3; only macOS 26 has run it.
 
+- **The menu bar** (`ui/shell/native_menu.rs`) is the system's, at the
+  top of the screen, and the window has none of its own. Both are drawn
+  from one model (`ui/shell/menu_bar.rs`), which the other platforms draw
+  inside the window, so the two cannot list different things. It is laid
+  out as a Mac application's: About, Settings, Hide and Quit (⌘Q, through
+  the application's own Exit, which asks first when a recording would be
+  cut short) in the application menu, and a Window menu before Help. The
+  window's own keys — Settings, Fullscreen, Undo, Redo — are the entries'
+  key equivalents, as bound, except while something takes typed input, so
+  ⌘Z in a text field stays the text field's. Built with AppKit through
+  `objc2` rather than a menu crate: nothing else here needs one, and it
+  keeps each key under the rules above.
+
 Not yet: the browser engine, and notarization, which needs a paid Apple
 Developer account — until then Gatekeeper asks about a downloaded copy
 once.
@@ -235,11 +248,6 @@ Done — see *Where macOS stands*. The existing
 
 ## The rest, piece by piece
 
-- **The menu bar** is drawn inside the window by egui (File, Edit, View),
-  as on the other platforms; the macOS menu bar at the top of the screen
-  shows only the application menu winit gives every app. That works, but a
-  native menu there (for example through `muda`) is what makes it look
-  like a Mac application — a later nicety, not part of making it run.
 - **Browser Source** (`src/browser`): macOS gets `absent.rs`, which works.
   CEF on macOS needs an `.app` bundle with its helper apps and framework in
   place — the largest single piece, and the one to leave for last. Touches
@@ -261,4 +269,5 @@ Done — see *Where macOS stands*. The existing
    recording, and its captures.~~ Done.
 5. ~~Resource usage and global hotkeys.~~ Done.
 6. ~~Packaging.~~ Done, signed ad hoc.
-7. A native menu bar, then the browser engine.
+7. ~~A native menu bar.~~ Done.
+8. The browser engine.

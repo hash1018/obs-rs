@@ -93,6 +93,13 @@ text_keys! {
     LanguageKorean                => "language-korean";
     MenuHelp                      => "menu-help";
     MenuAbout                     => "menu-about";
+    MenuHideApp                   => "menu-hide-app";
+    MenuHideOthers                => "menu-hide-others";
+    MenuShowAll                   => "menu-show-all";
+    MenuQuitApp                   => "menu-quit-app";
+    MenuWindow                    => "menu-window";
+    MenuMinimize                  => "menu-minimize";
+    MenuZoom                      => "menu-zoom";
     AboutDescription              => "about-description";
     DockScenes                    => "dock-scenes";
     DockSources                   => "dock-sources";

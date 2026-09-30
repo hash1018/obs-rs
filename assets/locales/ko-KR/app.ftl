@@ -15,6 +15,14 @@ language-korean = 한국어
 menu-help = 도움말
 menu-about = obs-rs 정보
 menu-show-logs = 로그 폴더 열기
+# The macOS menu bar's own: the application menu and the Window menu.
+menu-hide-app = obs-rs 가리기
+menu-hide-others = 기타 가리기
+menu-show-all = 모두 보기
+menu-quit-app = obs-rs 종료
+menu-window = 윈도우
+menu-minimize = 최소화
+menu-zoom = 확대/축소
 about-description = media-pp로 만든 실시간 캡처 및 녹화 프로그램입니다.
 
 dock-scenes = 장면

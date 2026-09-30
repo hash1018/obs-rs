@@ -186,13 +186,23 @@ features = [
 # `flock`, for the single-instance lock, as on Linux.
 libc = "0.2"
 # Brings the running copy forward when a second is launched — see
-# `instance::platform`.
+# `instance::platform` — and puts the menus in the menu bar — see
+# `ui::shell::native_menu`.
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
     "NSApplication",
+    "NSCell",
+    "NSEvent",
+    "NSMenu",
+    "NSMenuItem",
     "NSResponder",
     "NSRunningApplication",
+] }
+# The strings the native menu bar is written in — see `ui::shell::native_menu`.
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSString",
 ] }
 # The Metal objects the Preview copies the composited frame with, into the
 # textures wgpu owns — see `engine::preview`. The versions are wgpu-hal's and
