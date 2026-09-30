@@ -36,7 +36,7 @@
 # - Signs every library and then the bundle, ad hoc. Rewriting a load
 #   command invalidates the signature the linker gave it, and Apple silicon
 #   runs nothing unsigned. An ad-hoc signature is not a developer's:
-#   Gatekeeper still asks about a downloaded copy — see the README.
+#   Gatekeeper still asks about a downloaded copy — see docs/install.md.
 #
 # `--dev` makes the bundle `cargo run` runs instead — see `run-app.sh` —
 # which only has to be the shape CEF needs, on this machine, fast: the

@@ -328,7 +328,7 @@ jobs:
   # - Apple silicon only, as every Mac this build is for — see docs/macos.md.
   # - Signed ad hoc, not by a developer, and not notarized: that needs a paid
   #   Apple Developer account. Gatekeeper asks about a downloaded copy the
-  #   first time; the README says how to let it open.
+  #   first time; docs/install.md says how to let it open.
   # - The browser engine is CEF's framework inside the bundle, with the
   #   helper applications Chromium runs its processes as, each running
   #   `obs-rs-helper` — built beside obs-rs by the same `cargo build`.

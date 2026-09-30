@@ -1,7 +1,8 @@
 # obs-rs architecture
 
-How the application is put together, for anyone changing it. What it is and
-how to run it are in the [README](../README.md).
+How the application is put together, for anyone changing it. What it is is
+in the [README](../README.md), how to run it in [install.md](install.md) and
+how to build it in [building.md](building.md).
 
 ## Preview terminology
 

@@ -31,8 +31,8 @@ jobs:
     env:
       # Where `cef-dll-sys` looks for Chromium's binary distribution before
       # downloading it, and so what the cache step below fills — see
-      # `src/browser` for what it is and `README.md` for why a build here
-      # wants CMake at all.
+      # `src/browser` for what it is and `docs/building.md` for why a build
+      # here wants CMake at all.
       CEF_PATH: C:\cef
     steps:
       - name: Check out repository

@@ -187,7 +187,7 @@ The machine setup is in media-pp's `docs/building/macos.md`. For this repository
 
 - **The browser engine** needs CMake and Ninja, which build CEF's C++
   wrapper, and fetches CEF's distribution into `CEF_PATH` — set it outside
-  `target/` (see the README) or `cargo clean` throws it away. Without it:
+  `target/` (see [building.md](building.md)) or `cargo clean` throws it away. Without it:
   `cargo build --no-default-features`.
 - **media-pp from the sibling checkout while both change.** `Cargo.toml`'s
   `[patch.crates-io]` pins media-pp to a git revision. For a change made in
