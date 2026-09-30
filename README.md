@@ -5,11 +5,12 @@ on top of [`media-pp`](https://github.com/hash1018/media-pp). Captures your
 desktop, composites it on the GPU, and records it or sends it to an RTMP
 service — with an annotation layer you can draw on while it runs.
 
-![The obs-rs window: the Scenes, Sources and Properties docks down the left;
-the Preview in the middle, where a still picture, a selected video — outlined
-in red, its cropped left edge marked in green, and the distance to each canvas
-edge written beside it — and a second video in the corner are composited
-together; and the Audio Mixer and Controls along the
+![The obs-rs window on macOS: the Scenes, Sources and Properties docks down
+the left; the Preview in the middle, where a web page — a gradient with a
+LIVE badge, a clock and a lower third — a title card, a logo and a looping
+test clip are composited together, the selected title card outlined in red
+with the distance to each canvas edge written beside it; and the Audio
+Mixer, metering the clip's sound, the Filters and the Controls along the
 bottom.](docs/screenshot.png)
 
 ## What it does
