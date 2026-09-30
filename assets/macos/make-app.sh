@@ -41,7 +41,7 @@
 #
 # `--dev` makes the bundle `cargo run` runs instead — see `run-app.sh` —
 # which only has to be the shape CEF needs, on this machine, fast: the
-# executable is linked in rather than copied, the framework is copied once
+# executable is cloned in rather than copied, the framework is copied once
 # and kept, and FFmpeg stays where the build found it, so there is nothing to
 # rewrite and nothing to sign beyond what the linker signed.
 #
@@ -82,9 +82,18 @@ frameworks="$contents/Frameworks"
 mkdir -p "$contents/MacOS" "$contents/Resources" "$frameworks"
 
 # The executable at `$2`, from `$1`: a copy of its own for a bundle that
-# leaves this machine, a second name for the same file for one that does not.
+# leaves this machine, a clone — a file of its own sharing the other's blocks
+# until either is written — for one that does not.
+#
+# Never a hard link. Each helper application is this executable, and the
+# system tells applications apart by their files: with the renderer's helper
+# and obs-rs one file, obs-rs stopped being found by its bundle, and the
+# screen-recording daemon, which looks its clients up that way, no longer
+# knew whose stream a stop was for — measured, every Display Capture stop
+# waited out ScreenCaptureKit's five seconds once a page had opened.
 place() {
-    if [ $dev -eq 1 ] && ln -f "$1" "$2" 2> /dev/null; then
+    rm -f "$2"
+    if [ $dev -eq 1 ] && cp -c "$1" "$2" 2> /dev/null; then
         return
     fi
     cp "$1" "$2"

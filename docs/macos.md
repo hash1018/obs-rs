@@ -154,7 +154,7 @@ Source, which takes a page's pixels as on Linux.
   Only a bundle has it, so `cargo run` runs obs-rs from one:
   `.cargo/config.toml` hands the executable to `assets/macos/run-app.sh`,
   which makes `target/<profile>/obs-rs.app` with `make-app.sh --dev` — the
-  executable linked in, the framework copied once and kept, FFmpeg left
+  executable cloned in, the framework copied once and kept, FFmpeg left
   where the build found it; a fraction of a second after the first — and
   runs the executable inside it, as this terminal's child. The release
   bundle's helpers are copies of the executable, whose library search path
