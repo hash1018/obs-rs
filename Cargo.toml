@@ -216,7 +216,11 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
     "CGDirectDisplay",
     "CGDisplayConfiguration",
     "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
     "CGGeometry",
+    "CGRemoteOperation",
     "CGWindow",
 ] }
 objc2-metal = { version = "0.3", default-features = false, features = [

@@ -49,6 +49,17 @@
 //! of that name is installed. Without it nothing is bound, [`GlobalHotkeys::
 //! spawn`] answers `None`, and every hotkey stays the window's, as before.
 //!
+//! # macOS: asked, once allowed
+//!
+//! macOS answers "is this key down" for the whole session, as Windows does,
+//! so the same thread asks the same way (`CGEventSourceKeyState`) and gets
+//! both edges from it. What it adds is a person's say: until obs-rs is
+//! allowed Input Monitoring in System Settings, every key reads as up. So a
+//! global hotkey is taken from the window only once it is allowed, and the
+//! system is asked when there is first one to listen for — see
+//! `macos::Access`. Unallowed, each stays the window's, as on a Linux
+//! desktop that refused.
+//!
 //! # Elsewhere
 //!
 //! Anywhere else — or on a Linux desktop without the portal — `spawn`
@@ -113,7 +124,7 @@ impl GlobalHotkeys {
     ///
     /// `wake` is called whenever something went down or came up, from the
     /// listener's thread; the edges themselves wait in [`Self::edges`].
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn spawn(
         _window: &(impl HasWindowHandle + HasDisplayHandle),
         wake: impl Fn() + Send + 'static,
@@ -126,6 +137,8 @@ impl GlobalHotkeys {
                 let shared = Arc::clone(&shared);
                 move || {
                     let mut tracker = super::tracker::Tracker::default();
+                    #[cfg(target_os = "macos")]
+                    let mut access = macos::Access::default();
                     while !shared.stop.load(Ordering::Acquire) {
                         // Copied out rather than held: a settings change
                         // waiting on this lock for a whole look would be a
@@ -137,8 +150,10 @@ impl GlobalHotkeys {
                             .iter()
                             .map(|bound| (bound.hotkey, bound.chord))
                             .collect();
+                        #[cfg(target_os = "macos")]
+                        let bound = access.listened(&shared, bound);
                         let typing = shared.typing.load(Ordering::Acquire);
-                        let changed = tracker.update(&bound, &windows::SystemKeyboard, !typing);
+                        let changed = tracker.update(&bound, &system::SystemKeyboard, !typing);
                         if !changed.is_empty() {
                             for edge in changed {
                                 let _ = sender.send(edge);
@@ -181,7 +196,7 @@ impl GlobalHotkeys {
         })
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     pub fn spawn(
         _window: &(impl HasWindowHandle + HasDisplayHandle),
         _wake: impl Fn() + Send + 'static,
@@ -235,7 +250,8 @@ impl GlobalHotkeys {
     /// The hotkeys whose keys reach this listener now. The window hears
     /// every other one itself.
     ///
-    /// Every global hotkey, on Windows. On Linux only those the desktop has
+    /// Every global hotkey, on Windows, and on macOS once obs-rs is allowed
+    /// Input Monitoring — none before. On Linux only those the desktop has
     /// allowed *with a key*: none until it answers, none for good if it is
     /// told no, and not one it allowed with no key assigned — each of which
     /// would otherwise be a hotkey that works nowhere, where leaving it to
@@ -267,8 +283,14 @@ impl Drop for GlobalHotkeys {
 
 /// How often the listener looks: often enough that push-to-talk opens
 /// before the first syllable is out, rarely enough to cost nothing.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+#[cfg(target_os = "windows")]
+use self::windows as system;
+
+#[cfg(target_os = "macos")]
+use self::macos as system;
 
 #[cfg(target_os = "windows")]
 mod windows {
@@ -380,6 +402,208 @@ mod windows {
             assert_eq!(virtual_keys(Key::F24), [VIRTUAL_KEY(0x87)]);
             assert_eq!(virtual_keys(Key::Comma), [VK_OEM_COMMA]);
             assert!(virtual_keys(Key::Colon).is_empty(), "layout-dependent");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::time::{Duration, Instant};
+
+    use eframe::egui::Key;
+    use objc2_core_graphics::{
+        CGEventFlags, CGEventSource, CGEventSourceStateID, CGKeyCode, CGPreflightListenEventAccess,
+        CGRequestListenEventAccess,
+    };
+
+    use super::{Chord, Hotkey, Shared, lock};
+    use crate::hotkey::tracker::Keyboard;
+
+    /// The whole session's keyboard, as the window server reports it to a
+    /// process allowed to listen — see [`Access`].
+    pub(super) struct SystemKeyboard;
+
+    impl Keyboard for SystemKeyboard {
+        fn is_down(&self, key: Key) -> bool {
+            key_codes(key)
+                .iter()
+                .any(|&code| CGEventSource::key_state(STATE, code))
+        }
+
+        /// Command stands for the chord's Ctrl, as it does in the window
+        /// (`Chord::modifiers`), and Control too, as the window's own
+        /// keyboard takes either.
+        fn modifiers(&self) -> (bool, bool, bool) {
+            let held = CGEventSource::flags_state(STATE);
+            (
+                held.intersects(CGEventFlags::MaskCommand | CGEventFlags::MaskControl),
+                held.contains(CGEventFlags::MaskShift),
+                held.contains(CGEventFlags::MaskAlternate),
+            )
+        }
+    }
+
+    /// Every source of key events in this login session, the hardware's
+    /// and anything posting its own — what the person at the keyboard is
+    /// pressing, whichever application has it.
+    const STATE: CGEventSourceStateID = CGEventSourceStateID::CombinedSessionState;
+
+    /// Whether this process may see keys pressed in other applications.
+    ///
+    /// macOS answers a process asking about another's keys with nothing
+    /// down until the person at the keyboard has allowed it under Privacy &
+    /// Security → Input Monitoring. So a global hotkey is taken from the
+    /// window only once that is allowed: until then — and for good, if it
+    /// never is — it stays the window's, working while obs-rs has focus,
+    /// rather than working nowhere.
+    ///
+    /// The system is asked the first time there is a global hotkey to
+    /// listen for, which adds obs-rs to that list and shows its own prompt
+    /// once; not at startup, where somebody with no such hotkey would be
+    /// asked for nothing. Whether it was allowed is looked at again every
+    /// so often, since the answer is given in System Settings, later.
+    #[derive(Default)]
+    pub(super) struct Access {
+        asked: bool,
+        allowed: bool,
+        checked: Option<Instant>,
+    }
+
+    /// How often the answer is looked at again once asked.
+    const RECHECK: Duration = Duration::from_secs(1);
+
+    impl Access {
+        /// `bound` if this process may listen for it, and nothing otherwise;
+        /// [`Shared::taken`] follows, so the window hears what this cannot.
+        pub(super) fn listened(
+            &mut self,
+            shared: &Shared,
+            bound: Vec<(Hotkey, Chord)>,
+        ) -> Vec<(Hotkey, Chord)> {
+            if !bound.is_empty() {
+                let now = Instant::now();
+                if !self.asked {
+                    self.asked = true;
+                    self.allowed = CGRequestListenEventAccess();
+                    self.checked = Some(now);
+                    if !self.allowed {
+                        tracing::info!(
+                            "global hotkeys work once obs-rs is allowed Input Monitoring, \
+                             in System Settings; until then they work while it has focus"
+                        );
+                    }
+                } else if self
+                    .checked
+                    .is_none_or(|checked| now.duration_since(checked) >= RECHECK)
+                {
+                    self.allowed = CGPreflightListenEventAccess();
+                    self.checked = Some(now);
+                }
+            }
+            let listened = if self.allowed { bound } else { Vec::new() };
+            let taken = listened.iter().map(|(hotkey, _)| *hotkey).collect();
+            let mut current = lock(&shared.taken);
+            if *current != taken {
+                *current = taken;
+            }
+            listened
+        }
+    }
+
+    /// The keys that stand for `key` — the number pad's too for a digit and
+    /// for Enter, which egui calls the same as the main ones, as Windows'
+    /// codes do.
+    ///
+    /// These codes are places on the keyboard, named for where the US
+    /// layout puts each letter: on a layout that moves letters about —
+    /// AZERTY, Dvorak — a letter bound here is the key at the US letter's
+    /// place. Empty for a key with no fixed place, which is then never down,
+    /// and for F21 to F24, which a Mac keyboard does not have.
+    pub(super) fn key_codes(key: Key) -> Vec<CGKeyCode> {
+        const LETTERS: [CGKeyCode; 26] = [
+            0x00, 0x0B, 0x08, 0x02, 0x0E, 0x03, 0x05, 0x04, 0x22, 0x26, 0x28, 0x25, 0x2E, 0x2D,
+            0x1F, 0x23, 0x0C, 0x0F, 0x01, 0x11, 0x20, 0x09, 0x0D, 0x07, 0x10, 0x06,
+        ];
+        const DIGITS: [CGKeyCode; 10] =
+            [0x1D, 0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19];
+        const PAD_DIGITS: [CGKeyCode; 10] =
+            [0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5B, 0x5C];
+        const FUNCTION: [CGKeyCode; 20] = [
+            0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F, 0x69, 0x6B,
+            0x71, 0x6A, 0x40, 0x4F, 0x50, 0x5A,
+        ];
+        let name = key.name();
+        let mut letters = name.chars();
+        if let (Some(only), None) = (letters.next(), letters.next()) {
+            if only.is_ascii_uppercase() {
+                return vec![LETTERS[usize::from(only as u8 - b'A')]];
+            }
+            if let Some(digit) = only.to_digit(10) {
+                let digit = digit as usize;
+                return vec![DIGITS[digit], PAD_DIGITS[digit]];
+            }
+        }
+        if let Some(number) = name.strip_prefix('F').and_then(|n| n.parse::<usize>().ok())
+            && (1..=24).contains(&number)
+        {
+            return FUNCTION.get(number - 1).copied().into_iter().collect();
+        }
+        let code = match key {
+            Key::ArrowDown => 0x7D,
+            Key::ArrowLeft => 0x7B,
+            Key::ArrowRight => 0x7C,
+            Key::ArrowUp => 0x7E,
+            Key::Escape => 0x35,
+            Key::Tab => 0x30,
+            Key::Backspace => 0x33,
+            Key::Enter => return vec![0x24, 0x4C],
+            Key::Space => 0x31,
+            // Help, where a full-size Mac keyboard has Insert.
+            Key::Insert => 0x72,
+            Key::Delete => 0x75,
+            Key::Home => 0x73,
+            Key::End => 0x77,
+            Key::PageUp => 0x74,
+            Key::PageDown => 0x79,
+            Key::Comma => 0x2B,
+            Key::Period => 0x2F,
+            Key::Minus => 0x1B,
+            // One key, `=` unshifted and `+` shifted, as on Windows.
+            Key::Plus | Key::Equals => 0x18,
+            Key::Semicolon => 0x29,
+            Key::Slash => 0x2C,
+            Key::Backtick => 0x32,
+            Key::OpenBracket => 0x21,
+            Key::Backslash => 0x2A,
+            Key::CloseBracket => 0x1E,
+            Key::Quote => 0x27,
+            _ => return Vec::new(),
+        };
+        vec![code]
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The keys a binding is most likely to use, where macOS keeps them
+        /// — its codes follow the keyboard's rows rather than the alphabet,
+        /// so a table off by one is a hotkey on some other key entirely.
+        #[test]
+        fn a_key_is_asked_for_by_its_own_code() {
+            assert_eq!(key_codes(Key::A), [0x00]);
+            assert_eq!(key_codes(Key::R), [0x0F]);
+            assert_eq!(key_codes(Key::V), [0x09]);
+            assert_eq!(key_codes(Key::Z), [0x06]);
+            assert_eq!(key_codes(Key::Num1), [0x12, 0x53]);
+            assert_eq!(key_codes(Key::Num0), [0x1D, 0x52]);
+            assert_eq!(key_codes(Key::F1), [0x7A]);
+            assert_eq!(key_codes(Key::F9), [0x65]);
+            assert_eq!(key_codes(Key::F11), [0x67]);
+            assert_eq!(key_codes(Key::F20), [0x5A]);
+            assert!(key_codes(Key::F24).is_empty(), "no such key on a Mac");
+            assert_eq!(key_codes(Key::Comma), [0x2B]);
+            assert!(key_codes(Key::Colon).is_empty(), "layout-dependent");
         }
     }
 }

@@ -236,9 +236,11 @@ All but the Scene keys can be changed in **Settings → Hotkeys**: click a
 binding, press the key you want, or Backspace to clear it. A key you choose
 works while another application has focus, which is the point of it — a
 recorder has to be reachable from inside the game it is recording. On
-Windows that is a thread asking the system which bound keys are down; on
-Linux it is the desktop's own global-shortcuts portal, which asks you once
-whether to allow them. The keys obs-rs comes with work only in its own
+Windows that is a thread asking the system which bound keys are down, and
+on macOS the same once obs-rs is allowed Input Monitoring in System
+Settings, which it asks for when you first bind one; on Linux it is the
+desktop's own global-shortcuts portal, which asks you once whether to allow
+them. The keys obs-rs comes with work only in its own
 window: `Ctrl+R` and `Ctrl+P` are every browser's and editor's own, and
 heard everywhere they would start or pause a recording from inside
 something else. Each mixer channel gets a push-to-talk and a push-to-mute binding on

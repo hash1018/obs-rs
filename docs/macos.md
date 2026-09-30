@@ -94,8 +94,17 @@ Source, which has the Linux shape and, with no engine here, says so.
   the I/O Registry, where Activity Monitor reads it — the kernel's own
   per-task GPU figure reads zero on Apple silicon. Checked on a Mac: 17% of
   the GPU for the process while the whole device read 28%.
+- **Global hotkeys** (`hotkey/global.rs`): the thread Windows uses, asking
+  which bound keys are down (`CGEventSourceKeyState`) a hundred times a
+  second, so push-to-talk sees a key let go as well as pressed. macOS
+  reads every key as up to a process not allowed Input Monitoring, so a
+  hotkey is taken from the window only once it is; the system is asked the
+  first time one is bound, and until it is allowed each works while obs-rs
+  has focus. Key codes are places on the keyboard, named for the US
+  layout's letters. Checked on a Mac: a screenshot key taken with Finder in
+  front, once allowed.
 
-Not yet: global hotkeys, the browser engine and packaging.
+Not yet: the browser engine and packaging.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -206,13 +215,6 @@ Done — see *Where macOS stands*. The existing
 
 ## The rest, piece by piece
 
-- **Recording encoders** (`settings.rs:490-548`): `RecordingEncoder` has no
-  VideoToolbox entry. Adding one touches `ALL`, `label`, and
-  `software_codec`'s exhaustive match in `backend/mod.rs:127-137`.
-- **Global hotkeys** (`hotkey/global.rs`): none on macOS. A
-  `CGEventTap`-based keyboard can implement the same polling
-  `tracker::Keyboard` trait Windows uses, and needs the Accessibility
-  (input monitoring) permission.
 - **The menu bar** is drawn inside the window by egui (File, Edit, View),
   as on the other platforms; the macOS menu bar at the top of the screen
   shows only the application menu winit gives every app. That works, but a
@@ -253,5 +255,5 @@ Done — see *Where macOS stands*. The existing
 3. ~~With media-pp's Core Audio pieces: the mixer's devices.~~ Done.
 4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
    recording, and its captures.~~ Done.
-5. Global hotkeys and the browser engine; then packaging. (Resource usage
-   is done.)
+5. ~~Resource usage and global hotkeys.~~ Done.
+6. The browser engine; then packaging.
