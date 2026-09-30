@@ -60,9 +60,17 @@ mod mac;
 /// browser and is not this.
 const PUMP_INTERVAL: Duration = Duration::from_millis(2);
 
-/// How many turns of the pump a closing browser is given before CEF is shut
-/// down — a fifth of a second, which is far longer than one takes.
+/// How many turns of the pump the pages still open at shutdown are given to
+/// finish closing, at most — a fifth of a second of waiting, far longer than
+/// one takes. Shutdown goes on as soon as the last has said it is gone.
 const CLOSE_TURNS: u32 = 100;
+
+/// How many pages CEF has made and not yet said are gone — see
+/// `PageLifeSpanHandler::on_before_close`. What shutdown waits on, rather
+/// than on a fixed number of turns: each one of those is a pump that can
+/// take milliseconds, and a hundred of them was over half a second measured
+/// on a Mac, for pages that had closed on the first.
+static LIVE_PAGES: AtomicUsize = AtomicUsize::new(0);
 
 /// How long [`Page::open`] waits for the runtime thread to answer.
 ///
@@ -890,6 +898,10 @@ wrap_life_span_handler! {
             // Cancelled.
             1
         }
+
+        fn on_before_close(&self, _browser: Option<&mut Browser>) {
+            LIVE_PAGES.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -960,6 +972,7 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
             );
             match browser {
                 Some(browser) => {
+                    LIVE_PAGES.fetch_add(1, Ordering::AcqRel);
                     open.insert(id, browser);
                     let _ = reply.send(Ok(()));
                 }
@@ -1202,6 +1215,9 @@ fn finish(open: &mut HashMap<PageId, Browser>) {
         close(&browser);
     }
     for _ in 0..CLOSE_TURNS {
+        if LIVE_PAGES.load(Ordering::Acquire) == 0 {
+            break;
+        }
         do_message_loop_work();
         thread::sleep(PUMP_INTERVAL);
     }
