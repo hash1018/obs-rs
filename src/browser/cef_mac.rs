@@ -27,8 +27,11 @@
 //! AppKit belongs to the main thread and so does CEF on a Mac: it is
 //! initialized there, pumped there, and shut down there. The other
 //! platforms give it a thread of its own. Here a run-loop timer turns its
-//! pump between the window's own events ([`Pump`]), in every run-loop mode,
-//! so it keeps turning while a menu is open or the window is being resized.
+//! pump between the window's own events ([`Pump`]) — in the default mode
+//! only. A turn takes events off the queue itself, and one taken while a
+//! menu is being tracked is the menu's: turned then, the menu bar stopped
+//! following the pointer. So pages hold still while a menu is open or the
+//! window is being resized, and carry on when it is let go.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -42,7 +45,7 @@ use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
 use objc2::{MainThreadMarker, msg_send, sel};
 use objc2_app_kit::NSApplication;
 use objc2_core_foundation::{
-    CFAbsoluteTimeGetCurrent, CFRetained, CFRunLoop, CFRunLoopTimer, kCFRunLoopCommonModes,
+    CFAbsoluteTimeGetCurrent, CFRetained, CFRunLoop, CFRunLoopTimer, kCFRunLoopDefaultMode,
 };
 
 use super::{Browser, Command, PUMP_INTERVAL, PageId};
@@ -229,8 +232,9 @@ pub(super) fn start() {
         tracing::error!("could not schedule the browser engine's work on the main thread");
         return;
     };
+    // The default mode alone, not the common ones — see this module's docs.
     // SAFETY: reading a constant the framework defines.
-    main_loop.add_timer(Some(&timer), unsafe { kCFRunLoopCommonModes });
+    main_loop.add_timer(Some(&timer), unsafe { kCFRunLoopDefaultMode });
     PUMP.with(|pump| {
         *pump.borrow_mut() = Some(Pump {
             commands,

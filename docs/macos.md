@@ -148,7 +148,10 @@ Source, which takes a page's pixels as on Linux.
   application object (`browser::start_on_main_thread`), after giving that
   object a subclass that answers `CrAppControlProtocol` — winit insists on
   its own class, which the subclass still is — and it is pumped by a
-  run-loop timer in every mode, so it goes on while a menu is open. A page
+  run-loop timer in the default mode only: a turn takes events off the
+  queue itself, and turned while a menu is tracking the pointer it took the
+  menu's — the menu bar stopped following the mouse — so pages hold still
+  while a menu is open or the window is being resized. A page
   arrives as the `IOSurface` Chromium drew it into, as Windows' does as a
   shared texture, and media-pp's `MetalSharedTextureSource` copies it GPU
   to GPU into a frame of the pipeline's own; the layer blends it as the
