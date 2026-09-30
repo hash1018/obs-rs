@@ -36,7 +36,7 @@ pub(in crate::engine) mod rtsp;
 pub(in crate::engine) mod scene;
 /// The one capture a Display Capture and a Window Capture both are on macOS.
 #[cfg(target_os = "macos")]
-pub(in crate::engine) mod screen_capture;
+pub(in crate::engine) mod screencapturekit_capture;
 pub(in crate::engine) mod shared;
 pub(in crate::engine) mod sound;
 pub(in crate::engine) mod text;

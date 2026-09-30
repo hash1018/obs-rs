@@ -47,8 +47,8 @@ pub(in crate::engine) struct Backend {
     pub(in crate::engine) size: [u32; 2],
     pub(in crate::engine) compositor: Compositor,
     /// Every display and window being captured, each once however many
-    /// items show it — see `source::screen_capture`.
-    pub(in crate::engine) screens: Arc<source::screen_capture::ScreenRegistry>,
+    /// items show it — see `source::screencapturekit_capture`.
+    pub(in crate::engine) screens: Arc<source::screencapturekit_capture::ScreenRegistry>,
     /// The cameras this backend has open, each once however many items show
     /// it — see `source::video_capture`.
     pub(in crate::engine) cameras: Arc<source::video_capture::CameraRegistry>,
@@ -155,7 +155,7 @@ impl Backend {
         Ok(Self {
             gpu,
             size,
-            screens: Arc::new(source::screen_capture::ScreenRegistry::default()),
+            screens: Arc::new(source::screencapturekit_capture::ScreenRegistry::default()),
             cameras: Arc::new(source::video_capture::CameraRegistry::default()),
             scenes: Arc::new(source::scene::SceneRegistry::default()),
             compositor: handle,

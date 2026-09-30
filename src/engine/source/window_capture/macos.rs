@@ -5,7 +5,7 @@
 //! against what is on screen now; see the parent's docs — and opened by the
 //! window number the match has, which is the one ScreenCaptureKit captures
 //! by, and which the stream is shared under. Everything it opens is
-//! [`screen_capture`].
+//! [`screencapturekit_capture`].
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use crate::capture::WindowTarget;
 use crate::domain::{SourceSettings, WindowCaptureTarget};
 use crate::engine::backend::{BackendError, Compositor, Gpu};
 use crate::engine::source::OpenOutcome;
-use crate::engine::source::screen_capture::{self, ScreenRegistry};
+use crate::engine::source::screencapturekit_capture::{self, ScreenRegistry};
 use crate::snapshots::SceneItemSnapshot;
 
 /// `Absent` when the window is not on screen — see this module's parent.
@@ -38,7 +38,7 @@ pub(in crate::engine) fn open(
             "no window of {process} is open"
         )));
     };
-    screen_capture::open(
+    screencapturekit_capture::open(
         screens,
         ScreenCaptureKitTarget::Window(target.handle as u32),
         gpu,

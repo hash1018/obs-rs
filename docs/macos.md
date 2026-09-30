@@ -46,7 +46,7 @@ Source, which has the Linux shape and, with no engine here, says so.
   playing backwards, looping — run here too.
 
 - **Captures.** A Display Capture and a Window Capture are one
-  ScreenCaptureKit stream (`source/screen_capture.rs`), handing on the
+  ScreenCaptureKit stream (`source/screencapturekit_capture.rs`), handing on the
   pixel buffers it draws as BGRA VideoToolbox frames — nothing copied or
   converted before the compositor — and shared between the items showing
   one display or one window, as Windows shares its captures: a stream with a
