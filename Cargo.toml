@@ -209,6 +209,15 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSResponder",
     "NSRunningApplication",
 ] }
+# The surface a page is painted into, which the browser engine hands over and
+# `media-pp`'s `MetalSharedTextureSource` takes — see `browser`. The version
+# is media-pp's, so the two name one type.
+objc2-io-surface = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2",
+    "objc2-core-foundation",
+    "IOSurfaceRef",
+] }
 # The strings the native menu bar is written in — see `ui::shell::native_menu`.
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",

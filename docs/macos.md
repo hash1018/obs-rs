@@ -149,9 +149,11 @@ Source, which takes a page's pixels as on Linux.
   object a subclass that answers `CrAppControlProtocol` — winit insists on
   its own class, which the subclass still is — and it is pumped by a
   run-loop timer in every mode, so it goes on while a menu is open. A page
-  arrives as pixels, as on Linux, through the same Source; the
-  `IOSurface` Chromium can hand over instead is the next step, through
-  media-pp's `MetalSharedTextureSource`. Chromium's cookie key is kept with
+  arrives as the `IOSurface` Chromium drew it into, as Windows' does as a
+  shared texture, and media-pp's `MetalSharedTextureSource` copies it GPU
+  to GPU into a frame of the pipeline's own; the layer blends it as the
+  premultiplied picture it is. Measured with a page turning at 60 fps:
+  obs-rs at 35% of a core, where handing over pixels cost 57%. Chromium's cookie key is kept with
   the profile (`--use-mock-keychain`) rather than in the login keychain,
   which would otherwise ask, over whatever is being recorded.
 
@@ -164,7 +166,8 @@ Source, which takes a page's pixels as on Linux.
   obs-rs itself, which is a helper too when Chromium starts it as one, and
   is what `cargo run` has just built; each is a clone, never a hard link —
   see `make-app.sh` for what a link broke. Checked on a Mac: a page drawn
-  into the Preview from a development bundle and from a release bundle.
+  into the Preview from a development bundle and from a release bundle, a
+  half-transparent one blended once.
 
 Not yet: notarization, which needs a paid Apple Developer account — until
 then Gatekeeper asks about a downloaded copy once.

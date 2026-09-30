@@ -53,9 +53,9 @@ bottom.](docs/screenshot.png)
   entirely if you turn that off. TCP or UDP, because no one transport gets
   through every network.
 - **Browser.** A web page as a source: an overlay, an alert box, a chat
-  window. It is rendered off-screen by Chromium; on Windows it is handed
-  over as a GPU texture, so the page reaches the compositor without a copy
-  through system memory, and on Linux and macOS as its pixels, which are
+  window. It is rendered off-screen by Chromium; on Windows and macOS it is
+  handed over as a GPU texture, so the page reaches the compositor without
+  a copy through system memory, and on Linux as its pixels, which are
   copied up. Either way its transparency is real
   transparency, not a black rectangle. Address, size and frame rate are set in the Properties dock.
   Whatever the page plays gets a channel in the audio mixer, like a media

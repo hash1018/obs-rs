@@ -13,7 +13,9 @@
 //! a GPU buffer there too, but as a dmabuf, and the Linux compositor is CUDA,
 //! which cannot open one — getting it there is a Vulkan import and an export
 //! CUDA *can* read, which is a bridge of its own. [`Painted`] is shaped for
-//! whichever this platform has. macOS takes pixels as Linux does, for now.
+//! whichever this platform has. macOS takes Chromium's GPU picture as Windows
+//! does, as an `IOSurface`, which the compositor's Metal device copies from
+//! directly.
 //!
 //! # macOS
 //!
@@ -306,6 +308,18 @@ pub struct Painted {
     pub size: [u32; 2],
 }
 
+/// What a page hands over when it has drawn: the surface the browser painted
+/// into, and the size of it.
+///
+/// Borrowed for the call: Chromium draws its next picture into the same
+/// surface — see `media_pp::elements::MetalSharedTextureSource`, which is
+/// what this is meant to be given to, and which copies.
+#[cfg(target_os = "macos")]
+pub struct Painted<'a> {
+    pub surface: &'a objc2_io_surface::IOSurfaceRef,
+    pub size: [u32; 2],
+}
+
 /// What a page hands over when it has drawn: its pixels, and the size of
 /// them.
 ///
@@ -313,7 +327,7 @@ pub struct Painted {
 /// padding — and premultiplied, as Chromium composites: a pixel's colour has
 /// already been multiplied by its alpha. Borrowed for the call; what keeps
 /// them has to copy them.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub struct Painted<'a> {
     pub pixels: &'a [u8],
     pub size: [u32; 2],
@@ -613,10 +627,11 @@ enum Command {
 // The page's own drawing, as CEF hands it over. `view_rect` is what makes the
 // page the size it was asked for.
 //
-// On Windows the GPU paint is the picture, and the CPU one does nothing but
-// say so once: it is what CEF falls back to when the shared-texture path is
-// unavailable, and a Source that is silently blank is worth one line in the
-// log. On Linux it is the other way round — see this module's docs.
+// On Windows and macOS the GPU paint is the picture, and the CPU one does
+// nothing but say so once: it is what CEF falls back to when the
+// shared-texture path is unavailable, and a Source that is silently blank is
+// worth one line in the log. On Linux it is the other way round — see this
+// module's docs.
 //
 // The macro writes the struct, so it takes neither doc comments nor derives.
 wrap_render_handler! {
@@ -645,7 +660,7 @@ wrap_render_handler! {
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
         ) {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             {
                 let _ = (type_, buffer);
                 if !self.warned.swap(true, Ordering::Relaxed) {
@@ -655,7 +670,7 @@ wrap_render_handler! {
                     );
                 }
             }
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(target_os = "linux")]
             {
                 // The page itself, not a popup a `<select>` opened over it:
                 // a popup is a picture of its own, drawn to be laid on top at
@@ -682,10 +697,12 @@ wrap_render_handler! {
         fn on_accelerated_paint(
             &self,
             _browser: Option<&mut Browser>,
-            _type_: PaintElementType,
+            type_: PaintElementType,
             _dirty_rects: Option<&[Rect]>,
             info: Option<&cef::AcceleratedPaintInfo>,
         ) {
+            #[cfg(target_os = "windows")]
+            let _ = type_;
             #[cfg(target_os = "windows")]
             {
                 let Some(info) = info else { return };
@@ -697,11 +714,35 @@ wrap_render_handler! {
                     });
                 });
             }
+            #[cfg(target_os = "macos")]
+            {
+                // The page itself, not a popup — see the Linux paint.
+                if type_ != PaintElementType::VIEW {
+                    return;
+                }
+                let Some(info) = info else { return };
+                // SAFETY: CEF hands over the surface it painted into, live
+                // for the length of this call, or null.
+                let Some(surface) = (unsafe {
+                    info.shared_texture_io_surface
+                        .cast::<objc2_io_surface::IOSurfaceRef>()
+                        .as_ref()
+                }) else {
+                    return;
+                };
+                let coded = &info.extra.coded_size;
+                guarded("paint", || {
+                    (self.paint)(Painted {
+                        surface,
+                        size: [coded.width.max(0) as u32, coded.height.max(0) as u32],
+                    });
+                });
+            }
             // Never asked for here — see `shared_texture_enabled` where a page
             // is opened — so one arriving is worth saying, once.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(target_os = "linux")]
             {
-                let _ = info;
+                let _ = (type_, info);
                 if !self.warned.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         "the browser engine handed over a GPU buffer, which obs-rs does not take \
@@ -883,12 +924,15 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
             );
             let window = WindowInfo {
                 windowless_rendering_enabled: 1,
-                // On Windows, the reason a page costs so little: its pictures
-                // arrive as textures this machine's GPU already holds, rather
-                // than as pixels copied out to system memory and back. On
-                // Linux the pixels are what this can take — see this module's
-                // docs.
-                shared_texture_enabled: i32::from(cfg!(target_os = "windows")),
+                // On Windows and macOS, the reason a page costs so little:
+                // its pictures arrive as textures this machine's GPU already
+                // holds, rather than as pixels copied out to system memory
+                // and back. On Linux the pixels are what this can take — see
+                // this module's docs.
+                shared_texture_enabled: i32::from(cfg!(any(
+                    target_os = "windows",
+                    target_os = "macos"
+                ))),
                 ..Default::default()
             };
             let settings = BrowserSettings {

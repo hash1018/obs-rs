@@ -10,6 +10,10 @@
 //! the callback, because the handle is the browser's and is only promised
 //! for the length of the call.
 //!
+//! On macOS it is the same, with an `IOSurface` for the handle:
+//! `MetalSharedTextureSource` copies it, with a Metal blit, into a
+//! VideoToolbox frame of the pipeline's own.
+//!
 //! On Linux the browser draws on the CPU and hands over its pixels — see
 //! `crate::browser` for why — and they go the way a Text Source's do: into
 //! a frame, through the GPU's upload, and on to the compositor.
@@ -17,7 +21,7 @@
 //! # Its alpha is already in its colour
 //!
 //! A browser composites its page before handing it over, so what arrives is
-//! colour multiplied by alpha. On Windows the layer says so — see
+//! colour multiplied by alpha. On Windows and macOS the layer says so — see
 //! `layer_for` — and the compositor blends it by what it already holds
 //! rather than applying that alpha a second time. The CUDA compositor has no
 //! such blend, so on Linux — on either GPU, for one way to serve both — the
@@ -34,7 +38,8 @@
 //!
 //! # Where it exists
 //!
-//! The browser engine is CEF, on Windows and Linux — see `crate::browser`.
+//! The browser engine is CEF, on Windows, Linux and macOS — see
+//! `crate::browser`.
 //! Anywhere else, or in a build without it, this kind opens as absent with
 //! that as the reason, rather than being missing from the Sources list.
 
@@ -530,10 +535,12 @@ pub(in crate::engine) fn open(
 ) -> Result<OpenOutcome, BackendError> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    #[cfg(target_os = "linux")]
     use media_pp::buffer::MediaBuffer;
     use media_pp::elements::{AppSource, CompositorInput};
     use media_pp::ffmpeg;
     use media_pp::pipeline::PipelineBuilder;
+    #[cfg(target_os = "linux")]
     use media_pp::pool::UnboundObjectPool;
 
     use super::{FilledRack, MediaFile, MediaMeters, OpenSource, filters, input_name, sound};
@@ -545,8 +552,21 @@ pub(in crate::engine) fn open(
     let size = page_size(settings);
     let name = input_name(item);
 
+    // Linux: the page's pixels, uploaded. macOS: the surface Chromium drew
+    // into, copied GPU to GPU into a frame of this pipeline's own, as the
+    // Windows twin's texture is.
+    #[cfg(target_os = "linux")]
     let (source, pusher) = AppSource::new(name.clone(), PICTURE_QUEUE_DEPTH);
+    #[cfg(target_os = "linux")]
     let upload = gpu.upload(format!("{name}-upload"), filters::ChainFormat::Bgra);
+    #[cfg(target_os = "macos")]
+    let (source, pusher) = media_pp::elements::MetalSharedTextureSource::new(
+        name.clone(),
+        gpu.device(),
+        size[0],
+        size[1],
+        PICTURE_QUEUE_DEPTH,
+    )?;
     let FilledRack { rack, filters } =
         super::filled_rack(&name, gpu, filters::ChainFormat::Bgra, item)?;
 
@@ -578,7 +598,10 @@ pub(in crate::engine) fn open(
     let sound_name = name.clone();
     let builder = PipelineBuilder::new(name.clone());
     let (builder, ()) = builder.add_source(source, move |source, context| {
+        #[cfg(target_os = "linux")]
         let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
+        #[cfg(target_os = "macos")]
+        let branch = context.branch().pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
     })?;
@@ -599,6 +622,7 @@ pub(in crate::engine) fn open(
     // Frames that go back to be drawn into again once the upload has let go
     // of them: a page repaints at its own rate, and a fresh allocation of a
     // whole picture every time is what this saves.
+    #[cfg(target_os = "linux")]
     let pictures = UnboundObjectPool::new(
         PICTURE_QUEUE_DEPTH + 1,
         move || ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, size[0], size[1]),
@@ -613,15 +637,25 @@ pub(in crate::engine) fn open(
                 painted.size[0], painted.size[1], size[0], size[1]
             ))
         } else {
-            let mut frame = pictures.get();
-            straighten(painted.pixels, &mut frame, size[0] as usize);
-            // Dropped rather than waited on, as on Windows: this is the
-            // browser engine's one thread, shared by every page. And not
-            // complained about when it fails: the one way it can is the
-            // pipeline having gone, which is this Source closing — a page
-            // told to close can still be in the middle of a picture.
-            let _ = pusher.try_push(MediaBuffer::Video(Arc::new(frame)));
-            Ok(())
+            #[cfg(target_os = "linux")]
+            {
+                let mut frame = pictures.get();
+                straighten(painted.pixels, &mut frame, size[0] as usize);
+                // Dropped rather than waited on, as on Windows: this is the
+                // browser engine's one thread, shared by every page. And not
+                // complained about when it fails: the one way it can is the
+                // pipeline having gone, which is this Source closing — a page
+                // told to close can still be in the middle of a picture.
+                let _ = pusher.try_push(MediaBuffer::Video(Arc::new(frame)));
+                Ok(())
+            }
+            // Dropped rather than waited on, for the reason above; and only a
+            // surface this cannot take is said, not the pipeline having gone.
+            #[cfg(target_os = "macos")]
+            match pusher.try_push(painted.surface, None) {
+                Ok(_) | Err(media_pp::elements::MetalSharedTextureSourceError::Closed) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            }
         };
         if let Err(error) = pushed
             && !complained.swap(true, Ordering::Relaxed)
@@ -696,7 +730,7 @@ pub(in crate::engine) fn open(
 /// divided pixel by pixel. Measured on a 1080p page with three large
 /// translucent shapes turning, the copy took 9.5 ms a picture dividing
 /// pixel by pixel.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn straighten(from: &[u8], frame: &mut media_pp::ffmpeg::frame::Video, width: usize) {
     let stride = frame.stride(0);
     let rows = from.chunks_exact(width * 4);
@@ -722,7 +756,7 @@ fn straighten(from: &[u8], frame: &mut media_pp::ffmpeg::frame::Video, width: us
 }
 
 /// [`unpremultiplied`] over whole pixels, one at a time.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn straighten_pixels(from: &[u8], into: &mut [u8]) {
     let (pixels, _) = from.as_chunks::<4>();
     let (slots, _) = into.as_chunks_mut::<4>();
@@ -735,7 +769,7 @@ fn straighten_pixels(from: &[u8], into: &mut [u8]) {
 ///
 /// A multiplication by a reciprocal kept per alpha, rather than a division
 /// per channel, which was most of what a translucent pixel cost.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn unpremultiplied([blue, green, red, alpha]: [u8; 4]) -> [u8; 4] {
     match alpha {
         0 => [0; 4],
@@ -751,7 +785,7 @@ fn unpremultiplied([blue, green, red, alpha]: [u8; 4]) -> [u8; 4] {
 
 /// `255 / alpha` in 16.16 fixed point, for every alpha — see
 /// [`unpremultiplied`]. Never looked up for an alpha of zero.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 const RECIPROCALS: [u32; 256] = {
     let mut table = [0u32; 256];
     let mut alpha = 1;
@@ -769,7 +803,7 @@ mod tests {
     /// Half-covered white arrives as half-grey with half alpha, and has to
     /// leave as white — anything else is the compositor darkening every
     /// translucent edge of a page by its alpha a second time.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn premultiplied_colour_is_divided_back_out() {
         use super::unpremultiplied;
@@ -788,7 +822,7 @@ mod tests {
 
     /// The reciprocal is the division it replaces, for every colour under
     /// every alpha a premultiplied pixel can have.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_reciprocal_agrees_with_dividing() {
         use super::unpremultiplied;
@@ -805,7 +839,7 @@ mod tests {
     }
 
     /// Rows are copied into a frame whose rows are wider than the page's.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_page_lands_row_by_row_in_a_wider_frame() {
         use media_pp::ffmpeg;

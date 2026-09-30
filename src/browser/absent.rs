@@ -18,8 +18,7 @@ pub fn helper_process() -> Option<i32> {
 
 /// What a page would hand over, so the callback a Source writes has the same
 /// shape wherever it is compiled — a texture handle on Windows, pixels on
-/// Linux, as `cef.rs` has them, and on macOS the Linux shape, since its
-/// Browser Source is the Linux one.
+/// Linux and a surface on macOS, as `cef.rs` has them.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub struct Painted {
     pub handle: isize,
@@ -27,9 +26,16 @@ pub struct Painted {
 }
 
 /// See the other platforms' twin.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub struct Painted<'a> {
     pub pixels: &'a [u8],
+    pub size: [u32; 2],
+}
+
+/// See the other platforms' twin.
+#[cfg(target_os = "macos")]
+pub struct Painted<'a> {
+    pub surface: &'a objc2_io_surface::IOSurfaceRef,
     pub size: [u32; 2],
 }
 
