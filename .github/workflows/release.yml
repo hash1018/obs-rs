@@ -85,6 +85,10 @@ jobs:
           Copy-Item target/release/obs-rs.exe $stage
           Copy-Item "$env:FFMPEG_DIR/bin/*.dll" $stage
           Copy-Item LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY.md, README.md $stage
+          # What the README links to, so it reads the same unpacked as on
+          # GitHub: the documents and the picture, not the release notes.
+          New-Item -ItemType Directory -Force -Path "$stage/docs" | Out-Null
+          Copy-Item docs/*.md, docs/screenshot.png "$stage/docs"
 
           # The browser engine. `libcef.dll` is linked, not loaded on demand,
           # so an archive without it does not start at all — and the rest is
@@ -127,6 +131,7 @@ jobs:
           $stage = "dist/obs-rs-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-x86_64-windows"
           if (-not (Get-ChildItem "$stage/avcodec-*.dll")) { throw "no FFmpeg libraries in the archive" }
           if (-not (Get-ChildItem "$stage/licenses/*.txt")) { throw "no bundled licences in the archive" }
+          if (-not (Test-Path "$stage/docs/install.md")) { throw "no documents in the archive" }
           # The one file whose absence is invisible until somebody without the
           # redistributable installed tries to start it.
           if (-not (Test-Path "$stage/vcruntime140.dll")) { throw "no Visual C++ runtime in the archive" }
@@ -235,6 +240,9 @@ jobs:
           cp target/release/obs-rs "$stage"
           cp -a "$FFMPEG_DIR"/lib/*.so* "$stage/lib"
           cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md README.md "$stage"
+          # What the README links to — see the Windows job.
+          mkdir -p "$stage/docs"
+          cp docs/*.md docs/screenshot.png "$stage/docs"
           # The icon and the script that registers it with the desktop. Only
           # this side needs them: Wayland has no way for a client to set its
           # own window icon, so a compositor matches the surface's `app_id`
@@ -275,6 +283,8 @@ jobs:
             || { echo "no FFmpeg libraries in the archive" >&2; exit 1; }
           compgen -G "$stage/licenses/*.txt" > /dev/null \
             || { echo "no bundled licences in the archive" >&2; exit 1; }
+          [ -f "$stage/docs/install.md" ] \
+            || { echo "no documents in the archive" >&2; exit 1; }
           # The installer refuses to run without these two beside it, and a
           # `.sh` that lost its executable bit is a file nobody can start.
           [ -x "$stage/install-desktop-entry.sh" ] \
@@ -390,6 +400,9 @@ jobs:
           mkdir -p "$stage/licenses"
           assets/macos/make-app.sh target/release/obs-rs "$stage/obs-rs.app"
           cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md README.md "$stage"
+          # What the README links to — see the Windows job.
+          mkdir -p "$stage/docs"
+          cp docs/*.md docs/screenshot.png "$stage/docs"
           # The distribution's own licence file, as the other archives carry.
           cef=$(find "$CEF_PATH" -maxdepth 3 -name CREDITS.html | head -n 1)
           cp "$cef" "$stage/licenses/chromium-credits.html"
@@ -408,6 +421,8 @@ jobs:
             || { echo "no FFmpeg libraries in the bundle" >&2; exit 1; }
           compgen -G "$stage/licenses/*.txt" > /dev/null \
             || { echo "no bundled licences in the archive" >&2; exit 1; }
+          [ -f "$stage/docs/install.md" ] \
+            || { echo "no documents in the archive" >&2; exit 1; }
           [ -f "$app/Contents/Resources/obs-rs.icns" ] \
             || { echo "no icon in the bundle" >&2; exit 1; }
           # Without these a Browser Source has no engine: the framework, and

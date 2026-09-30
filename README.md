@@ -58,7 +58,8 @@ Ninja for the browser engine — the details, per platform, are in
 | [macos.md](docs/macos.md) | How the macOS build is put together |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the application is put together, for changing it |
 
-[`AGENTS.md`](AGENTS.md) is the working guide for changing it.
+[`AGENTS.md`](https://github.com/hash1018/obs-rs/blob/main/AGENTS.md) is the
+working guide for changing it.
 
 ## License
 
