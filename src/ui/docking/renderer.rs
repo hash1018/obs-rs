@@ -85,7 +85,7 @@ pub(super) fn show(
             .settings
             .hotkeys
             .binding(crate::hotkey::HotkeyAction::SaveReplay)
-            .map(|chord| chord.to_string()),
+            .map(|chord| chord.label()),
         i18n: resources.i18n,
         actions,
     };

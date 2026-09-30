@@ -304,7 +304,8 @@ pub fn dispatch(
     }
 
     for (index, key) in SCENE_KEYS.iter().enumerate() {
-        if !pressed(ctx, Modifiers::CTRL, *key) {
+        // Ctrl+1 to 9, which is ⌘1 to 9 on a Mac — see `Chord::modifiers`.
+        if !pressed(ctx, Chord::ctrl(*key).modifiers(), *key) {
             continue;
         }
         // Nothing for a Scene that is not there: a project with two Scenes
@@ -378,6 +379,21 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    /// What pressing the platform's own shortcut modifier looks like to
+    /// egui: Command on a Mac — which a chord's Ctrl means there, see
+    /// `Chord::modifiers` — and Ctrl everywhere else.
+    const PRIMARY: Modifiers = if cfg!(target_os = "macos") {
+        Modifiers {
+            alt: false,
+            ctrl: false,
+            shift: false,
+            mac_cmd: true,
+            command: true,
+        }
+    } else {
+        Modifiers::CTRL
+    };
     use crate::domain::SceneId;
     use crate::snapshots::{SceneItemName, SceneSnapshot};
 
@@ -508,13 +524,13 @@ mod tests {
     fn the_recording_key_starts_and_stops() {
         let idle = recording_for(None);
         assert!(matches!(
-            press(Key::R, Modifiers::CTRL, &idle).as_slice(),
+            press(Key::R, PRIMARY, &idle).as_slice(),
             [UiAction::StartRecording]
         ));
 
         let running = recording_for(Some(Duration::from_secs(3)));
         assert!(matches!(
-            press(Key::R, Modifiers::CTRL, &running).as_slice(),
+            press(Key::R, PRIMARY, &running).as_slice(),
             [UiAction::StopRecording]
         ));
     }
@@ -560,13 +576,13 @@ mod tests {
     #[test]
     fn pause_needs_something_to_pause() {
         assert!(
-            press(Key::P, Modifiers::CTRL, &recording_for(None)).is_empty(),
+            press(Key::P, PRIMARY, &recording_for(None)).is_empty(),
             "nothing is recording, so there is nothing to pause"
         );
         assert!(matches!(
             press(
                 Key::P,
-                Modifiers::CTRL,
+                PRIMARY,
                 &recording_for(Some(Duration::from_secs(1)))
             )
             .as_slice(),
@@ -589,7 +605,7 @@ mod tests {
             [UiAction::StartRecording]
         ));
         assert!(
-            hold_bound(Key::R, Modifiers::CTRL, 1, &idle, &bindings)
+            hold_bound(Key::R, PRIMARY, 1, &idle, &bindings)
                 .remove(0)
                 .is_empty(),
             "the key it used to be bound to does nothing now"
@@ -603,7 +619,7 @@ mod tests {
         let mut bindings = HotkeySettings::default();
         bindings.set(HotkeyAction::ToggleRecording, None);
         assert!(
-            hold_bound(Key::R, Modifiers::CTRL, 1, &recording_for(None), &bindings)
+            hold_bound(Key::R, PRIMARY, 1, &recording_for(None), &bindings)
                 .remove(0)
                 .is_empty()
         );
@@ -612,7 +628,7 @@ mod tests {
     /// A held key is one press, not sixty a second.
     #[test]
     fn a_repeat_is_not_a_press() {
-        let frames = hold(Key::R, Modifiers::CTRL, 3, &recording_for(None));
+        let frames = hold(Key::R, PRIMARY, 3, &recording_for(None));
         assert!(
             matches!(frames[0].as_slice(), [UiAction::StartRecording]),
             "the first press acts"
@@ -627,14 +643,7 @@ mod tests {
     /// otherwise `Ctrl+Shift+R` could never be bound to anything else.
     #[test]
     fn extra_modifiers_are_a_different_chord() {
-        assert!(
-            press(
-                Key::R,
-                Modifiers::CTRL | Modifiers::SHIFT,
-                &recording_for(None)
-            )
-            .is_empty()
-        );
+        assert!(press(Key::R, PRIMARY | Modifiers::SHIFT, &recording_for(None)).is_empty());
     }
 
     /// Push-to-talk: silent before the key is ever touched, heard while it is
@@ -715,7 +724,7 @@ mod tests {
         }];
 
         assert_eq!(
-            hold_bound(Key::M, Modifiers::CTRL, 1, &snapshots, &bindings).remove(0),
+            hold_bound(Key::M, PRIMARY, 1, &snapshots, &bindings).remove(0),
             [UiAction::Project(ProjectCommand::Audio(
                 AudioCommand::SetMuted(mic, false)
             ))]
@@ -787,12 +796,7 @@ mod tests {
     fn with_a_global_listener_the_window_keeps_only_its_own_keys() {
         let idle = recording_for(None);
         let mut bindings = HotkeySettings::default();
-        let heard = run(
-            vec![vec![(Key::R, true, Modifiers::CTRL)]],
-            &idle,
-            &bindings,
-            true,
-        );
+        let heard = run(vec![vec![(Key::R, true, PRIMARY)]], &idle, &bindings, true);
         assert!(matches!(heard[0].as_slice(), [UiAction::StartRecording]));
         bindings.set(HotkeyAction::ToggleRecording, Some(Chord::plain(Key::F9)));
         assert!(
@@ -808,7 +812,7 @@ mod tests {
         );
         assert_eq!(
             run(
-                vec![vec![(Key::Comma, true, Modifiers::CTRL)]],
+                vec![vec![(Key::Comma, true, PRIMARY)]],
                 &idle,
                 &bindings,
                 true
@@ -828,7 +832,7 @@ mod tests {
         // Pause is held elsewhere; recording is not, so the window hears it.
         let taken = HashSet::from([Hotkey::Action(HotkeyAction::TogglePause)]);
         let heard = run_holding(
-            vec![vec![(Key::R, true, Modifiers::CTRL)]],
+            vec![vec![(Key::R, true, PRIMARY)]],
             &idle,
             &bindings,
             &taken,
@@ -855,13 +859,13 @@ mod tests {
         ];
 
         assert!(matches!(
-            press(Key::Num2, Modifiers::CTRL, &snapshots).as_slice(),
+            press(Key::Num2, PRIMARY, &snapshots).as_slice(),
             [UiAction::Project(ProjectCommand::Scene(
                 SceneCommand::Select(SceneId(9))
             ))]
         ));
         assert!(
-            press(Key::Num3, Modifiers::CTRL, &snapshots).is_empty(),
+            press(Key::Num3, PRIMARY, &snapshots).is_empty(),
             "there is no third Scene to select"
         );
     }

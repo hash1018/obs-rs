@@ -76,7 +76,34 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+/// `statfs` rather than Linux's `statvfs`: the latter's block counts are 32
+/// bits on macOS, which a large volume overflows, where `statfs`'s are 64.
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    pub(super) fn available(directory: &Path) -> Option<u64> {
+        let path = CString::new(directory.as_os_str().as_bytes()).ok()?;
+        let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        // SAFETY: `path` is a NUL-terminated path that outlives the call, and
+        // `stat` is a correctly sized out-parameter for it.
+        if unsafe { libc::statfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: `statfs` returned success, which is its promise to have
+        // filled in the whole structure.
+        let stat = unsafe { stat.assume_init() };
+        // Blocks free to an unprivileged user, for the reason the Linux half
+        // gives. APFS keeps purgeable space — caches the system would clear —
+        // out of this, so it can read less than Finder does; it is what is
+        // free now, without asking anything to be cleared.
+        stat.f_bavail.checked_mul(u64::from(stat.f_bsize))
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 mod platform {
     use std::path::Path;
 
@@ -85,7 +112,10 @@ mod platform {
     }
 }
 
-#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+#[cfg(all(
+    test,
+    any(target_os = "windows", target_os = "linux", target_os = "macos")
+))]
 mod tests {
     use super::*;
 

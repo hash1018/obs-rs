@@ -87,14 +87,44 @@ impl Chord {
     /// for both would only match an event carrying both — where asking for
     /// `ctrl` alone matches whether or not the backend also set `command`,
     /// which is the rule egui documents and the one a binding wants.
+    ///
+    /// On macOS a chord's Ctrl is Command, which is what a Mac user presses
+    /// for an application's shortcuts: there `command` is asked for in its
+    /// place, and egui sets it for the Command key alone. A binding stored
+    /// as `Ctrl+R` is therefore ⌘R on a Mac and Ctrl+R everywhere else —
+    /// the same file, the same key under the same finger's habit.
     pub fn modifiers(self) -> Modifiers {
+        let command = cfg!(target_os = "macos") && self.ctrl;
         Modifiers {
-            ctrl: self.ctrl,
+            ctrl: self.ctrl && !command,
             shift: self.shift,
             alt: self.alt,
-            command: false,
+            command,
             mac_cmd: false,
         }
+    }
+
+    /// How this chord is shown: in a menu, on the settings page.
+    ///
+    /// What it is written as everywhere but macOS. There it is what a Mac
+    /// shows for a shortcut — the modifiers as symbols, in the order the
+    /// system writes them, with Command for the chord's Ctrl (see
+    /// [`Self::modifiers`]): `⌥⇧⌘F9`. What is stored stays [`Display`]'s
+    /// on every platform, so a settings file moves between them unchanged.
+    ///
+    /// [`Display`]: fmt::Display
+    pub fn label(self) -> String {
+        if !cfg!(target_os = "macos") {
+            return self.to_string();
+        }
+        let mut label = String::new();
+        for (held, symbol) in [(self.alt, '⌥'), (self.shift, '⇧'), (self.ctrl, '⌘')] {
+            if held {
+                label.push(symbol);
+            }
+        }
+        label.push_str(self.key.symbol_or_name());
+        label
     }
 }
 
@@ -573,6 +603,30 @@ impl HotkeySettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chord's Ctrl is Command on a Mac — matched as the Command key, and
+    /// shown as the system shows a shortcut — and stays `Ctrl` in what is
+    /// written, so one settings file means the same keys everywhere.
+    #[test]
+    fn a_chords_ctrl_is_command_on_a_mac_and_ctrl_in_the_file() {
+        let chord = Chord {
+            key: Key::F9,
+            ctrl: true,
+            shift: true,
+            alt: true,
+        };
+        assert_eq!(chord.to_string(), "Ctrl+Alt+Shift+F9");
+        let modifiers = chord.modifiers();
+        if cfg!(target_os = "macos") {
+            assert_eq!(chord.label(), "⌥⇧⌘F9");
+            assert!(modifiers.command && !modifiers.ctrl);
+            assert_eq!(Chord::ctrl(Key::Comma).label(), "⌘,");
+        } else {
+            assert_eq!(chord.label(), "Ctrl+Alt+Shift+F9");
+            assert!(modifiers.ctrl && !modifiers.command);
+        }
+        assert_eq!(Chord::plain(Key::F11).label(), "F11");
+    }
 
     #[test]
     fn a_binding_survives_being_written_down_and_read_back() {

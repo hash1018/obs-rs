@@ -77,8 +77,19 @@ Source, which has the Linux shape and, with no engine here, says so.
   watched for by a poll, as on Linux. Checked on a Mac: both default
   channels open, and a recording made while a sound played carries it.
 
-Not yet: disk space, resource usage, global hotkeys, raising the running
-copy, the browser engine and packaging.
+- **Smaller pieces.** Free disk space is `statfs` (`output/disk.rs`) —
+  not `statvfs`, whose block counts are 32 bits on macOS. A second launch
+  brings the running copy forward (`instance/macos.rs`): since macOS 14 an
+  application is activated only by an active one yielding to it, so the
+  launch activates itself as an accessory, with no Dock icon, and yields;
+  checked with Finder in front. The application's own shortcuts are
+  Command where they are Ctrl elsewhere — ⌘R, ⌘1…9, ⌘, — matched as
+  Command and shown as a Mac shows them (`⌥⇧⌘F9`), while a settings file
+  still says `Ctrl+R`, so it means the same keys on every platform
+  (`hotkey.rs`).
+
+Not yet: resource usage, global hotkeys, the browser engine and
+packaging.
 
 What step 1 did, before there was a backend: every `mod platform;` without a
 macOS arm compiles where it has one, `output` has an `unsupported.rs`, the
@@ -192,28 +203,13 @@ Done — see *Where macOS stands*. The existing
 - **Recording encoders** (`settings.rs:490-548`): `RecordingEncoder` has no
   VideoToolbox entry. Adding one touches `ALL`, `label`, and
   `software_codec`'s exhaustive match in `backend/mod.rs:127-137`.
-- **Disk space** (`engine/output/disk.rs:79-86`): falls back to unknown;
-  `statvfs` works on macOS as on Linux, with `libc` as a macOS dependency.
 - **Resource usage** (`src/resources`): CPU, GPU and memory read blank. Needs
   a sampler (`proc_pid_rusage` / `task_info` for the process; GPU through
   IOKit is harder).
-- **Single instance** (`src/instance`): the unsupported fallback takes no
-  lock and cannot raise the running window. `flock` works on macOS (with
-  `libc`); raising is `NSRunningApplication` activation.
 - **Global hotkeys** (`hotkey/global.rs`): none on macOS. A
   `CGEventTap`-based keyboard can implement the same polling
   `tracker::Keyboard` trait Windows uses, and needs the Accessibility
   (input monitoring) permission.
-- **The application's own shortcuts answer Control, not Command**
-  (`ui/shell/hotkeys.rs:355`). Ctrl+R, Ctrl+P, Ctrl+1…9, Ctrl+, and
-  Ctrl+Z/Y are matched with `matches_exact(Modifiers::CTRL)`. On macOS
-  egui reports Command as `command` and `mac_cmd`, never as `ctrl`, so
-  ⌘R does nothing and only the physical Control key works — and the
-  Settings page and the menus say "Ctrl". What a Mac user expects is
-  Command: match `Modifiers::COMMAND` there (Ctrl elsewhere, ⌘ on macOS),
-  and show ⌘ in `Chord`'s label (`hotkey.rs:105`). Bindings the user sets
-  already take Command as Ctrl (`Chord::from_press`, `hotkey.rs:77`), so a
-  stored binding means the same key on both.
 - **The menu bar** is drawn inside the window by egui (File, Edit, View),
   as on the other platforms; the macOS menu bar at the top of the screen
   shows only the application menu winit gives every app. That works, but a
@@ -249,8 +245,8 @@ Done — see *Where macOS stands*. The existing
 
 1. ~~Build on macOS with the unsupported backend, and a macOS CI job that
    keeps it building.~~ Done — see *Where macOS stands*.
-2. Disk space and raising the running copy — small, and independent of
-   media-pp. (`src/capture/macos.rs` is done.)
+2. ~~Disk space, raising the running copy, Command shortcuts, and
+   `src/capture/macos.rs`.~~ Done.
 3. ~~With media-pp's Core Audio pieces: the mixer's devices.~~ Done.
 4. ~~The Metal backend: `MetalVideoCompositor`, the Preview, VideoToolbox
    recording, and its captures.~~ Done.

@@ -292,7 +292,7 @@ fn show_edit_menu(
         let text = super::edit::menu_item(label, with, without, i18n);
         let mut button = egui::Button::new(text);
         if let Some(chord) = hotkeys.binding(action) {
-            button = button.shortcut_text(chord.to_string());
+            button = button.shortcut_text(chord.label());
         }
         if ui.add_enabled(label.is_some(), button).clicked() {
             actions.push(UiAction::Project(command));

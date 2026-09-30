@@ -127,7 +127,11 @@ pub(super) fn show(
             });
 
         ui.add_space(8.0);
-        ui.weak(i18n.text(TextKey::HotkeyHint));
+        // The Scene keys as this platform shows them: Ctrl+1, or ⌘1 on a Mac.
+        let mut args = fluent_bundle::FluentArgs::new();
+        args.set("first", crate::hotkey::Chord::ctrl(egui::Key::Num1).label());
+        args.set("last", crate::hotkey::Chord::ctrl(egui::Key::Num9).label());
+        ui.weak(i18n.text_with(TextKey::HotkeyHint, &args));
     });
 
     if let (Some(action), Some(press)) = (capturing, pressed) {
@@ -198,7 +202,7 @@ fn row(
     } else {
         draft.hotkeys.binding(hotkey).map_or_else(
             || i18n.text(TextKey::HotkeyNone).into_owned(),
-            |chord| chord.to_string(),
+            |chord| chord.label(),
         )
     };
     let clicked = ui.add(egui::Button::new(text).selected(waiting)).clicked();

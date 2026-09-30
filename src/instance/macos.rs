@@ -1,11 +1,5 @@
-//! The claim on macOS: `flock`, as on Linux.
-//!
-//! Raising the running copy is not written yet. It is
-//! `NSRunningApplication`'s activation, which macOS 14 made cooperative —
-//! the running copy is asked, and whether it comes forward depends on what
-//! the launched one yields — and that wants trying against a real window
-//! before it is relied on. Until then a second launch is refused and the
-//! first stays where it was.
+//! The claim on macOS: `flock`, as on Linux; and the running copy brought
+//! forward through `NSRunningApplication`.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -36,7 +30,45 @@ pub(super) fn hold(path: &Path) -> io::Result<Option<File>> {
     }
 }
 
-/// Not written yet — see this module's own docs.
-pub(super) fn raise(_pid: u32) -> bool {
-    false
+/// Brings `pid`'s windows forward, showing it again if it was hidden.
+///
+/// Since macOS 14 an application is activated only by one that is active
+/// itself and yields to it: asked by anything else, it stays where it was —
+/// measured, with a Finder window in front. This launch has not become
+/// active by the time it asks, since it quits before it has a window, so it
+/// becomes active first — as an accessory, so without a Dock icon — and
+/// yields to the running copy. Before macOS 14, where yielding does not
+/// exist, asking was enough.
+pub(super) fn raise(pid: u32) -> bool {
+    use objc2::runtime::NSObjectProtocol;
+    use objc2::{MainThreadMarker, sel};
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy,
+        NSRunningApplication,
+    };
+
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    let Some(running) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
+        return false;
+    };
+    running.unhide();
+    let options = NSApplicationActivationOptions::ActivateAllWindows;
+    // Asked from `main`, before anything else runs: this is the main thread.
+    if let Some(main_thread) = MainThreadMarker::new() {
+        let this = NSApplication::sharedApplication(main_thread);
+        if this.respondsToSelector(sel!(yieldActivationToApplication:)) {
+            this.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+            #[allow(deprecated)]
+            this.activateIgnoringOtherApps(true);
+            this.yieldActivationToApplication(&running);
+            return running.activateFromApplication_options(
+                &NSRunningApplication::currentApplication(),
+                options,
+            );
+        }
+    }
+    #[allow(deprecated)]
+    running.activateWithOptions(options)
 }
