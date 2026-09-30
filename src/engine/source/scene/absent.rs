@@ -1,5 +1,5 @@
 //! What a platform without a Scene-in-a-Scene answers: every one but
-//! Windows and Linux, which is every one with no backend here at all.
+//! Windows, Linux and macOS, which is every one with no backend here at all.
 
 use crate::engine::source::OpenOutcome;
 
