@@ -49,7 +49,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 
-use media_pp::{buffer::MediaBuffer, element::Sink, elements::AppSink, ffmpeg};
+use media_pp::{buffer::MediaBuffer, element::RawSink, elements::AppSink, ffmpeg};
 
 /// What one screenshot came to: the file it wrote, or why none was written.
 pub(in crate::engine) type Taken = Result<PathBuf, String>;
@@ -66,7 +66,7 @@ const MAX_SUFFIX: u32 = 1_000;
 pub(in crate::engine) fn sink(
     path: PathBuf,
     done: impl FnOnce(Taken) + Send + 'static,
-) -> Box<dyn Sink> {
+) -> Box<dyn RawSink> {
     let mut pending = Some((path, done));
     Box::new(AppSink::new("screenshot", move |buffer| {
         let MediaBuffer::Video(frame) = &buffer else {

@@ -14,7 +14,7 @@
 //! its own pipeline — which is the difference `RunningSource` is shaped
 //! around, and why it is a type each backend defines for itself.
 
-use media_pp::element::Filter;
+use media_pp::element::RawFilter;
 use media_pp::elements::{
     CaptureSourceKind, CompositorInput, CudaConverter, CudaFrameFormat,
     PipeWireScreenCaptureOptions, PipeWireScreenCaptureSource, VideoLayer,
@@ -65,7 +65,7 @@ pub(in crate::engine) fn open(
                 PipeWireScreenCaptureSource::open_gpu(name.clone(), options, device)?;
             let converter =
                 CudaConverter::new(format!("{name}-convert"), device, CudaFrameFormat::Nv12)?;
-            let bridge: Box<dyn Filter> = Box::new(converter);
+            let bridge: Box<dyn RawFilter> = Box::new(converter);
             (source, format, token, bridge, filters::ChainFormat::Nv12)
         }
         // Nothing takes a DMA-BUF into a Vulkan frame here, so the capture

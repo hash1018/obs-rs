@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use media_pp::contract::MemoryDomain;
-use media_pp::element::Filter;
+use media_pp::element::RawFilter;
 use media_pp::elements::{
     ChromaKeyHandle, ChromaKeyOptions, CompositorInput, DecodeTarget, MetalChromaKey,
     MetalConverter, MetalVideoCompositor, MetalVideoCompositorHandle, MetalVideoEffect,
@@ -61,7 +61,11 @@ impl Gpu {
     /// layout it is handed, as Vulkan's does, so what arrives already has to
     /// be `format`: BGRA from everything this application draws, NV12 from a
     /// camera.
-    pub(in crate::engine) fn upload(&self, name: String, _format: ChainFormat) -> Box<dyn Filter> {
+    pub(in crate::engine) fn upload(
+        &self,
+        name: String,
+        _format: ChainFormat,
+    ) -> Box<dyn RawFilter> {
         Box::new(VideoToolboxUpload::new(name, &self.0))
     }
 
@@ -71,13 +75,16 @@ impl Gpu {
         &self,
         name: String,
         _format: ChainFormat,
-    ) -> Box<dyn Filter> {
+    ) -> Box<dyn RawFilter> {
         Box::new(VideoToolboxDownload::new(name))
     }
 
     /// Turns NV12 into BGRA on the GPU, which is what a filter needs in
     /// front of it when the Source hands on NV12.
-    pub(in crate::engine) fn to_bgra(&self, name: String) -> Result<Box<dyn Filter>, BackendError> {
+    pub(in crate::engine) fn to_bgra(
+        &self,
+        name: String,
+    ) -> Result<Box<dyn RawFilter>, BackendError> {
         Ok(Box::new(MetalConverter::new(name, &self.0)?))
     }
 
@@ -85,7 +92,7 @@ impl Gpu {
         &self,
         name: String,
         options: ChromaKeyOptions,
-    ) -> Result<(Box<dyn Filter>, ChromaKeyHandle), BackendError> {
+    ) -> Result<(Box<dyn RawFilter>, ChromaKeyHandle), BackendError> {
         let (element, handle) = MetalChromaKey::new(name, &self.0, options)?;
         Ok((Box::new(element), handle))
     }
@@ -94,7 +101,7 @@ impl Gpu {
         &self,
         name: String,
         effect: VideoEffect,
-    ) -> Result<(Box<dyn Filter>, VideoEffectHandle), BackendError> {
+    ) -> Result<(Box<dyn RawFilter>, VideoEffectHandle), BackendError> {
         let (element, handle) = MetalVideoEffect::new(name, &self.0, effect)?;
         Ok((Box::new(element), handle))
     }

@@ -314,7 +314,7 @@ pub(super) fn open_renderer(
     _device: &str,
 ) -> Result<
     (
-        Box<dyn media_pp::element::Sink>,
+        Box<dyn media_pp::element::RawSink>,
         media_pp::elements::AudioFormat,
     ),
     BackendError,

@@ -61,7 +61,7 @@
 //! Windows one, and gets no bridge either.
 
 use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
-use media_pp::element::Filter as PpFilter;
+use media_pp::element::RawFilter as PpFilter;
 use media_pp::elements::{Rack, RackHandle};
 
 use crate::domain::{Filter, FilterId, FilterKind, FilterSettings};
@@ -272,7 +272,7 @@ mod unsupported {
 #[cfg(target_os = "windows")]
 mod windows {
     use media_pp::contract::MemoryDomain;
-    use media_pp::element::Filter as PpFilter;
+    use media_pp::element::RawFilter as PpFilter;
     use media_pp::elements::{
         D3d11ChromaKey, D3d11Gpu, D3d11Scaler, D3d11ScalerFormat, D3d11VideoEffect, Rack,
     };
@@ -373,7 +373,7 @@ mod windows {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux {
-    use media_pp::element::Filter as PpFilter;
+    use media_pp::element::RawFilter as PpFilter;
     use media_pp::elements::Rack;
 
     use super::{ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter};

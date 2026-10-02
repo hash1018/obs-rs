@@ -209,7 +209,7 @@ mod tests {
 
     use media_pp::{
         buffer::MediaBuffer,
-        element::Sink,
+        element::RawSink,
         elements::AppSink,
         pipeline::{ChainBuilder, DetachedBranch},
     };
@@ -218,14 +218,14 @@ mod tests {
 
     /// Ends a branch at `sink` and nothing else — no filters between.
     fn end(
-        sink: Box<dyn Sink>,
+        sink: Box<dyn RawSink>,
     ) -> impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError> {
         move |builder, _| Ok(builder.to(sink)?)
     }
 
     /// A branch end that counts the pictures reaching it, under `name` —
     /// what the Stats dock reads a Source's compositor input by.
-    fn counting_as(name: &str) -> (Box<dyn Sink>, Arc<AtomicUsize>) {
+    fn counting_as(name: &str) -> (Box<dyn RawSink>, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&count);
         let sink = AppSink::new(name, move |buffer: MediaBuffer| {

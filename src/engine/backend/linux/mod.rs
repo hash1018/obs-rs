@@ -14,7 +14,7 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
-    element::Sink,
+    element::RawSink,
     elements::{AppSink, ChangeGate, CudaRenderer, TeeHandle, VideoCompositorOptions, VideoLayer},
     ffmpeg,
     pipeline::Pipeline,
@@ -152,7 +152,7 @@ impl Backend {
         );
         // What the drawing branch ends in: on CUDA a renderer handed the
         // frame's own planes, on Vulkan the frame read back and written.
-        let (download, renderer): (_, Box<dyn Sink>) = match &gpu {
+        let (download, renderer): (_, Box<dyn RawSink>) = match &gpu {
             Gpu::Cuda(device) => (
                 None,
                 Box::new(CudaRenderer::new(

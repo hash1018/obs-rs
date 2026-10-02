@@ -82,7 +82,7 @@ impl Backend {
         &self,
         kind: OutputKind,
         prepared: PreparedOutput,
-        sink: Box<dyn media_pp::element::Sink>,
+        sink: Box<dyn media_pp::element::RawSink>,
     ) -> Result<VideoTrack, BackendError> {
         let PreparedOutput { encoder, size, .. } = prepared;
         let [width, height] = size;
@@ -220,7 +220,7 @@ impl Backend {
     /// Linux twin, whose Canvas is the same NV12.
     pub(in crate::engine) fn attach_screenshot(
         &self,
-        sink: Box<dyn media_pp::element::Sink>,
+        sink: Box<dyn media_pp::element::RawSink>,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
         let branch = self
             .tee
@@ -245,7 +245,7 @@ impl Backend {
         &self,
         frame: std::sync::Arc<media_pp::pool::UnboundObjectPoolRef<ffmpeg::frame::Video>>,
         format: ChainFormat,
-        sink: Box<dyn media_pp::element::Sink>,
+        sink: Box<dyn media_pp::element::RawSink>,
     ) -> Result<std::sync::Arc<media_pp::pipeline::Pipeline>, BackendError> {
         use media_pp::elements::AppSource;
 

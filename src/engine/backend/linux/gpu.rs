@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use media_pp::contract::MemoryDomain;
-use media_pp::element::Filter;
+use media_pp::element::RawFilter;
 use media_pp::elements::{
     ChromaKeyHandle, ChromaKeyOptions, CompositorInput, CudaChromaKey, CudaConverter, CudaDevice,
     CudaDownload, CudaFrameFormat, CudaUpload, CudaVideoCompositor, CudaVideoCompositorHandle,
@@ -137,7 +137,11 @@ impl Gpu {
     /// keeps the layout it is handed — planar 4:2:0 becomes NV12 on the way
     /// — so what arrives already has to be `format`: BGRA from everything
     /// this application draws, NV12 from a camera.
-    pub(in crate::engine) fn upload(&self, name: String, format: ChainFormat) -> Box<dyn Filter> {
+    pub(in crate::engine) fn upload(
+        &self,
+        name: String,
+        format: ChainFormat,
+    ) -> Box<dyn RawFilter> {
         match self {
             Self::Cuda(device) => Box::new(CudaUpload::new(name, device, cuda_format(format))),
             Self::Vulkan(device) => Box::new(VulkanUpload::new(name, device)),
@@ -145,7 +149,11 @@ impl Gpu {
     }
 
     /// Brings a `format` picture back to system memory, in the same layout.
-    pub(in crate::engine) fn download(&self, name: String, format: ChainFormat) -> Box<dyn Filter> {
+    pub(in crate::engine) fn download(
+        &self,
+        name: String,
+        format: ChainFormat,
+    ) -> Box<dyn RawFilter> {
         match self {
             Self::Cuda(device) => Box::new(CudaDownload::new(name, device, cuda_format(format))),
             Self::Vulkan(device) => Box::new(VulkanDownload::new(name, device)),
@@ -154,7 +162,10 @@ impl Gpu {
 
     /// Turns NV12 into BGRA on the GPU, which is what a filter needs in
     /// front of it when the Source hands on NV12.
-    pub(in crate::engine) fn to_bgra(&self, name: String) -> Result<Box<dyn Filter>, BackendError> {
+    pub(in crate::engine) fn to_bgra(
+        &self,
+        name: String,
+    ) -> Result<Box<dyn RawFilter>, BackendError> {
         Ok(match self {
             // `CudaScaler` cannot do this — it refuses a YUV/RGB pair either
             // way — which is why `CudaConverter` grew the direction.
@@ -169,7 +180,7 @@ impl Gpu {
         &self,
         name: String,
         options: ChromaKeyOptions,
-    ) -> Result<(Box<dyn Filter>, ChromaKeyHandle), BackendError> {
+    ) -> Result<(Box<dyn RawFilter>, ChromaKeyHandle), BackendError> {
         Ok(match self {
             Self::Cuda(device) => {
                 let (element, handle) = CudaChromaKey::new(name, device, options)?;
@@ -186,7 +197,7 @@ impl Gpu {
         &self,
         name: String,
         effect: VideoEffect,
-    ) -> Result<(Box<dyn Filter>, VideoEffectHandle), BackendError> {
+    ) -> Result<(Box<dyn RawFilter>, VideoEffectHandle), BackendError> {
         Ok(match self {
             Self::Cuda(device) => {
                 let (element, handle) = CudaVideoEffect::new(name, device, effect)?;
@@ -272,7 +283,7 @@ impl CompositorElement {
             &Arc<media_pp::element::Context>,
         ) -> media_pp::error::Result<(DetachedBranch, T)>,
     ) -> media_pp::error::Result<(Arc<Pipeline>, T)> {
-        fn attach<S: media_pp::element::Source, T>(
+        fn attach<S: media_pp::element::SrcPads, T>(
             source: &mut S,
             context: &Arc<media_pp::element::Context>,
             wire: impl FnOnce(

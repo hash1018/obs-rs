@@ -184,7 +184,7 @@ fn attach_video(
     context: &Arc<Context>,
     source: &mut RtspSource,
     index: usize,
-    decoder: impl media_pp::element::Filter + 'static,
+    decoder: impl media_pp::element::RawFilter + 'static,
     picture: PictureEnd,
 ) -> media_pp::error::Result<()> {
     let paced = context
@@ -407,7 +407,7 @@ fn build(
     name: String,
     source: RtspSource,
     video_index: usize,
-    decoder: impl media_pp::element::Filter + 'static,
+    decoder: impl media_pp::element::RawFilter + 'static,
     picture: PictureEnd,
     audio: Option<Sound>,
 ) -> Result<(Arc<Pipeline>, Option<sound::SoundRouting>), BackendError> {

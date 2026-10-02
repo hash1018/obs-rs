@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
-use media_pp::element::Filter as PpFilter;
+use media_pp::element::RawFilter as PpFilter;
 use media_pp::elements::{
     AudioCompressor, AudioCompressorHandle, AudioCompressorOptions, AudioFormat, AudioGate,
     AudioGateHandle, AudioGateOptions, AudioLimiter, AudioLimiterHandle, AudioLimiterOptions,

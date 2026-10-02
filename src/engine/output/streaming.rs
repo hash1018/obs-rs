@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use media_pp::element::Sink;
+use media_pp::element::RawSink;
 use media_pp::elements::{MixerHandle, RtmpMuxer, TeeHandle};
 
 use crate::settings::StreamingSettings;
@@ -109,7 +109,7 @@ pub(in crate::engine) fn connect(
 fn open_rtmp_muxer(
     url: &str,
     tracks: Tracks<TrackDef>,
-) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
+) -> Result<Tracks<Box<dyn RawSink>>, BackendError> {
     let mut muxer = RtmpMuxer::create(url)?;
     let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
     let mut sinks = muxer.open()?;

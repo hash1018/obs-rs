@@ -65,7 +65,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use media_pp::{
-    element::Sink,
+    element::RawSink,
     elements::{
         AudioCodec, FileMuxer, HlsMode, HlsMuxer, HlsOptions, HlsSegmentFormat, MixFormat,
         MixerHandle, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer, SwAudioEncoder,
@@ -230,7 +230,7 @@ fn open_muxer(
     path: &Path,
     settings: &crate::settings::RecordingSettings,
     tracks: Tracks<TrackDef>,
-) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
+) -> Result<Tracks<Box<dyn RawSink>>, BackendError> {
     // Nothing else makes it, and no muxer will: the recordings folder before
     // the first recording, a folder chosen in Settings that does not exist
     // yet, and for HLS the recording's own directory, which is new every time.
@@ -289,7 +289,7 @@ fn open_muxer(
 fn open_hls_muxer(
     path: &Path,
     tracks: Tracks<TrackDef>,
-) -> Result<Tracks<Box<dyn Sink>>, BackendError> {
+) -> Result<Tracks<Box<dyn RawSink>>, BackendError> {
     let directory = path.parent().unwrap_or(Path::new("."));
     let mut muxer = HlsMuxer::create(HlsOptions {
         playlist_path: path.to_path_buf(),
@@ -352,7 +352,7 @@ impl Output {
         kind: OutputKind,
         fps: u32,
         encoding: &OutputEncoding,
-        open_muxer: impl FnOnce(Tracks<TrackDef>) -> Result<Tracks<Box<dyn Sink>>, BackendError>,
+        open_muxer: impl FnOnce(Tracks<TrackDef>) -> Result<Tracks<Box<dyn RawSink>>, BackendError>,
     ) -> Result<Self, BackendError> {
         // Both encoders open before the file does. An encoder that cannot be
         // opened must not leave a zero-length mp4 behind, and the audio one

@@ -251,25 +251,25 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use media_pp::{buffer::MediaBuffer, element::Sink, elements::AppSink};
+    use media_pp::{buffer::MediaBuffer, element::RawSink, elements::AppSink};
 
     use super::*;
 
     /// Ends a branch at `sink` and nothing else — no filters between.
     fn end(
-        sink: Box<dyn Sink>,
+        sink: Box<dyn RawSink>,
     ) -> impl FnOnce(ChainBuilder, [u32; 2]) -> Result<DetachedBranch, BackendError> {
         move |builder, _| Ok(builder.to(sink)?)
     }
 
     /// A branch end that counts the pictures reaching it.
-    fn counting() -> (Box<dyn Sink>, Arc<AtomicUsize>) {
+    fn counting() -> (Box<dyn RawSink>, Arc<AtomicUsize>) {
         counting_as("count")
     }
 
     /// The same, under a name of its own — what the Stats dock reads a
     /// Source's compositor input by.
-    fn counting_as(name: &str) -> (Box<dyn Sink>, Arc<AtomicUsize>) {
+    fn counting_as(name: &str) -> (Box<dyn RawSink>, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&count);
         let sink = AppSink::new(name, move |buffer: MediaBuffer| {

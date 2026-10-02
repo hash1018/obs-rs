@@ -39,7 +39,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use media_pp::element::{Context, Sink, Source as SourceElement};
+use media_pp::element::{Context, RawSink, SrcPads};
 use media_pp::elements::{
     AppSink, AudioFormat, AudioTempo, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, Rack,
     SwDecoder, TeeHandle,
@@ -122,9 +122,9 @@ pub(in crate::engine) struct Sound {
     /// What the Audio Mixer dock moves, and what it reads.
     pub(in crate::engine) volume: AudioVolumeHandle,
     /// The mixer input this Source's sound is summed into for the recording.
-    mix: Box<dyn Sink>,
+    mix: Box<dyn RawSink>,
     /// The `AppSink` that measures the level.
-    meter: Box<dyn Sink>,
+    meter: Box<dyn RawSink>,
 }
 
 impl Sound {
@@ -398,7 +398,7 @@ fn tail(
 /// `to_branch` rather than `to`, because a `Tee` is a finished branch rather
 /// than a `Sink`: attaching it to the fader's pad on its own would link the
 /// same buffers but record the fan-out as the source's.
-pub(in crate::engine) fn attach<S: SourceElement>(
+pub(in crate::engine) fn attach<S: SrcPads>(
     context: &Arc<Context>,
     source: &mut S,
     sound: Sound,

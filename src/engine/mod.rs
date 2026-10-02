@@ -1631,7 +1631,7 @@ struct Engine<'a> {
 fn screenshot_sink(
     engine: &Engine<'_>,
     path: std::path::PathBuf,
-) -> Box<dyn media_pp::element::Sink> {
+) -> Box<dyn media_pp::element::RawSink> {
     let replies = engine.replies.clone();
     output::screenshot::sink(path, move |taken| {
         let _ = replies.send(EngineCommand::ScreenshotTaken(taken));

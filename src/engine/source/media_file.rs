@@ -63,7 +63,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use media_pp::element::Context;
-use media_pp::element::Sink;
+use media_pp::element::RawSink;
 use media_pp::elements::{AppSink, FileDemuxer, FileDemuxerHandle, MixerHandle, Pacer};
 use media_pp::ffmpeg;
 use media_pp::pipeline::Pipeline;
@@ -265,7 +265,7 @@ fn position_sink(
     time_base: ffmpeg::Rational,
     looping: FileDemuxerHandle,
     meters: Arc<MediaMeters>,
-) -> Box<dyn Sink> {
+) -> Box<dyn RawSink> {
     let micros = f64::from(time_base.numerator()) / f64::from(time_base.denominator()) * 1e6;
     Box::new(AppSink::new(format!("{name}-position"), move |buffer| {
         if let media_pp::buffer::MediaBuffer::Video(frame) = &buffer
@@ -322,9 +322,9 @@ fn attach_video(
     context: &Arc<Context>,
     source: &mut FileDemuxer,
     index: usize,
-    decoder: impl media_pp::element::Filter + 'static,
+    decoder: impl media_pp::element::RawFilter + 'static,
     picture: PictureEnd,
-    position: Box<dyn Sink>,
+    position: Box<dyn RawSink>,
 ) -> media_pp::error::Result<()> {
     let draw = picture.branch(context)?;
     let record = context.branch().to(position)?;
