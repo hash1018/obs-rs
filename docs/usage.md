@@ -67,9 +67,9 @@ than writing it: start it from the Controls dock, and the key you bound
 writes what it holds to a file beside the recordings. It says how many
 seconds it is holding, and that it cannot save anything in its first second.
 
-**Start Virtual Camera** (Windows 11) shows the canvas as a camera other
-applications can open, until you press it again or close obs-rs. Pick
-"obs-rs" in the other application's camera list. A key for it can be
+**Start Virtual Camera** (Windows 11 and Linux) shows the canvas as a
+camera other applications can open, until you press it again or close
+obs-rs. Pick "obs-rs" in the other application's camera list. A key for it can be
 bound in **Settings → Hotkeys**; the key starts and stops the camera but
 never installs it.
 

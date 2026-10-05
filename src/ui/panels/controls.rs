@@ -99,9 +99,10 @@ fn show_buttons(
         show_replay(ui, status, replay_save_key, i18n, actions);
     }
 
-    // Windows' alone: the camera is a Media Foundation one, and a button that
-    // could only ever fail is not worth the room elsewhere.
-    if cfg!(target_os = "windows") {
+    // Windows and Linux alone: a Media Foundation camera on one, a
+    // v4l2loopback device on the other. A button that could only ever fail
+    // is not worth the room elsewhere.
+    if cfg!(any(target_os = "windows", target_os = "linux")) {
         ui.add_space(BUTTON_SPACING);
         show_virtual_camera(ui, status, i18n, actions);
     }
@@ -128,8 +129,15 @@ fn show_virtual_camera(
         return;
     }
     if status.virtual_camera_missing && !status.virtual_camera {
-        let install = button(ui, i18n, TextKey::ControlInstallVirtualCamera)
-            .on_hover_text(i18n.text(TextKey::ControlInstallVirtualCameraHint));
+        // What installing is differs: registering a DLL on Windows, loading
+        // a kernel module on Linux — and the prompt each asks through.
+        let hint = if cfg!(target_os = "linux") {
+            TextKey::ControlInstallVirtualCameraHintLinux
+        } else {
+            TextKey::ControlInstallVirtualCameraHint
+        };
+        let install =
+            button(ui, i18n, TextKey::ControlInstallVirtualCamera).on_hover_text(i18n.text(hint));
         if install.clicked() {
             actions.push(UiAction::InstallVirtualCamera);
         }

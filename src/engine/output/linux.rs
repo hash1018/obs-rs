@@ -418,19 +418,96 @@ impl Backend {
     }
 }
 
-/// The virtual camera is Windows' own — a Media Foundation camera — and its
-/// button is shown nowhere else; these answer as if it were asked anyway.
+/// What the virtual camera shows, whatever the Canvas is: the size the
+/// Windows camera offers at most, so a call looks the same from either.
+/// The Canvas is scaled to it on the GPU when it differs.
+const VIRTUAL_CAMERA_SIZE: [u32; 2] = [1920, 1080];
+
+/// The rate the virtual camera runs at, whatever the Canvas's.
+const VIRTUAL_CAMERA_FPS: i32 = 30;
+
 impl Backend {
+    /// Hangs the virtual camera's branch off the compositor's `Tee`: the
+    /// Canvas written into a v4l2loopback device, which every application
+    /// reading cameras through V4L2 lists — under "obs-rs" where obs-rs
+    /// loaded the module itself.
+    ///
+    /// Thinned to the camera's rate first, so nothing is scaled or read back
+    /// that the camera would only throw away; scaled to its size on the GPU
+    /// where the Canvas is another; read back as the NV12 it already is; and
+    /// made I420 by the camera element, which is what V4L2 readers take.
+    ///
+    /// Behind a dropping queue, as the Preview is: a reader that stalls must
+    /// not slow the compositor, and a picture a camera misses is one the
+    /// next replaces.
+    ///
+    /// Fails with `NotInstalled` where the v4l2loopback module is not
+    /// loaded — the one failure loading it mends — and says why otherwise.
     pub(in crate::engine) fn attach_virtual_camera(
         &self,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
-        Err("the virtual camera is available only on Windows".into())
+        use media_pp::elements::{FrameRateLimiter, V4l2VirtualCamera};
+
+        let [width, height] = VIRTUAL_CAMERA_SIZE;
+        // Opened first, so a camera that cannot exist fails before anything
+        // is put on the `Tee`.
+        let device = super::virtual_camera::loopback_device()?;
+        let camera = V4l2VirtualCamera::new(
+            "virtual-camera",
+            &device.id,
+            width,
+            height,
+            ffmpeg::Rational::new(VIRTUAL_CAMERA_FPS, 1),
+        )?;
+        tracing::info!(
+            "virtual camera: writing {width}x{height} to {} (\"{}\")",
+            device.id,
+            device.name
+        );
+        let mut branch = self
+            .tee
+            .branch()?
+            .queue_with_policy("virtual-camera-queue", 2, OverflowPolicy::DropNewest)
+            .pipe(FrameRateLimiter::new(
+                "virtual-camera-rate",
+                ffmpeg::Rational::new(VIRTUAL_CAMERA_FPS, 1),
+            ));
+        if self.size != VIRTUAL_CAMERA_SIZE {
+            let name = "virtual-camera-scale".to_owned();
+            branch = match &self.gpu {
+                Gpu::Cuda(device) => branch.pipe(CudaScaler::new(
+                    name,
+                    device,
+                    width,
+                    height,
+                    CudaScalerInterp::Bilinear,
+                )),
+                Gpu::Vulkan(device) => branch.pipe(VulkanScaler::new(
+                    name,
+                    device,
+                    width,
+                    height,
+                    VulkanScalerInterp::Bilinear,
+                )?),
+            };
+        }
+        let branch = branch
+            .pipe(
+                self.gpu
+                    .download("virtual-camera-download".to_owned(), ChainFormat::Nv12),
+            )
+            .to(camera)?;
+        Ok(self.tee.attach(branch)?)
     }
 
+    /// Takes the virtual camera's branch off again, which closes the device:
+    /// a module loaded with `exclusive_caps=1` then leaves every
+    /// application's camera list.
     pub(in crate::engine) fn detach_virtual_camera(
         &self,
-        _branch: media_pp::graph::BranchId,
+        branch: media_pp::graph::BranchId,
     ) -> Result<(), BackendError> {
+        self.tee.detach(branch)?;
         Ok(())
     }
 }

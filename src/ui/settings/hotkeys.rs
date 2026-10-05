@@ -61,7 +61,8 @@ pub(super) fn show(
             .into_iter()
             // The virtual camera's key only where it has a button.
             .filter(|action| {
-                cfg!(target_os = "windows") || *action != HotkeyAction::ToggleVirtualCamera
+                cfg!(any(target_os = "windows", target_os = "linux"))
+                    || *action != HotkeyAction::ToggleVirtualCamera
             })
             .map(Hotkey::Action)
             .collect(),

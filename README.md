@@ -22,7 +22,7 @@ bottom.](docs/screenshot.png)
   streams, web pages, images, text, colour and a layer you draw on.
 - **Recording** to MP4, Matroska or HLS with hardware encoding, **streaming**
   to any RTMP service, a **replay buffer**, screenshots, and on Windows 11
-  a **virtual camera**.
+  and Linux a **virtual camera**.
 - **Audio:** a mixer with a channel per device, per media file and per
   application, filters on picture and sound, and monitoring.
 - **Hotkeys** that work while another application has focus, undo and redo,

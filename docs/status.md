@@ -16,4 +16,5 @@ knowing before you try it:
   collapsible bundle the way OBS groups them.
 - **No multiview**, so there is no grid of every Scene to switch from. The
   projector shows the Canvas, which is one Scene at a time.
-- **No virtual camera**, so nothing here appears as a webcam in a meeting.
+- **No virtual camera on macOS**, so nothing there appears as a webcam in a
+  meeting. Windows 11 and Linux have one.

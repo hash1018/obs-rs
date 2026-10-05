@@ -176,10 +176,12 @@ fn pressed_action(
         }
         // As its button does, where there is one. A start that finds the
         // camera not installed shows why and offers the install on the
-        // button; the key never installs, since that brings up Windows'
+        // button; the key never installs, since that brings up the system's
         // administrator prompt, which only the button that says so should.
         Hotkey::Action(HotkeyAction::ToggleVirtualCamera) => {
-            if !cfg!(target_os = "windows") || status.virtual_camera_installing {
+            if !cfg!(any(target_os = "windows", target_os = "linux"))
+                || status.virtual_camera_installing
+            {
                 return;
             }
             actions.push(if status.virtual_camera {
@@ -602,7 +604,7 @@ mod tests {
             actions
         };
         let mut snapshots = Snapshots::default();
-        if !cfg!(target_os = "windows") {
+        if !cfg!(any(target_os = "windows", target_os = "linux")) {
             assert!(heard(&snapshots).is_empty());
             return;
         }

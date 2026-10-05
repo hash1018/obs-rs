@@ -108,13 +108,18 @@ Everything it can do, source by source. How to use it is in
 - **Replay buffer.** Keeps the last stretch of what is being composited in
   memory and writes it out when you press the key — the clip you only knew
   you wanted after it happened. It runs with or without a recording.
-- **Virtual camera** (Windows 11). The canvas as a camera Teams, Zoom, a
+- **Virtual camera** (Windows 11 and Linux). The canvas as a camera Teams, Zoom, a
   browser or any other application can pick, named "obs-rs" — at
   1920×1080, 1280×720 or 640×360 and 30 frames a second, whichever the
   application asks for. The camera is a DLL Windows loads into a service of
   its own, so it is registered once for the computer: the Windows archive
   carries it, and the first start offers to install it, which asks for
-  administrator permission — see [install.md](install.md).
+  administrator permission — see [install.md](install.md). On Linux the
+  same button writes the canvas at 1920×1080 and 30 frames a second into a
+  v4l2loopback device, which every application reading cameras through
+  V4L2 lists — a browser, Zoom, Discord. The kernel module is the
+  distribution's package; the first start offers to load it, labelled
+  "obs-rs", through the desktop's administrator prompt.
 - **Screenshots** of the canvas, or of one Source's own picture, saved
   beside the recordings. Both are hotkeys, and unbound to begin with because
   the keys are global.

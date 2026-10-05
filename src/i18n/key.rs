@@ -266,6 +266,7 @@ text_keys! {
     ControlInstallVirtualCamera   => "control-install-virtual-camera";
     ControlInstallingVirtualCamera => "control-installing-virtual-camera";
     ControlInstallVirtualCameraHint => "control-install-virtual-camera-hint";
+    ControlInstallVirtualCameraHintLinux => "control-install-virtual-camera-hint-linux";
     ControlSettings               => "control-settings";
     SettingsTitle                 => "settings-title";
     SettingsPageGeneral           => "settings-page-general";

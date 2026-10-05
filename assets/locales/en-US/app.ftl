@@ -142,6 +142,7 @@ control-stop-virtual-camera = Stop Virtual Camera
 control-install-virtual-camera = Install Virtual Camera
 control-installing-virtual-camera = Installing the Virtual Camera…
 control-install-virtual-camera-hint = Registers the camera for this computer. Windows asks for administrator permission once.
+control-install-virtual-camera-hint-linux = Loads the v4l2loopback camera module, labelled obs-rs. Your system asks for administrator permission; the module's package must be installed.
 control-settings = Settings
 status-ready = Ready
 status-recording = Recording

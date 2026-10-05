@@ -151,8 +151,9 @@ pub enum UiAction {
     StartVirtualCamera,
     /// Take the virtual camera away again.
     StopVirtualCamera,
-    /// Install the virtual camera — Windows asks for administrator consent
-    /// — and start it once it is.
+    /// Install the virtual camera — register its DLL on Windows, load its
+    /// kernel module on Linux, both behind the system's administrator
+    /// prompt — and start it once it is.
     InstallVirtualCamera,
     /// Commit the dialog's draft: persist it, and hand the engine the part it
     /// needs. Boxed because it is much the largest variant here and every

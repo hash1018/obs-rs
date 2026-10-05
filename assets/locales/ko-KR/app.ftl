@@ -142,6 +142,7 @@ control-stop-virtual-camera = 가상 카메라 중지
 control-install-virtual-camera = 가상 카메라 설치
 control-installing-virtual-camera = 가상 카메라 설치 중…
 control-install-virtual-camera-hint = 이 컴퓨터에 카메라를 등록합니다. Windows가 관리자 권한을 한 번 묻습니다.
+control-install-virtual-camera-hint-linux = obs-rs라는 이름으로 v4l2loopback 카메라 모듈을 불러옵니다. 시스템이 관리자 권한을 묻고, 모듈 패키지가 설치되어 있어야 합니다.
 control-settings = 설정
 status-ready = 준비
 status-recording = 녹화 중

@@ -193,6 +193,10 @@ jobs:
   # - It is bound to the glibc it was built against — this runner's, and
   #   nothing older. A distribution older than the runner needs a build from
   #   source.
+  # - Its virtual camera needs the system's v4l2loopback package. The camera
+  #   is a device that kernel module makes, so unlike the Windows camera's
+  #   DLL there is nothing of it to put in the archive: obs-rs loads the
+  #   module through `pkexec` when asked, and install.md names the package.
   # - Nothing here has run it. A hosted runner has no GPU and no display, so
   #   the checks below confirm the archive is complete and say nothing about
   #   whether it works. That still has to happen on a real machine.

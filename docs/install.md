@@ -35,6 +35,17 @@ does have to be there:
   Every current desktop distribution has it.
 - A glibc no older than the one the archive was built against, which is the
   current Ubuntu LTS. An older distribution needs a build from source.
+- For the virtual camera, the **v4l2loopback** kernel module — on Debian and
+  Ubuntu `sudo apt install v4l2loopback-dkms`; most distributions package
+  it under that name or `v4l2loopback`. Installing the package is all: the
+  first **Start Virtual Camera** finds the module not loaded and offers
+  **Install Virtual Camera**, which loads it labelled "obs-rs" through the
+  desktop's administrator prompt. It stays loaded until the next restart;
+  `sudo modprobe -r v4l2loopback` unloads it sooner. A module loaded by hand
+  is used as it is, though browsers list it only if it was loaded with
+  `exclusive_caps=1`. With Secure Boot on, the package's module must be
+  signed with a key the firmware trusts — the package's own install says
+  how.
 
 Run `./obs-rs` from the unpacked directory. It finds its own copy of FFmpeg
 beside it and needs no `LD_LIBRARY_PATH`.

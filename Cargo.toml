@@ -178,6 +178,7 @@ features = [
     "pipewire-audio-capture",
     "pipewire-audio-renderer",
     "v4l2-capture",
+    "v4l2-virtual-camera",
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.media-pp]
@@ -288,4 +289,4 @@ features = [
 # released yet: the Vulkan backend the Linux build chooses where there is no
 # NVIDIA GPU. Back to the published crate once it carries that.
 [patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp", rev = "77c23659d67c0ef00088671026464df9e2419930" }
+media-pp = { git = "https://github.com/hash1018/media-pp", rev = "2cafe787605963801a973075fe3d130216088619" }
