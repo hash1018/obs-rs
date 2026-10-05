@@ -1628,10 +1628,7 @@ struct Engine<'a> {
 
 /// The end a screenshot is written through, which tells the loop when it has
 /// been — see `EngineCommand::ScreenshotTaken`.
-fn screenshot_sink(
-    engine: &Engine<'_>,
-    path: std::path::PathBuf,
-) -> Box<dyn media_pp::element::RawSink> {
+fn screenshot_sink(engine: &Engine<'_>, path: std::path::PathBuf) -> media_pp::element::AnySink {
     let replies = engine.replies.clone();
     output::screenshot::sink(path, move |taken| {
         let _ = replies.send(EngineCommand::ScreenshotTaken(taken));

@@ -65,7 +65,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use media_pp::{
-    element::RawSink,
+    element::AnySink,
     elements::{
         AudioCodec, FileMuxer, HlsMode, HlsMuxer, HlsOptions, HlsSegmentFormat, MixFormat,
         MixerHandle, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer, SwAudioEncoder,
@@ -230,7 +230,7 @@ fn open_muxer(
     path: &Path,
     settings: &crate::settings::RecordingSettings,
     tracks: Tracks<TrackDef>,
-) -> Result<Tracks<Box<dyn RawSink>>, BackendError> {
+) -> Result<Tracks<AnySink>, BackendError> {
     // Nothing else makes it, and no muxer will: the recordings folder before
     // the first recording, a folder chosen in Settings that does not exist
     // yet, and for HLS the recording's own directory, which is new every time.
@@ -286,10 +286,7 @@ fn open_muxer(
 /// Apple's own guidance asks for, and this is a recording format here rather
 /// than a delivery one — nothing in this application is tuning latency
 /// against segment count.
-fn open_hls_muxer(
-    path: &Path,
-    tracks: Tracks<TrackDef>,
-) -> Result<Tracks<Box<dyn RawSink>>, BackendError> {
+fn open_hls_muxer(path: &Path, tracks: Tracks<TrackDef>) -> Result<Tracks<AnySink>, BackendError> {
     let directory = path.parent().unwrap_or(Path::new("."));
     let mut muxer = HlsMuxer::create(HlsOptions {
         playlist_path: path.to_path_buf(),
@@ -352,7 +349,7 @@ impl Output {
         kind: OutputKind,
         fps: u32,
         encoding: &OutputEncoding,
-        open_muxer: impl FnOnce(Tracks<TrackDef>) -> Result<Tracks<Box<dyn RawSink>>, BackendError>,
+        open_muxer: impl FnOnce(Tracks<TrackDef>) -> Result<Tracks<AnySink>, BackendError>,
     ) -> Result<Self, BackendError> {
         // Both encoders open before the file does. An encoder that cannot be
         // opened must not leave a zero-length mp4 behind, and the audio one

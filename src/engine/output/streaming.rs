@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use media_pp::element::RawSink;
+use media_pp::element::AnySink;
 use media_pp::elements::{MixerHandle, RtmpMuxer, TeeHandle};
 
 use crate::settings::StreamingSettings;
@@ -106,10 +106,7 @@ pub(in crate::engine) fn connect(
 /// Connects, declares the tracks, and writes the FLV header.
 ///
 /// `url` carries the stream key and is borrowed for exactly this call.
-fn open_rtmp_muxer(
-    url: &str,
-    tracks: Tracks<TrackDef>,
-) -> Result<Tracks<Box<dyn RawSink>>, BackendError> {
+fn open_rtmp_muxer(url: &str, tracks: Tracks<TrackDef>) -> Result<Tracks<AnySink>, BackendError> {
     let mut muxer = RtmpMuxer::create(url)?;
     let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
     let mut sinks = muxer.open()?;

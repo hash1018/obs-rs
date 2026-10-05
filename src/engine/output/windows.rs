@@ -134,7 +134,7 @@ impl Backend {
         &self,
         kind: OutputKind,
         prepared: PreparedOutput,
-        sink: Box<dyn media_pp::element::RawSink>,
+        sink: media_pp::element::AnySink,
     ) -> Result<VideoTrack, BackendError> {
         let PreparedOutput { encoder, size, .. } = prepared;
         let [width, height] = size;
@@ -357,7 +357,7 @@ impl Backend {
     /// to: a screenshot is of what is composited, not of what a file keeps.
     pub(in crate::engine) fn attach_screenshot(
         &self,
-        sink: Box<dyn media_pp::element::RawSink>,
+        sink: media_pp::element::AnySink,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
         let branch = self
             .tee
@@ -384,7 +384,7 @@ impl Backend {
         &self,
         frame: Arc<media_pp::pool::UnboundObjectPoolRef<ffmpeg::frame::Video>>,
         format: crate::engine::source::filters::ChainFormat,
-        sink: Box<dyn media_pp::element::RawSink>,
+        sink: media_pp::element::AnySink,
     ) -> Result<Arc<media_pp::pipeline::Pipeline>, BackendError> {
         use media_pp::elements::AppSource;
 

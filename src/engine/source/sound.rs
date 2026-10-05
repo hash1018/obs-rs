@@ -39,7 +39,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use media_pp::element::{Context, RawSink, SrcPads};
+use media_pp::element::{AnySink, Context, SrcPads};
 use media_pp::elements::{
     AppSink, AudioFormat, AudioTempo, AudioVolume, AudioVolumeHandle, MixerHandle, Pacer, Rack,
     SwDecoder, TeeHandle,
@@ -122,9 +122,9 @@ pub(in crate::engine) struct Sound {
     /// What the Audio Mixer dock moves, and what it reads.
     pub(in crate::engine) volume: AudioVolumeHandle,
     /// The mixer input this Source's sound is summed into for the recording.
-    mix: Box<dyn RawSink>,
+    mix: AnySink,
     /// The `AppSink` that measures the level.
-    meter: Box<dyn RawSink>,
+    meter: AnySink,
 }
 
 impl Sound {
@@ -389,7 +389,7 @@ fn tail(
         fader,
         volume,
         mix,
-        meter: Box::new(meter),
+        meter: AnySink::new(meter),
     })
 }
 

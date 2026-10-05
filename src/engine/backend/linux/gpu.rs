@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use media_pp::contract::MemoryDomain;
-use media_pp::element::RawFilter;
+use media_pp::element::AnyFilter;
 use media_pp::elements::{
     ChromaKeyHandle, ChromaKeyOptions, CompositorInput, CudaChromaKey, CudaConverter, CudaDevice,
     CudaDownload, CudaFrameFormat, CudaUpload, CudaVideoCompositor, CudaVideoCompositorHandle,
@@ -137,42 +137,35 @@ impl Gpu {
     /// keeps the layout it is handed — planar 4:2:0 becomes NV12 on the way
     /// — so what arrives already has to be `format`: BGRA from everything
     /// this application draws, NV12 from a camera.
-    pub(in crate::engine) fn upload(
-        &self,
-        name: String,
-        format: ChainFormat,
-    ) -> Box<dyn RawFilter> {
+    pub(in crate::engine) fn upload(&self, name: String, format: ChainFormat) -> AnyFilter {
         match self {
-            Self::Cuda(device) => Box::new(CudaUpload::new(name, device, cuda_format(format))),
-            Self::Vulkan(device) => Box::new(VulkanUpload::new(name, device)),
+            Self::Cuda(device) => {
+                AnyFilter::new(CudaUpload::new(name, device, cuda_format(format)))
+            }
+            Self::Vulkan(device) => AnyFilter::new(VulkanUpload::new(name, device)),
         }
     }
 
     /// Brings a `format` picture back to system memory, in the same layout.
-    pub(in crate::engine) fn download(
-        &self,
-        name: String,
-        format: ChainFormat,
-    ) -> Box<dyn RawFilter> {
+    pub(in crate::engine) fn download(&self, name: String, format: ChainFormat) -> AnyFilter {
         match self {
-            Self::Cuda(device) => Box::new(CudaDownload::new(name, device, cuda_format(format))),
-            Self::Vulkan(device) => Box::new(VulkanDownload::new(name, device)),
+            Self::Cuda(device) => {
+                AnyFilter::new(CudaDownload::new(name, device, cuda_format(format)))
+            }
+            Self::Vulkan(device) => AnyFilter::new(VulkanDownload::new(name, device)),
         }
     }
 
     /// Turns NV12 into BGRA on the GPU, which is what a filter needs in
     /// front of it when the Source hands on NV12.
-    pub(in crate::engine) fn to_bgra(
-        &self,
-        name: String,
-    ) -> Result<Box<dyn RawFilter>, BackendError> {
+    pub(in crate::engine) fn to_bgra(&self, name: String) -> Result<AnyFilter, BackendError> {
         Ok(match self {
             // `CudaScaler` cannot do this — it refuses a YUV/RGB pair either
             // way — which is why `CudaConverter` grew the direction.
             Self::Cuda(device) => {
-                Box::new(CudaConverter::new(name, device, CudaFrameFormat::Bgra)?)
+                AnyFilter::new(CudaConverter::new(name, device, CudaFrameFormat::Bgra)?)
             }
-            Self::Vulkan(device) => Box::new(VulkanConverter::new(name, device)?),
+            Self::Vulkan(device) => AnyFilter::new(VulkanConverter::new(name, device)?),
         })
     }
 
@@ -180,15 +173,15 @@ impl Gpu {
         &self,
         name: String,
         options: ChromaKeyOptions,
-    ) -> Result<(Box<dyn RawFilter>, ChromaKeyHandle), BackendError> {
+    ) -> Result<(AnyFilter, ChromaKeyHandle), BackendError> {
         Ok(match self {
             Self::Cuda(device) => {
                 let (element, handle) = CudaChromaKey::new(name, device, options)?;
-                (Box::new(element), handle)
+                (AnyFilter::new(element), handle)
             }
             Self::Vulkan(device) => {
                 let (element, handle) = VulkanChromaKey::new(name, device, options)?;
-                (Box::new(element), handle)
+                (AnyFilter::new(element), handle)
             }
         })
     }
@@ -197,15 +190,15 @@ impl Gpu {
         &self,
         name: String,
         effect: VideoEffect,
-    ) -> Result<(Box<dyn RawFilter>, VideoEffectHandle), BackendError> {
+    ) -> Result<(AnyFilter, VideoEffectHandle), BackendError> {
         Ok(match self {
             Self::Cuda(device) => {
                 let (element, handle) = CudaVideoEffect::new(name, device, effect)?;
-                (Box::new(element), handle)
+                (AnyFilter::new(element), handle)
             }
             Self::Vulkan(device) => {
                 let (element, handle) = VulkanVideoEffect::new(name, device, effect)?;
-                (Box::new(element), handle)
+                (AnyFilter::new(element), handle)
             }
         })
     }
