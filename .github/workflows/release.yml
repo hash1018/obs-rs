@@ -68,6 +68,25 @@ jobs:
         shell: pwsh
         run: cargo build --release --locked
 
+      # The virtual camera's DLL, which Windows loads into its Frame Server
+      # service. It is media-pp's `vcam` crate, which is not published, so it
+      # is built from the media-pp this executable was built against: the git
+      # revision Cargo.lock pins, or the release tag of the version it
+      # resolved to. Its `install.ps1` goes beside it — the application runs
+      # that, elevated, to register it; see `engine::output::virtual_camera`.
+      - name: Build the virtual camera
+        shell: pwsh
+        run: |
+          $lock = Get-Content Cargo.lock -Raw
+          $entry = [regex]::Match($lock, '(?s)\[\[package\]\]\s*name = "media-pp"\s*version = "([^"]+)"\s*source = "([^"]+)"')
+          if (-not $entry.Success) { throw "no media-pp in Cargo.lock" }
+          $rev = [regex]::Match($entry.Groups[2].Value, '#([0-9a-f]{40})$')
+          $ref = if ($rev.Success) { $rev.Groups[1].Value } else { "v$($entry.Groups[1].Value)" }
+          Write-Host "media-pp at $ref"
+          git clone --quiet https://github.com/hash1018/media-pp "$env:RUNNER_TEMP/media-pp"
+          git -C "$env:RUNNER_TEMP/media-pp" checkout --quiet $ref
+          cargo build --release --locked -p media-pp-vcam --manifest-path "$env:RUNNER_TEMP/media-pp/Cargo.toml"
+
       # Everything in the FFmpeg tree's `bin`, not the seven libraries the
       # executable names: avcodec pulls in openh264, zlib and whatever else
       # the port's dependencies installed, and those are loaded by name at run
@@ -102,6 +121,12 @@ jobs:
           Copy-Item target/release/vk_swiftshader_icd.json $stage
           Copy-Item target/release/CREDITS.html "$stage/licenses/chromium-credits.html"
           Copy-Item target/release/locales $stage -Recurse
+
+          # The virtual camera, in a folder of its own: the application
+          # looks for it there, and installing copies it out of the archive
+          # to where the Frame Server service can read it.
+          New-Item -ItemType Directory -Force -Path "$stage/vcam" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/media-pp/target/release/media_pp_vcam.dll", "$env:RUNNER_TEMP/media-pp/vcam/install.ps1" "$stage/vcam"
 
           # Both the executable and the vcpkg FFmpeg build link the dynamic
           # Visual C++ runtime, and a stock Windows does not have it — an
@@ -141,6 +166,9 @@ jobs:
           if (-not (Test-Path "$stage/libcef.dll")) { throw "no browser engine in the archive" }
           if (-not (Test-Path "$stage/icudtl.dat")) { throw "no browser engine data in the archive" }
           if (-not (Get-ChildItem "$stage/locales/*.pak")) { throw "no browser engine locales in the archive" }
+          # The button would offer an install with nothing to install.
+          if (-not (Test-Path "$stage/vcam/media_pp_vcam.dll")) { throw "no virtual camera in the archive" }
+          if (-not (Test-Path "$stage/vcam/install.ps1")) { throw "no virtual camera installer in the archive" }
 
       - name: Pack
         shell: pwsh

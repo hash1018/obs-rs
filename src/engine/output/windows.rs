@@ -453,12 +453,19 @@ impl Backend {
     pub(in crate::engine) fn attach_virtual_camera(
         &self,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
-        use media_pp::elements::{FrameRateLimiter, MfVirtualCamera};
+        use media_pp::elements::{FrameRateLimiter, MfVirtualCamera, MfVirtualCameraError};
 
         let [width, height] = VIRTUAL_CAMERA_SIZE;
         // Made first, so a camera that cannot exist fails before anything
-        // is put on the `Tee`.
-        let camera = MfVirtualCamera::new("virtual-camera", "obs-rs")?;
+        // is put on the `Tee`. Not installed is said apart from the rest,
+        // since it is the one failure the application can mend.
+        let camera = match MfVirtualCamera::new("virtual-camera", "obs-rs") {
+            Ok(camera) => camera,
+            Err(media_pp::Error::MfVirtualCameraError(MfVirtualCameraError::NotInstalled {
+                ..
+            })) => return Err(Box::new(super::virtual_camera::NotInstalled)),
+            Err(error) => return Err(error.into()),
+        };
         let branch = self
             .tee
             .branch()?

@@ -16,6 +16,14 @@ does have to be there:
   beside it.
 - The executable is not code-signed, so SmartScreen will offer to protect you
   from it the first time. *More info → Run anyway*.
+- The virtual camera (Windows 11) is the one thing installed outside the
+  folder: Windows loads it into a service of its own, which reads only what
+  is registered for the whole computer. The first **Start Virtual Camera**
+  finds it missing and offers **Install Virtual Camera**, which asks for
+  administrator permission once and copies it to
+  `Program Files\media-pp\vcam`. To remove it, run
+  `vcam\install.ps1 -Uninstall` from the archive in an administrator
+  PowerShell.
 
 **Linux**
 

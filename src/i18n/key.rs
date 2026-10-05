@@ -263,6 +263,9 @@ text_keys! {
     ControlReplayFilling          => "control-replay-filling";
     ControlStartVirtualCamera     => "control-start-virtual-camera";
     ControlStopVirtualCamera      => "control-stop-virtual-camera";
+    ControlInstallVirtualCamera   => "control-install-virtual-camera";
+    ControlInstallingVirtualCamera => "control-installing-virtual-camera";
+    ControlInstallVirtualCameraHint => "control-install-virtual-camera-hint";
     ControlSettings               => "control-settings";
     SettingsTitle                 => "settings-title";
     SettingsPageGeneral           => "settings-page-general";

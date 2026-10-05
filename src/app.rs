@@ -316,6 +316,8 @@ impl ObsApp {
         self.snapshots.status.replay_report = engine.replay_report();
         self.snapshots.status.virtual_camera = engine.virtual_camera();
         self.snapshots.status.virtual_camera_error = engine.virtual_camera_error();
+        self.snapshots.status.virtual_camera_missing = engine.virtual_camera_missing();
+        self.snapshots.status.virtual_camera_installing = engine.virtual_camera_installing();
         self.snapshots.status.source_status = engine.source_status();
         if self.snapshots.status.encoders.is_empty()
             && let Some(encoders) = engine.encoders()
@@ -1014,6 +1016,11 @@ impl ObsApp {
             UiAction::StopVirtualCamera => {
                 if let Some(engine) = &self.engine {
                     engine.stop_virtual_camera();
+                }
+            }
+            UiAction::InstallVirtualCamera => {
+                if let Some(engine) = &self.engine {
+                    engine.install_virtual_camera();
                 }
             }
             UiAction::StartReplayBuffer => {

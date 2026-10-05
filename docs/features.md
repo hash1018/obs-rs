@@ -111,10 +111,10 @@ Everything it can do, source by source. How to use it is in
 - **Virtual camera** (Windows 11). The canvas as a camera Teams, Zoom, a
   browser or any other application can pick, named "obs-rs" — at
   1920×1080, 1280×720 or 640×360 and 30 frames a second, whichever the
-  application asks for. It needs media-pp's camera DLL registered once for
-  the machine, from an administrator prompt — see media-pp's
-  [`vcam`](https://github.com/hash1018/media-pp/tree/main/vcam); without it
-  the button says so instead of starting.
+  application asks for. The camera is a DLL Windows loads into a service of
+  its own, so it is registered once for the computer: the Windows archive
+  carries it, and the first start offers to install it, which asks for
+  administrator permission — see [install.md](install.md).
 - **Screenshots** of the canvas, or of one Source's own picture, saved
   beside the recordings. Both are hotkeys, and unbound to begin with because
   the keys are global.

@@ -103,23 +103,49 @@ fn show_buttons(
     // could only ever fail is not worth the room elsewhere.
     if cfg!(target_os = "windows") {
         ui.add_space(BUTTON_SPACING);
-        let label = if status.virtual_camera {
-            TextKey::ControlStopVirtualCamera
-        } else {
-            TextKey::ControlStartVirtualCamera
-        };
-        if button(ui, i18n, label).clicked() {
-            actions.push(if status.virtual_camera {
-                UiAction::StopVirtualCamera
-            } else {
-                UiAction::StartVirtualCamera
-            });
-        }
+        show_virtual_camera(ui, status, i18n, actions);
     }
 
     ui.add_space(BUTTON_SPACING);
     if button(ui, i18n, TextKey::ControlSettings).clicked() {
         actions.push(UiAction::OpenSettings);
+    }
+}
+
+/// The virtual camera's button: start or stop it, or — once a start found it
+/// not installed — install it, which then starts it. Greyed while the
+/// installer runs, since a second press would only ask for consent twice.
+fn show_virtual_camera(
+    ui: &mut egui::Ui,
+    status: &StatusSnapshot,
+    i18n: &LocalizationManager,
+    actions: &mut Vec<UiAction>,
+) {
+    if status.virtual_camera_installing {
+        ui.add_enabled_ui(false, |ui| {
+            button(ui, i18n, TextKey::ControlInstallingVirtualCamera)
+        });
+        return;
+    }
+    if status.virtual_camera_missing && !status.virtual_camera {
+        let install = button(ui, i18n, TextKey::ControlInstallVirtualCamera)
+            .on_hover_text(i18n.text(TextKey::ControlInstallVirtualCameraHint));
+        if install.clicked() {
+            actions.push(UiAction::InstallVirtualCamera);
+        }
+        return;
+    }
+    let label = if status.virtual_camera {
+        TextKey::ControlStopVirtualCamera
+    } else {
+        TextKey::ControlStartVirtualCamera
+    };
+    if button(ui, i18n, label).clicked() {
+        actions.push(if status.virtual_camera {
+            UiAction::StopVirtualCamera
+        } else {
+            UiAction::StartVirtualCamera
+        });
     }
 }
 

@@ -150,6 +150,11 @@ pub struct StatusSnapshot {
     /// Why the last attempt to start the virtual camera failed, if it did —
     /// kept for the reason `recording_error` is.
     pub virtual_camera_error: Option<Arc<String>>,
+    /// Whether the last start found the camera not installed, which the
+    /// Controls dock offers to mend.
+    pub virtual_camera_missing: bool,
+    /// Whether the camera's installer is running.
+    pub virtual_camera_installing: bool,
     /// Whether a dropped broadcast is waiting to be tried again.
     ///
     /// Beside the clock rather than in it: what the bar has to say is that

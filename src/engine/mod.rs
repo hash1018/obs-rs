@@ -186,6 +186,10 @@ enum EngineCommand {
     StartVirtualCamera,
     /// Take the camera away again.
     StopVirtualCamera,
+    /// Run the camera's installer, elevated — see `output::virtual_camera`.
+    InstallVirtualCamera,
+    /// What the installer came to, from the thread that waited on it.
+    VirtualCameraInstalled(Result<(), String>),
 }
 
 /// What the engine is started with, as opposed to what it is told afterwards
@@ -293,6 +297,11 @@ struct Published {
     /// Why the last attempt to start the virtual camera failed — kept until
     /// the next attempt, for the reason a recording's error is.
     virtual_camera_error: Arc<ArcSwapOption<String>>,
+    /// Whether the last start found the camera not installed — what the
+    /// Controls dock offers to install for. Cleared once it installs.
+    virtual_camera_missing: Arc<AtomicBool>,
+    /// Whether the installer is running, waiting on its prompt or its work.
+    virtual_camera_installing: Arc<AtomicBool>,
 }
 
 /// What the UI reads of a running replay buffer.
@@ -359,6 +368,8 @@ pub struct EngineManager {
     /// The virtual camera — see `Published::virtual_camera`.
     virtual_camera: Arc<AtomicBool>,
     virtual_camera_error: Arc<ArcSwapOption<String>>,
+    virtual_camera_missing: Arc<AtomicBool>,
+    virtual_camera_installing: Arc<AtomicBool>,
     /// When the running broadcast started — see `Published::streaming_since`.
     streaming_since: Arc<ArcSwapOption<Instant>>,
     streaming_error: Arc<ArcSwapOption<String>>,
@@ -418,6 +429,8 @@ impl EngineManager {
         let replay_report = Arc::new(ArcSwapOption::empty());
         let virtual_camera = Arc::new(AtomicBool::new(false));
         let virtual_camera_error = Arc::new(ArcSwapOption::empty());
+        let virtual_camera_missing = Arc::new(AtomicBool::new(false));
+        let virtual_camera_installing = Arc::new(AtomicBool::new(false));
         let streaming_since = Arc::new(ArcSwapOption::empty());
         let streaming_error = Arc::new(ArcSwapOption::empty());
         let streaming_reconnecting = Arc::new(AtomicBool::new(false));
@@ -440,6 +453,8 @@ impl EngineManager {
             let replay_report = Arc::clone(&replay_report);
             let virtual_camera = Arc::clone(&virtual_camera);
             let virtual_camera_error = Arc::clone(&virtual_camera_error);
+            let virtual_camera_missing = Arc::clone(&virtual_camera_missing);
+            let virtual_camera_installing = Arc::clone(&virtual_camera_installing);
             let streaming_since = Arc::clone(&streaming_since);
             let streaming_error = Arc::clone(&streaming_error);
             let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
@@ -465,6 +480,8 @@ impl EngineManager {
                     replay_report,
                     virtual_camera,
                     virtual_camera_error,
+                    virtual_camera_missing,
+                    virtual_camera_installing,
                     streaming_since,
                     streaming_error,
                     streaming_reconnecting,
@@ -523,6 +540,8 @@ impl EngineManager {
             replay_report,
             virtual_camera,
             virtual_camera_error,
+            virtual_camera_missing,
+            virtual_camera_installing,
             streaming_since,
             streaming_error,
             streaming_reconnecting,
@@ -830,6 +849,22 @@ impl EngineManager {
     /// Why the last attempt to start the virtual camera failed, if it did.
     pub fn virtual_camera_error(&self) -> Option<Arc<String>> {
         self.virtual_camera_error.load_full()
+    }
+
+    /// Runs the virtual camera's installer, which asks for administrator
+    /// consent; once it has installed, the camera starts.
+    pub fn install_virtual_camera(&self) {
+        let _ = self.commands.send(EngineCommand::InstallVirtualCamera);
+    }
+
+    /// Whether the last start found the camera not installed.
+    pub fn virtual_camera_missing(&self) -> bool {
+        self.virtual_camera_missing.load(Ordering::Acquire)
+    }
+
+    /// Whether the installer is running.
+    pub fn virtual_camera_installing(&self) -> bool {
+        self.virtual_camera_installing.load(Ordering::Acquire)
     }
 
     /// The SceneItems that are not producing a picture right now.
@@ -1729,6 +1764,35 @@ fn report_replay(
         })));
 }
 
+/// Puts the virtual camera's branch on, unless it is on already, and says
+/// what came of it to the UI.
+fn start_virtual_camera(engine: &Engine<'_>, state: &mut OutputState, published: &Published) {
+    if state.virtual_camera.is_some() {
+        return;
+    }
+    // Cleared before the attempt, for the reason a recording's error is:
+    // what is shown then describes this attempt.
+    published.virtual_camera_error.store(None);
+    match engine.backend.attach_virtual_camera() {
+        Ok(branch) => {
+            state.virtual_camera = Some(branch);
+            published
+                .virtual_camera_missing
+                .store(false, Ordering::Release);
+            published.virtual_camera.store(true, Ordering::Release);
+        }
+        Err(error) => {
+            let missing = error.is::<output::virtual_camera::NotInstalled>();
+            published
+                .virtual_camera_missing
+                .store(missing, Ordering::Release);
+            let reason = describe(error.as_ref());
+            tracing::error!("could not start the virtual camera: {reason}");
+            published.virtual_camera_error.store(Some(Arc::new(reason)));
+        }
+    }
+}
+
 /// Takes the virtual camera's branch off, if it is on, and says so to the
 /// UI. Dropping the branch drops the camera, which is what removes it from
 /// every application's list.
@@ -2126,27 +2190,47 @@ fn apply_command(
             false
         }
         EngineCommand::StartVirtualCamera => {
-            if recording.virtual_camera.is_some() {
-                return false;
-            }
-            // Cleared before the attempt, for the reason a recording's error
-            // is: what is shown then describes this attempt.
-            published.virtual_camera_error.store(None);
-            match engine.backend.attach_virtual_camera() {
-                Ok(branch) => {
-                    recording.virtual_camera = Some(branch);
-                    published.virtual_camera.store(true, Ordering::Release);
-                }
-                Err(error) => {
-                    let reason = describe(error.as_ref());
-                    tracing::error!("could not start the virtual camera: {reason}");
-                    published.virtual_camera_error.store(Some(Arc::new(reason)));
-                }
-            }
+            start_virtual_camera(engine, recording, published);
             false
         }
         EngineCommand::StopVirtualCamera => {
             stop_virtual_camera(engine, recording, published);
+            false
+        }
+        EngineCommand::InstallVirtualCamera => {
+            if published
+                .virtual_camera_installing
+                .swap(true, Ordering::AcqRel)
+            {
+                return false;
+            }
+            published.virtual_camera_error.store(None);
+            let replies = engine.replies.clone();
+            output::virtual_camera::install(move |outcome| {
+                let _ = replies.send(EngineCommand::VirtualCameraInstalled(outcome));
+            });
+            false
+        }
+        EngineCommand::VirtualCameraInstalled(outcome) => {
+            published
+                .virtual_camera_installing
+                .store(false, Ordering::Release);
+            match outcome {
+                Ok(()) => {
+                    tracing::info!("the virtual camera was installed");
+                    published
+                        .virtual_camera_missing
+                        .store(false, Ordering::Release);
+                    // What the install was for.
+                    start_virtual_camera(engine, recording, published);
+                }
+                Err(reason) => {
+                    tracing::error!("could not install the virtual camera: {reason}");
+                    published.virtual_camera_error.store(Some(Arc::new(format!(
+                        "it could not be installed: {reason}"
+                    ))));
+                }
+            }
             false
         }
         EngineCommand::PauseRecording(paused) => {
@@ -3173,6 +3257,8 @@ mod tests {
             replay_report: Arc::new(ArcSwapOption::empty()),
             virtual_camera: Arc::new(AtomicBool::new(false)),
             virtual_camera_error: Arc::new(ArcSwapOption::empty()),
+            virtual_camera_missing: Arc::new(AtomicBool::new(false)),
+            virtual_camera_installing: Arc::new(AtomicBool::new(false)),
             streaming_since: Arc::new(ArcSwapOption::empty()),
             streaming_error: Arc::new(ArcSwapOption::empty()),
             streaming_reconnecting: Arc::new(AtomicBool::new(false)),

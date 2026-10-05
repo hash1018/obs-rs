@@ -45,6 +45,7 @@ pub(in crate::engine) mod replay;
 pub(in crate::engine) mod screenshot;
 mod session;
 mod streaming;
+pub(in crate::engine) mod virtual_camera;
 
 pub(in crate::engine) use session::Broadcast;
 pub(in crate::engine) use session::{OutputState, PendingScreenshot, describe, start_recording};
