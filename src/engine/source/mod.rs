@@ -142,7 +142,7 @@ pub(in crate::engine) fn filled_rack(
 /// video branch toward.
 pub(in crate::engine) struct PictureEnd {
     pub(in crate::engine) rack: media_pp::elements::Rack,
-    pub(in crate::engine) sink: media_pp::element::AnySink,
+    pub(in crate::engine) sink: media_pp::element::BoxSink,
 }
 
 impl PictureEnd {

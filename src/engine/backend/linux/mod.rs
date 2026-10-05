@@ -14,7 +14,7 @@ use eframe::egui;
 use eframe::egui_wgpu::RenderState;
 use media_pp::{
     buffer::MediaBuffer,
-    element::AnySink,
+    element::BoxSink,
     elements::{AppSink, ChangeGate, CudaRenderer, TeeHandle, VideoCompositorOptions, VideoLayer},
     ffmpeg,
     pipeline::Pipeline,
@@ -152,10 +152,10 @@ impl Backend {
         );
         // What the drawing branch ends in: on CUDA a renderer handed the
         // frame's own planes, on Vulkan the frame read back and written.
-        let (download, renderer): (_, AnySink) = match &gpu {
+        let (download, renderer): (_, BoxSink) = match &gpu {
             Gpu::Cuda(device) => (
                 None,
-                AnySink::new(CudaRenderer::new(
+                BoxSink::new(CudaRenderer::new(
                     "preview-out",
                     device,
                     Box::new(PreviewRenderer::new(Arc::clone(&surface))),
@@ -165,7 +165,7 @@ impl Backend {
                 let surface = Arc::clone(&surface);
                 (
                     Some(gpu.download("preview-download".to_owned(), ChainFormat::Nv12)),
-                    AnySink::new(AppSink::new("preview-out", move |buffer| match &buffer {
+                    BoxSink::new(AppSink::new("preview-out", move |buffer| match &buffer {
                         MediaBuffer::Video(frame) if !surface.submit_host(frame) => {
                             Err(media_pp::error::Error::Other(
                                 "the Preview was handed a frame that is not the Canvas".to_owned(),

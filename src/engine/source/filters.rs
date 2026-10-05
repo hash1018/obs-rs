@@ -61,7 +61,7 @@
 //! Windows one, and gets no bridge either.
 
 use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
-use media_pp::element::AnyFilter;
+use media_pp::element::BoxFilter;
 use media_pp::elements::{Rack, RackHandle};
 
 use crate::domain::{Filter, FilterId, FilterKind, FilterSettings};
@@ -101,7 +101,7 @@ pub(in crate::engine) struct OpenFilter {
 /// is an element with nothing to control, so it is in the first and not the
 /// second — and the second is what `OpenSource::filters` becomes, which must
 /// line up with the stored list rather than with the chain.
-type Built = Result<(Vec<AnyFilter>, Vec<OpenFilter>), BackendError>;
+type Built = Result<(Vec<BoxFilter>, Vec<OpenFilter>), BackendError>;
 
 /// The runtime control for one filter, by kind.
 pub(in crate::engine) enum FilterHandle {
@@ -272,7 +272,7 @@ mod unsupported {
 #[cfg(target_os = "windows")]
 mod windows {
     use media_pp::contract::MemoryDomain;
-    use media_pp::element::AnyFilter;
+    use media_pp::element::BoxFilter;
     use media_pp::elements::{
         D3d11ChromaKey, D3d11Gpu, D3d11Scaler, D3d11ScalerFormat, D3d11VideoEffect, Rack,
     };
@@ -329,12 +329,12 @@ mod windows {
             incoming,
         } = backend;
 
-        let mut elements: Vec<AnyFilter> = Vec::with_capacity(filters.len() + 1);
+        let mut elements: Vec<BoxFilter> = Vec::with_capacity(filters.len() + 1);
         // `D3d11ScalerFormat::Bgra` names the chroma key among the things it
         // is for, so this is the conversion the library already intended
         // rather than one invented here.
         if *incoming == ChainFormat::Nv12 {
-            elements.push(AnyFilter::new(
+            elements.push(BoxFilter::new(
                 D3d11Scaler::to_format(format!("{name}-to-bgra"), gpu, D3d11ScalerFormat::Bgra)
                     .map_err(|error| BackendError::from(error.to_string()))?,
             ));
@@ -350,7 +350,7 @@ mod windows {
                 )
                 .map_err(|error| BackendError::from(error.to_string()))?;
                 handle.set_enabled(filter.enabled);
-                elements.push(AnyFilter::new(element));
+                elements.push(BoxFilter::new(element));
                 open.push(OpenFilter {
                     id: filter.id,
                     handle: FilterHandle::ChromaKey(handle),
@@ -360,7 +360,7 @@ mod windows {
                     D3d11VideoEffect::new(format!("{name}-effect-{}", filter.id.0), gpu, effect)
                         .map_err(|error| BackendError::from(error.to_string()))?;
                 handle.set_enabled(filter.enabled);
-                elements.push(AnyFilter::new(element));
+                elements.push(BoxFilter::new(element));
                 open.push(OpenFilter {
                     id: filter.id,
                     handle: FilterHandle::VideoEffect(filter.settings.kind(), handle),
@@ -373,7 +373,7 @@ mod windows {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod linux {
-    use media_pp::element::AnyFilter;
+    use media_pp::element::BoxFilter;
     use media_pp::elements::Rack;
 
     use super::{ChainFormat, Filter, FilterHandle, FilterRack, FilterSettings, OpenFilter};
@@ -419,7 +419,7 @@ mod linux {
             incoming,
         } = backend;
 
-        let mut elements: Vec<AnyFilter> = Vec::with_capacity(filters.len() + 1);
+        let mut elements: Vec<BoxFilter> = Vec::with_capacity(filters.len() + 1);
         if *incoming == ChainFormat::Nv12 {
             elements.push(gpu.to_bgra(format!("{name}-to-bgra"))?);
         }

@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use media_pp::contract::MemoryDomain;
-use media_pp::element::AnyFilter;
+use media_pp::element::BoxFilter;
 use media_pp::elements::{
     ChromaKeyHandle, ChromaKeyOptions, CompositorInput, DecodeTarget, MetalChromaKey,
     MetalConverter, MetalVideoCompositor, MetalVideoCompositorHandle, MetalVideoEffect,
@@ -61,38 +61,38 @@ impl Gpu {
     /// layout it is handed, as Vulkan's does, so what arrives already has to
     /// be `format`: BGRA from everything this application draws, NV12 from a
     /// camera.
-    pub(in crate::engine) fn upload(&self, name: String, _format: ChainFormat) -> AnyFilter {
-        AnyFilter::new(VideoToolboxUpload::new(name, &self.0))
+    pub(in crate::engine) fn upload(&self, name: String, _format: ChainFormat) -> BoxFilter {
+        BoxFilter::new(VideoToolboxUpload::new(name, &self.0))
     }
 
     /// Brings a picture back to system memory, in the layout it is in. A
     /// pixel buffer says which, so the format is only the Linux signature's.
-    pub(in crate::engine) fn download(&self, name: String, _format: ChainFormat) -> AnyFilter {
-        AnyFilter::new(VideoToolboxDownload::new(name))
+    pub(in crate::engine) fn download(&self, name: String, _format: ChainFormat) -> BoxFilter {
+        BoxFilter::new(VideoToolboxDownload::new(name))
     }
 
     /// Turns NV12 into BGRA on the GPU, which is what a filter needs in
     /// front of it when the Source hands on NV12.
-    pub(in crate::engine) fn to_bgra(&self, name: String) -> Result<AnyFilter, BackendError> {
-        Ok(AnyFilter::new(MetalConverter::new(name, &self.0)?))
+    pub(in crate::engine) fn to_bgra(&self, name: String) -> Result<BoxFilter, BackendError> {
+        Ok(BoxFilter::new(MetalConverter::new(name, &self.0)?))
     }
 
     pub(in crate::engine) fn chroma_key(
         &self,
         name: String,
         options: ChromaKeyOptions,
-    ) -> Result<(AnyFilter, ChromaKeyHandle), BackendError> {
+    ) -> Result<(BoxFilter, ChromaKeyHandle), BackendError> {
         let (element, handle) = MetalChromaKey::new(name, &self.0, options)?;
-        Ok((AnyFilter::new(element), handle))
+        Ok((BoxFilter::new(element), handle))
     }
 
     pub(in crate::engine) fn video_effect(
         &self,
         name: String,
         effect: VideoEffect,
-    ) -> Result<(AnyFilter, VideoEffectHandle), BackendError> {
+    ) -> Result<(BoxFilter, VideoEffectHandle), BackendError> {
         let (element, handle) = MetalVideoEffect::new(name, &self.0, effect)?;
-        Ok((AnyFilter::new(element), handle))
+        Ok((BoxFilter::new(element), handle))
     }
 
     /// Where a `VideoDecodeBin` puts its pictures. Core Video's pool grows

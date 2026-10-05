@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use media_pp::contract::{InputContract, MediaKind, MemoryDomain, OutputContract, PortContract};
-use media_pp::element::AnyFilter;
+use media_pp::element::BoxFilter;
 use media_pp::elements::{
     AudioCompressor, AudioCompressorHandle, AudioCompressorOptions, AudioFormat, AudioGate,
     AudioGateHandle, AudioGateOptions, AudioLimiter, AudioLimiterHandle, AudioLimiterOptions,
@@ -51,7 +51,7 @@ use super::BackendError;
 /// What a build answers: the elements for the rack, in order, and the ones
 /// among them with settings by the filter they stand for — two lists of
 /// different lengths, since a bridge and a suppressor have nothing to retune.
-type Built = Result<(Vec<AnyFilter>, HashMap<AudioFilterId, Tuner>), BackendError>;
+type Built = Result<(Vec<BoxFilter>, HashMap<AudioFilterId, Tuner>), BackendError>;
 
 /// The handle of a filter in the rack whose settings change without a
 /// refill.
@@ -147,9 +147,9 @@ impl AudioFilterRack {
 
     fn build(&self, filters: &[AudioFilter]) -> Built {
         let on: Vec<&AudioFilter> = filters.iter().filter(|filter| filter.enabled).collect();
-        let mut elements: Vec<AnyFilter> = Vec::with_capacity(on.len() + 1);
+        let mut elements: Vec<BoxFilter> = Vec::with_capacity(on.len() + 1);
         if let Some(target) = bridge(self.capture, &on) {
-            elements.push(AnyFilter::new(AudioResampler::new(
+            elements.push(BoxFilter::new(AudioResampler::new(
                 format!("{}-filter-format", self.name),
                 target,
             )));
@@ -160,13 +160,13 @@ impl AudioFilterRack {
             let name = |role: &str| format!("{}-{role}-{}", self.name, filter.id.0);
             match filter.settings {
                 AudioFilterSettings::NoiseSuppression => {
-                    elements.push(AnyFilter::new(NoiseSuppressor::new(name("denoise"))));
+                    elements.push(BoxFilter::new(NoiseSuppressor::new(name("denoise"))));
                 }
                 AudioFilterSettings::NoiseGate(settings) => {
                     let (gate, handle) =
                         AudioGate::with_options(name("gate"), gate_options(settings))
                             .map_err(|error| refused(&error))?;
-                    elements.push(AnyFilter::new(gate));
+                    elements.push(BoxFilter::new(gate));
                     tuners.insert(filter.id, Tuner::Gate(handle));
                 }
                 AudioFilterSettings::Compressor(settings) => {
@@ -175,14 +175,14 @@ impl AudioFilterRack {
                         compressor_options(settings),
                     )
                     .map_err(|error| refused(&error))?;
-                    elements.push(AnyFilter::new(compressor));
+                    elements.push(BoxFilter::new(compressor));
                     tuners.insert(filter.id, Tuner::Compressor(handle));
                 }
                 AudioFilterSettings::Limiter(settings) => {
                     let (limiter, handle) =
                         AudioLimiter::with_options(name("limiter"), limiter_options(settings))
                             .map_err(|error| refused(&error))?;
-                    elements.push(AnyFilter::new(limiter));
+                    elements.push(BoxFilter::new(limiter));
                     tuners.insert(filter.id, Tuner::Limiter(handle));
                 }
             }

@@ -44,7 +44,7 @@ impl Backend {
         &self,
         _kind: OutputKind,
         prepared: PreparedOutput,
-        _sink: media_pp::element::AnySink,
+        _sink: media_pp::element::BoxSink,
     ) -> Result<VideoTrack, BackendError> {
         match prepared {}
     }
@@ -59,7 +59,7 @@ impl Backend {
 
     pub(in crate::engine) fn attach_screenshot(
         &self,
-        _sink: media_pp::element::AnySink,
+        _sink: media_pp::element::BoxSink,
     ) -> Result<media_pp::graph::BranchId, BackendError> {
         Err(NO_BACKEND.into())
     }
@@ -68,7 +68,7 @@ impl Backend {
         &self,
         _frame: Arc<media_pp::pool::UnboundObjectPoolRef<ffmpeg::frame::Video>>,
         _format: crate::engine::source::filters::ChainFormat,
-        _sink: media_pp::element::AnySink,
+        _sink: media_pp::element::BoxSink,
     ) -> Result<Arc<media_pp::pipeline::Pipeline>, BackendError> {
         Err(NO_BACKEND.into())
     }
