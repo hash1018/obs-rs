@@ -225,6 +225,11 @@ fn start(
 /// timeline going down; before the first lap there is no timeline left to go
 /// down into, and the stream ends. Going round from there is a seek to the
 /// end — a moment's preroll, where a forward lap joins without one.
+///
+/// It reads the bus for the `Finished` that says so, which no one else then
+/// sees; where the seek fails, it stops the pipeline as
+/// [`crate::engine::backend::pipeline_ended`] would have on that
+/// `Finished`, so the file ends rather than going round.
 pub(in crate::engine) fn go_round_backwards(
     media: &super::MediaFile,
     settings: &MediaFileSettings,
@@ -243,7 +248,13 @@ pub(in crate::engine) fn go_round_backwards(
         .pipeline
         .seek(end, media_pp::pipeline::SeekMode::Accurate)
     {
-        tracing::warn!("could not go round to the end again: {error}");
+        // The `Finished` read above is the one `pipeline_ended` would have
+        // stopped the pipeline on, and it is gone from the bus: stopped here
+        // instead, the file reads as ended on the same tick, as one that does
+        // not loop does. Left running, it would sit on its last picture with
+        // its channel in the mixer for good, nothing on the bus to end it.
+        tracing::warn!("could not go round to the end again, so the file ends: {error}");
+        media.pipeline.stop();
         return false;
     }
     true
