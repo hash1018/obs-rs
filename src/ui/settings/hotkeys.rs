@@ -57,7 +57,14 @@ pub(super) fn show(
     // now is for when it is — then one for every Scene.
     let mut sections: Vec<(TextKey, Vec<Hotkey>)> = vec![(
         TextKey::HotkeySectionGeneral,
-        HotkeyAction::ALL.into_iter().map(Hotkey::Action).collect(),
+        HotkeyAction::ALL
+            .into_iter()
+            // The virtual camera's key only where it has a button.
+            .filter(|action| {
+                cfg!(target_os = "windows") || *action != HotkeyAction::ToggleVirtualCamera
+            })
+            .map(Hotkey::Action)
+            .collect(),
     )];
     if !audio.items.is_empty() {
         sections.push((
@@ -257,6 +264,7 @@ pub(crate) fn label(
                 HotkeyAction::ScreenshotSource => TextKey::HotkeyScreenshotSource,
                 HotkeyAction::ToggleReplayBuffer => TextKey::HotkeyToggleReplay,
                 HotkeyAction::SaveReplay => TextKey::HotkeySaveReplay,
+                HotkeyAction::ToggleVirtualCamera => TextKey::HotkeyToggleVirtualCamera,
                 HotkeyAction::Fullscreen => TextKey::HotkeyFullscreen,
                 HotkeyAction::ToggleProjector => TextKey::HotkeyToggleProjector,
                 HotkeyAction::OpenSettings => TextKey::HotkeyOpenSettings,

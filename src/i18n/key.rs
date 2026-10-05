@@ -281,6 +281,7 @@ text_keys! {
     HotkeyScreenshotSource        => "hotkey-screenshot-source";
     HotkeyToggleReplay            => "hotkey-toggle-replay";
     HotkeySaveReplay              => "hotkey-save-replay";
+    HotkeyToggleVirtualCamera     => "hotkey-toggle-virtual-camera";
     HotkeyPushToTalk              => "hotkey-push-to-talk";
     HotkeyPushToMute              => "hotkey-push-to-mute";
     HotkeyToggleMute              => "hotkey-toggle-mute";

@@ -174,6 +174,20 @@ fn pressed_action(
                 actions.push(UiAction::SaveReplay);
             }
         }
+        // As its button does, where there is one. A start that finds the
+        // camera not installed shows why and offers the install on the
+        // button; the key never installs, since that brings up Windows'
+        // administrator prompt, which only the button that says so should.
+        Hotkey::Action(HotkeyAction::ToggleVirtualCamera) => {
+            if !cfg!(target_os = "windows") || status.virtual_camera_installing {
+                return;
+            }
+            actions.push(if status.virtual_camera {
+                UiAction::StopVirtualCamera
+            } else {
+                UiAction::StartVirtualCamera
+            });
+        }
         // The window's own, which never come through here — see `dispatch`.
         Hotkey::Action(
             HotkeyAction::Fullscreen
@@ -569,6 +583,47 @@ mod tests {
         assert!(matches!(
             heard(HotkeyAction::ToggleReplayBuffer, &snapshots).as_slice(),
             [UiAction::StopReplayBuffer]
+        ));
+    }
+
+    /// The virtual camera's key does what its button would — start it, or
+    /// stop it — and nothing while its installer runs, nor anywhere it has
+    /// no button.
+    #[test]
+    fn the_virtual_camera_key_does_what_its_button_would() {
+        let heard = |snapshots: &Snapshots| {
+            let mut actions = Vec::new();
+            pressed_action(
+                Hotkey::Action(HotkeyAction::ToggleVirtualCamera),
+                snapshots,
+                None,
+                &mut actions,
+            );
+            actions
+        };
+        let mut snapshots = Snapshots::default();
+        if !cfg!(target_os = "windows") {
+            assert!(heard(&snapshots).is_empty());
+            return;
+        }
+        assert!(matches!(
+            heard(&snapshots).as_slice(),
+            [UiAction::StartVirtualCamera]
+        ));
+        // Not installed: still a start, which says so — never the install.
+        snapshots.status.virtual_camera_missing = true;
+        assert!(matches!(
+            heard(&snapshots).as_slice(),
+            [UiAction::StartVirtualCamera]
+        ));
+        snapshots.status.virtual_camera_installing = true;
+        assert!(heard(&snapshots).is_empty());
+        snapshots.status.virtual_camera_installing = false;
+        snapshots.status.virtual_camera_missing = false;
+        snapshots.status.virtual_camera = true;
+        assert!(matches!(
+            heard(&snapshots).as_slice(),
+            [UiAction::StopVirtualCamera]
         ));
     }
 

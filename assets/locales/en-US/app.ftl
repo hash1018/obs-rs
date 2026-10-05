@@ -267,6 +267,7 @@ hotkey-screenshot = Save a screenshot
 hotkey-screenshot-source = Save a screenshot of the selected source
 hotkey-toggle-replay = Start / stop the replay buffer
 hotkey-save-replay = Save a replay
+hotkey-toggle-virtual-camera = Start / stop the virtual camera
 hotkey-push-to-talk = { $channel }: push to talk
 hotkey-push-to-mute = { $channel }: push to mute
 hotkey-toggle-mute = { $channel }: mute / unmute

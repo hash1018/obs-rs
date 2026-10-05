@@ -253,6 +253,8 @@ pub enum HotkeyAction {
     ToggleReplayBuffer,
     /// Save what the replay buffer holds.
     SaveReplay,
+    /// Start the virtual camera, or stop it. Windows only, as its button is.
+    ToggleVirtualCamera,
     Fullscreen,
     /// Puts the Canvas on another screen, or takes it away again — the
     /// View menu's projector, from a key.
@@ -265,7 +267,7 @@ pub enum HotkeyAction {
 
 impl HotkeyAction {
     /// Every action, in the order the settings page lists them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::ToggleRecording,
         Self::TogglePause,
         Self::ToggleStreaming,
@@ -273,6 +275,7 @@ impl HotkeyAction {
         Self::ScreenshotSource,
         Self::ToggleReplayBuffer,
         Self::SaveReplay,
+        Self::ToggleVirtualCamera,
         Self::Fullscreen,
         Self::ToggleProjector,
         Self::OpenSettings,
@@ -403,6 +406,7 @@ pub struct HotkeySettings {
     pub screenshot_source: Binding,
     pub toggle_replay_buffer: Binding,
     pub save_replay: Binding,
+    pub toggle_virtual_camera: Binding,
     pub fullscreen: Binding,
     pub toggle_projector: Binding,
     pub open_settings: Binding,
@@ -437,6 +441,10 @@ impl Default for HotkeySettings {
             // dock says so while the buffer runs without one.
             toggle_replay_buffer: Binding(None),
             save_replay: Binding(None),
+            // Nothing: a camera that appears in someone else's call because
+            // a key meant for something else was pressed is a picture sent
+            // before anyone chose to send it.
+            toggle_virtual_camera: Binding(None),
             fullscreen: Chord::plain(Key::F11).into(),
             // Nothing: a projector is a second window, and a key that
             // opened one by accident would be a window in front of whatever
@@ -465,6 +473,7 @@ impl HotkeySettings {
                 HotkeyAction::ScreenshotSource => self.screenshot_source.0,
                 HotkeyAction::ToggleReplayBuffer => self.toggle_replay_buffer.0,
                 HotkeyAction::SaveReplay => self.save_replay.0,
+                HotkeyAction::ToggleVirtualCamera => self.toggle_virtual_camera.0,
                 HotkeyAction::Fullscreen => self.fullscreen.0,
                 HotkeyAction::ToggleProjector => self.toggle_projector.0,
                 HotkeyAction::OpenSettings => self.open_settings.0,
@@ -498,6 +507,7 @@ impl HotkeySettings {
                 HotkeyAction::ScreenshotSource => self.screenshot_source = binding,
                 HotkeyAction::ToggleReplayBuffer => self.toggle_replay_buffer = binding,
                 HotkeyAction::SaveReplay => self.save_replay = binding,
+                HotkeyAction::ToggleVirtualCamera => self.toggle_virtual_camera = binding,
                 HotkeyAction::Fullscreen => self.fullscreen = binding,
                 HotkeyAction::ToggleProjector => self.toggle_projector = binding,
                 HotkeyAction::OpenSettings => self.open_settings = binding,

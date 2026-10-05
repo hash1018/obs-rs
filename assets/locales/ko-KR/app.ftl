@@ -267,6 +267,7 @@ hotkey-screenshot = 스크린샷 저장
 hotkey-screenshot-source = 선택한 소스 스크린샷 저장
 hotkey-toggle-replay = 리플레이 버퍼 시작 / 중지
 hotkey-save-replay = 리플레이 저장
+hotkey-toggle-virtual-camera = 가상 카메라 시작 / 중지
 hotkey-push-to-talk = { $channel }: 누르는 동안 말하기
 hotkey-push-to-mute = { $channel }: 누르는 동안 음소거
 hotkey-toggle-mute = { $channel }: 음소거 켜기 / 끄기
