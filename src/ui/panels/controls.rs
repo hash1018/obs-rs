@@ -99,6 +99,24 @@ fn show_buttons(
         show_replay(ui, status, replay_save_key, i18n, actions);
     }
 
+    // Windows' alone: the camera is a Media Foundation one, and a button that
+    // could only ever fail is not worth the room elsewhere.
+    if cfg!(target_os = "windows") {
+        ui.add_space(BUTTON_SPACING);
+        let label = if status.virtual_camera {
+            TextKey::ControlStopVirtualCamera
+        } else {
+            TextKey::ControlStartVirtualCamera
+        };
+        if button(ui, i18n, label).clicked() {
+            actions.push(if status.virtual_camera {
+                UiAction::StopVirtualCamera
+            } else {
+                UiAction::StartVirtualCamera
+            });
+        }
+    }
+
     ui.add_space(BUTTON_SPACING);
     if button(ui, i18n, TextKey::ControlSettings).clicked() {
         actions.push(UiAction::OpenSettings);

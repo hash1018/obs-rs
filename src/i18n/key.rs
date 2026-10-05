@@ -261,6 +261,8 @@ text_keys! {
     ControlReplayKey              => "control-replay-key";
     ControlReplayNoKey            => "control-replay-no-key";
     ControlReplayFilling          => "control-replay-filling";
+    ControlStartVirtualCamera     => "control-start-virtual-camera";
+    ControlStopVirtualCamera      => "control-stop-virtual-camera";
     ControlSettings               => "control-settings";
     SettingsTitle                 => "settings-title";
     SettingsPageGeneral           => "settings-page-general";
@@ -338,6 +340,7 @@ text_keys! {
     ExitKeepRecording             => "exit-keep-recording";
     StatusRecording               => "status-recording";
     StatusRecordingFailed         => "status-recording-failed";
+    StatusVirtualCameraFailed     => "status-virtual-camera-failed";
     StatusRecordingPaused         => "status-recording-paused";
     StatusReady                   => "status-ready";
     StatusGpuProcess              => "status-gpu-process";

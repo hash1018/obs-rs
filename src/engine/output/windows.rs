@@ -92,6 +92,14 @@ const SOFTWARE_YUV: ColorDescription = ColorDescription {
     transfer: ffmpeg::color::TransferCharacteristic::BT709,
 };
 
+/// The largest size the virtual camera offers, and what the Canvas is made
+/// into for it — `media-pp`'s camera offers 1920x1080, 1280x720 and
+/// 640x360.
+const VIRTUAL_CAMERA_SIZE: [u32; 2] = [1920, 1080];
+
+/// The rate the virtual camera runs at, whatever the Canvas's.
+const VIRTUAL_CAMERA_FPS: i32 = 30;
+
 impl Backend {
     pub(in crate::engine) fn prepare_output(
         &self,
@@ -422,6 +430,63 @@ impl Backend {
         // this pipeline once the picture is through.
         pusher.push(media_pp::buffer::MediaBuffer::Video(frame))?;
         Ok(pipeline)
+    }
+
+    /// Hangs the virtual camera's branch off the compositor's `Tee`: the
+    /// Canvas as a camera every other application can open, named
+    /// "obs-rs" — Windows adds that it is a virtual one.
+    ///
+    /// Thinned to the camera's own rate first, so nothing is converted or
+    /// read back that the camera would only throw away; then made NV12 at
+    /// the camera's largest size on the GPU — `D3d11Scaler`'s NV12 is BT.709,
+    /// limited range, and says so on each frame — and read back at under
+    /// half the bytes the BGRA it came from would be. The camera scales
+    /// that down itself when an application asks for less. A Canvas that is
+    /// not 16:9 is stretched to it, as every size the camera offers is.
+    ///
+    /// Behind a dropping queue, as the Preview is: an application that stops
+    /// reading must not slow the compositor, and a picture a camera misses
+    /// is one the next replaces.
+    ///
+    /// Fails without a camera where Windows is older than 11 or the
+    /// camera's DLL is not installed, saying which.
+    pub(in crate::engine) fn attach_virtual_camera(
+        &self,
+    ) -> Result<media_pp::graph::BranchId, BackendError> {
+        use media_pp::elements::{FrameRateLimiter, MfVirtualCamera};
+
+        let [width, height] = VIRTUAL_CAMERA_SIZE;
+        // Made first, so a camera that cannot exist fails before anything
+        // is put on the `Tee`.
+        let camera = MfVirtualCamera::new("virtual-camera", "obs-rs")?;
+        let branch = self
+            .tee
+            .branch()?
+            .queue_with_policy("virtual-camera-queue", 2, OverflowPolicy::DropNewest)
+            .pipe(FrameRateLimiter::new(
+                "virtual-camera-rate",
+                ffmpeg::Rational::new(VIRTUAL_CAMERA_FPS, 1),
+            ))
+            .pipe(D3d11Scaler::new(
+                "virtual-camera-scale",
+                &self.gpu,
+                D3d11ScalerFormat::Nv12,
+                width,
+                height,
+            )?)
+            .pipe(D3d11Download::new("virtual-camera-download", &self.gpu)?)
+            .to(camera)?;
+        Ok(self.tee.attach(branch)?)
+    }
+
+    /// Takes the virtual camera's branch off again, which drops the camera:
+    /// it leaves every application's list.
+    pub(in crate::engine) fn detach_virtual_camera(
+        &self,
+        branch: media_pp::graph::BranchId,
+    ) -> Result<(), BackendError> {
+        self.tee.detach(branch)?;
+        Ok(())
     }
 
     /// Takes a screenshot's branch off again. `detach` rather than

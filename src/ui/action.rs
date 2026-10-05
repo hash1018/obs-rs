@@ -147,6 +147,10 @@ pub enum UiAction {
     StopReplayBuffer,
     /// Save what the replay buffer holds, beside the recordings.
     SaveReplay,
+    /// Show the Canvas as a camera other applications can open.
+    StartVirtualCamera,
+    /// Take the virtual camera away again.
+    StopVirtualCamera,
     /// Commit the dialog's draft: persist it, and hand the engine the part it
     /// needs. Boxed because it is much the largest variant here and every
     /// other one would otherwise be padded to its size.

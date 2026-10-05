@@ -145,6 +145,11 @@ pub struct StatusSnapshot {
     pub replay: Option<ReplayFill>,
     /// The replay buffer's last report, once it has one.
     pub replay_report: Option<Arc<ReplayReport>>,
+    /// Whether the virtual camera is showing the Canvas.
+    pub virtual_camera: bool,
+    /// Why the last attempt to start the virtual camera failed, if it did —
+    /// kept for the reason `recording_error` is.
+    pub virtual_camera_error: Option<Arc<String>>,
     /// Whether a dropped broadcast is waiting to be tried again.
     ///
     /// Beside the clock rather than in it: what the bar has to say is that

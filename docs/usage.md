@@ -67,6 +67,10 @@ than writing it: start it from the Controls dock, and the key you bound
 writes what it holds to a file beside the recordings. It says how many
 seconds it is holding, and that it cannot save anything in its first second.
 
+**Start Virtual Camera** (Windows 11) shows the canvas as a camera other
+applications can open, until you press it again or close obs-rs. Pick
+"obs-rs" in the other application's camera list.
+
 Keys: `Ctrl+R` starts and stops recording, `Ctrl+P` pauses and resumes one,
 `Ctrl+1` … `Ctrl+9` switch to that Scene, `F11` goes fullscreen, `Ctrl+,`
 opens Settings, and `Ctrl+Z` / `Ctrl+Y` undo and redo — on a Mac, `⌘` in

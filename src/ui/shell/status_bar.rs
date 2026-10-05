@@ -254,9 +254,12 @@ fn show_state(
             ui.label(text);
             ui.ctx().request_repaint_after(left);
         }
-        None => match &status.recording_error {
-            Some(error) => show_error(ui, TextKey::StatusRecordingFailed, error, i18n),
-            None => {
+        None => match (&status.recording_error, &status.virtual_camera_error) {
+            (Some(error), _) => show_error(ui, TextKey::StatusRecordingFailed, error, i18n),
+            (None, Some(error)) => {
+                show_error(ui, TextKey::StatusVirtualCameraFailed, error, i18n);
+            }
+            (None, None) => {
                 ui.label(i18n.text(TextKey::StatusReady));
             }
         },

@@ -81,6 +81,10 @@ pub(in crate::engine) struct OutputState {
     pub(in crate::engine) replay: Option<super::replay::Replay>,
     /// Clips still being written — see `replay::Saves`.
     pub(in crate::engine) replay_saves: super::replay::Saves,
+    /// The virtual camera's branch, while it shows the Canvas. Beside the
+    /// other outputs for the reason they sit side by side: one more branch
+    /// off the video `Tee`.
+    pub(in crate::engine) virtual_camera: Option<media_pp::graph::BranchId>,
 }
 
 /// Whichever way the screenshot on its way is being taken — what has to be

@@ -182,6 +182,10 @@ enum EngineCommand {
     SaveReplay,
     /// What a save came to, from the thread that wrote it.
     ReplaySaved(output::replay::Saved),
+    /// Show the Canvas as a camera other applications can open.
+    StartVirtualCamera,
+    /// Take the camera away again.
+    StopVirtualCamera,
 }
 
 /// What the engine is started with, as opposed to what it is told afterwards
@@ -282,6 +286,13 @@ struct Published {
     replay: Arc<ArcSwapOption<ReplayRunning>>,
     /// The replay buffer's last report — see `ReplayReport`.
     replay_report: Arc<ArcSwapOption<crate::snapshots::ReplayReport>>,
+    /// Whether the virtual camera is showing the Canvas — set once its
+    /// branch is on the `Tee`, so a camera that failed to start never reads
+    /// as running.
+    virtual_camera: Arc<AtomicBool>,
+    /// Why the last attempt to start the virtual camera failed — kept until
+    /// the next attempt, for the reason a recording's error is.
+    virtual_camera_error: Arc<ArcSwapOption<String>>,
 }
 
 /// What the UI reads of a running replay buffer.
@@ -345,6 +356,9 @@ pub struct EngineManager {
     /// The running replay buffer — see `Published::replay`.
     replay: Arc<ArcSwapOption<ReplayRunning>>,
     replay_report: Arc<ArcSwapOption<crate::snapshots::ReplayReport>>,
+    /// The virtual camera — see `Published::virtual_camera`.
+    virtual_camera: Arc<AtomicBool>,
+    virtual_camera_error: Arc<ArcSwapOption<String>>,
     /// When the running broadcast started — see `Published::streaming_since`.
     streaming_since: Arc<ArcSwapOption<Instant>>,
     streaming_error: Arc<ArcSwapOption<String>>,
@@ -402,6 +416,8 @@ impl EngineManager {
         let screenshot = Arc::new(ArcSwapOption::empty());
         let replay = Arc::new(ArcSwapOption::empty());
         let replay_report = Arc::new(ArcSwapOption::empty());
+        let virtual_camera = Arc::new(AtomicBool::new(false));
+        let virtual_camera_error = Arc::new(ArcSwapOption::empty());
         let streaming_since = Arc::new(ArcSwapOption::empty());
         let streaming_error = Arc::new(ArcSwapOption::empty());
         let streaming_reconnecting = Arc::new(AtomicBool::new(false));
@@ -422,6 +438,8 @@ impl EngineManager {
             let screenshot = Arc::clone(&screenshot);
             let replay = Arc::clone(&replay);
             let replay_report = Arc::clone(&replay_report);
+            let virtual_camera = Arc::clone(&virtual_camera);
+            let virtual_camera_error = Arc::clone(&virtual_camera_error);
             let streaming_since = Arc::clone(&streaming_since);
             let streaming_error = Arc::clone(&streaming_error);
             let streaming_reconnecting = Arc::clone(&streaming_reconnecting);
@@ -445,6 +463,8 @@ impl EngineManager {
                     screenshot,
                     replay,
                     replay_report,
+                    virtual_camera,
+                    virtual_camera_error,
                     streaming_since,
                     streaming_error,
                     streaming_reconnecting,
@@ -473,6 +493,7 @@ impl EngineManager {
                         screenshot: None,
                         replay: None,
                         replay_saves: output::replay::Saves::default(),
+                        virtual_camera: None,
                     },
                 };
                 if let Err(error) = run(
@@ -500,6 +521,8 @@ impl EngineManager {
             screenshot,
             replay,
             replay_report,
+            virtual_camera,
+            virtual_camera_error,
             streaming_since,
             streaming_error,
             streaming_reconnecting,
@@ -784,6 +807,29 @@ impl EngineManager {
     /// The replay buffer's last report, once it has one.
     pub fn replay_report(&self) -> Option<Arc<crate::snapshots::ReplayReport>> {
         self.replay_report.load_full()
+    }
+
+    /// Shows the Canvas as a camera other applications can open. Asks
+    /// rather than tells, as a recording does: [`EngineManager::virtual_camera`]
+    /// says whether it started and [`EngineManager::virtual_camera_error`]
+    /// why not.
+    pub fn start_virtual_camera(&self) {
+        let _ = self.commands.send(EngineCommand::StartVirtualCamera);
+    }
+
+    /// Takes the virtual camera away; applications reading it lose it.
+    pub fn stop_virtual_camera(&self) {
+        let _ = self.commands.send(EngineCommand::StopVirtualCamera);
+    }
+
+    /// Whether the virtual camera is showing the Canvas.
+    pub fn virtual_camera(&self) -> bool {
+        self.virtual_camera.load(Ordering::Acquire)
+    }
+
+    /// Why the last attempt to start the virtual camera failed, if it did.
+    pub fn virtual_camera_error(&self) -> Option<Arc<String>> {
+        self.virtual_camera_error.load_full()
     }
 
     /// The SceneItems that are not producing a picture right now.
@@ -1147,6 +1193,13 @@ fn run(
     // the backend stops, so a save that has not yet gathered its clip still
     // finds the buffer there to gather it from.
     recording.replay_saves.wait();
+    // Taken off before the backend stops rather than left to its drop, so
+    // the camera leaves every application's list as the engine does.
+    if let Some(branch) = recording.virtual_camera.take()
+        && let Err(error) = backend.detach_virtual_camera(branch)
+    {
+        tracing::warn!("could not take the virtual camera's branch off: {error}");
+    }
 
     for (_, state) in open.drain() {
         if let SourceState::Open(source) = state {
@@ -1676,6 +1729,18 @@ fn report_replay(
         })));
 }
 
+/// Takes the virtual camera's branch off, if it is on, and says so to the
+/// UI. Dropping the branch drops the camera, which is what removes it from
+/// every application's list.
+fn stop_virtual_camera(engine: &Engine<'_>, state: &mut OutputState, published: &Published) {
+    published.virtual_camera.store(false, Ordering::Release);
+    if let Some(branch) = state.virtual_camera.take()
+        && let Err(error) = engine.backend.detach_virtual_camera(branch)
+    {
+        tracing::warn!("could not take the virtual camera's branch off: {error}");
+    }
+}
+
 /// Ends the replay buffer, if one is running, and says so to the UI.
 ///
 /// Its report is left alone: a clip saved a moment before stopping is still
@@ -2058,6 +2123,30 @@ fn apply_command(
                 published,
                 saved.map(|(path, length)| crate::snapshots::SavedReplay { path, length }),
             );
+            false
+        }
+        EngineCommand::StartVirtualCamera => {
+            if recording.virtual_camera.is_some() {
+                return false;
+            }
+            // Cleared before the attempt, for the reason a recording's error
+            // is: what is shown then describes this attempt.
+            published.virtual_camera_error.store(None);
+            match engine.backend.attach_virtual_camera() {
+                Ok(branch) => {
+                    recording.virtual_camera = Some(branch);
+                    published.virtual_camera.store(true, Ordering::Release);
+                }
+                Err(error) => {
+                    let reason = describe(error.as_ref());
+                    tracing::error!("could not start the virtual camera: {reason}");
+                    published.virtual_camera_error.store(Some(Arc::new(reason)));
+                }
+            }
+            false
+        }
+        EngineCommand::StopVirtualCamera => {
+            stop_virtual_camera(engine, recording, published);
             false
         }
         EngineCommand::PauseRecording(paused) => {
@@ -3082,6 +3171,8 @@ mod tests {
             screenshot: Arc::new(ArcSwapOption::empty()),
             replay: Arc::new(ArcSwapOption::empty()),
             replay_report: Arc::new(ArcSwapOption::empty()),
+            virtual_camera: Arc::new(AtomicBool::new(false)),
+            virtual_camera_error: Arc::new(ArcSwapOption::empty()),
             streaming_since: Arc::new(ArcSwapOption::empty()),
             streaming_error: Arc::new(ArcSwapOption::empty()),
             streaming_reconnecting: Arc::new(AtomicBool::new(false)),

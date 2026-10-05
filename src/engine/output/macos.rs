@@ -281,3 +281,20 @@ impl Backend {
         Ok(())
     }
 }
+
+/// The virtual camera is Windows' own — a Media Foundation camera — and its
+/// button is shown nowhere else; these answer as if it were asked anyway.
+impl Backend {
+    pub(in crate::engine) fn attach_virtual_camera(
+        &self,
+    ) -> Result<media_pp::graph::BranchId, BackendError> {
+        Err("the virtual camera is available only on Windows".into())
+    }
+
+    pub(in crate::engine) fn detach_virtual_camera(
+        &self,
+        _branch: media_pp::graph::BranchId,
+    ) -> Result<(), BackendError> {
+        Ok(())
+    }
+}
