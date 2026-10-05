@@ -265,7 +265,7 @@ mod tests {
                 media_pp::pool::UnboundObjectPool::new(0, ffmpeg::frame::Video::empty, |_| {});
             let mut slot = pool.get();
             *slot = frame;
-            MediaBuffer::Video(std::sync::Arc::new(slot))
+            MediaBuffer::Video(std::sync::Arc::new(slot).into())
         };
         sink.consume(pooled(frame(2, 2))).expect("first");
         sink.consume(pooled(frame(2, 2))).expect("second");

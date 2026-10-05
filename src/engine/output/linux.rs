@@ -404,7 +404,7 @@ impl Backend {
         pipeline.run()?;
         // Dropped once the frame is in, which is what ends the pipeline —
         // see the D3D11 twin.
-        pusher.push(media_pp::buffer::MediaBuffer::Video(frame))?;
+        pusher.push(media_pp::buffer::MediaBuffer::Video(frame.into()))?;
         Ok(pipeline)
     }
 

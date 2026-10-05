@@ -428,7 +428,7 @@ impl Backend {
         // Dropped as soon as the one frame is in: an `AppSource` whose last
         // handle goes sends `Eos` after what it was given, which is what ends
         // this pipeline once the picture is through.
-        pusher.push(media_pp::buffer::MediaBuffer::Video(frame))?;
+        pusher.push(media_pp::buffer::MediaBuffer::Video(frame.into()))?;
         Ok(pipeline)
     }
 

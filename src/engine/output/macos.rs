@@ -268,7 +268,7 @@ impl Backend {
             },
         )?;
         pipeline.run()?;
-        pusher.push(media_pp::buffer::MediaBuffer::Video(frame))?;
+        pusher.push(media_pp::buffer::MediaBuffer::Video(frame.into()))?;
         Ok(pipeline)
     }
 

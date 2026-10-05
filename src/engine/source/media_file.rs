@@ -774,7 +774,9 @@ mod tests {
         for index in 0..frames {
             let owed = (index + 1) * i64::from(SAMPLE_RATE) / 30;
             sound
-                .push(MediaBuffer::Audio(Arc::new(tone(samples, owed - samples))))
+                .push(MediaBuffer::Audio(
+                    Arc::new(tone(samples, owed - samples)).into(),
+                ))
                 .expect("push sound");
             samples = owed;
             pictures

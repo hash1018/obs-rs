@@ -299,7 +299,7 @@ impl SampleClock {
             audio.plane_mut::<f32>(index).copy_from_slice(plane);
         }
         self.samples += frames as i64;
-        Some(media_pp::buffer::MediaBuffer::Audio(Arc::new(audio)))
+        Some(media_pp::buffer::MediaBuffer::Audio(Arc::new(audio).into()))
     }
 }
 
@@ -646,7 +646,7 @@ pub(in crate::engine) fn open(
                 // complained about when it fails: the one way it can is the
                 // pipeline having gone, which is this Source closing — a page
                 // told to close can still be in the middle of a picture.
-                let _ = pusher.try_push(MediaBuffer::Video(Arc::new(frame)));
+                let _ = pusher.try_push(MediaBuffer::Video(Arc::new(frame).into()));
                 Ok(())
             }
             // Dropped rather than waited on, for the reason above; and only a
