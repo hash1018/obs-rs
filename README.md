@@ -20,8 +20,9 @@ bottom.](docs/screenshot.png)
   a Scene placed inside another to share an overlay.
 - **Sources:** display and window capture, webcams, media files, RTSP
   streams, web pages, images, text, colour and a layer you draw on.
-- **Recording** to MP4, Matroska or HLS with hardware encoding, **streaming**
-  to any RTMP service, a **replay buffer**, screenshots, and on Windows 11
+- **Recording** to MP4 (plain or fragmented), Matroska or HLS with hardware
+  encoding, **streaming** to any RTMP service, a **replay buffer**,
+  screenshots, and on Windows 11
   and Linux a **virtual camera**.
 - **Audio:** a mixer with a channel per device, per media file and per
   application, filters on picture and sound, and monitoring.

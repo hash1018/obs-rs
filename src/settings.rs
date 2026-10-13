@@ -648,10 +648,11 @@ pub const KEYFRAME_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 1..=10;
 
 /// Which container a recording is written into.
 ///
-/// One `media-pp` element writes all three: `FileMuxer` asks FFmpeg to guess
-/// a muxer from the file name, so the choice here is very nearly a choice of
-/// extension. HLS is the exception — it is a playlist and a directory of
-/// segments rather than a file, and a different element.
+/// One `media-pp` element writes all but HLS: `FileMuxer` asks FFmpeg to
+/// guess a muxer from the file name, so the choice here is very nearly a
+/// choice of extension — fragmented MP4 being the same `.mp4` opened with
+/// `create_fragmented`. HLS is the exception — it is a playlist and a
+/// directory of segments rather than a file, and a different element.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordingFormat {
@@ -660,6 +661,12 @@ pub enum RecordingFormat {
     /// application leaves an unplayable file.
     #[default]
     Mp4,
+    /// MP4 written in fragments, a keyframe interval each: the cure for the
+    /// weakness above that still ends in `.mp4`. A recording that dies with
+    /// the application plays up to its last whole fragment, and once it is
+    /// finished every player and editor takes it as it does any MP4 — OBS
+    /// offers it for the same reason.
+    FragmentedMp4,
     /// Matroska. Worth offering for exactly the weakness above — a `.mkv`
     /// that was never finalized still plays up to where it stopped, which is
     /// why OBS recommends it for long recordings.
@@ -673,13 +680,13 @@ pub enum RecordingFormat {
 
 impl RecordingFormat {
     /// In the order the dialog lists them.
-    pub const ALL: [Self; 3] = [Self::Mp4, Self::Mkv, Self::Hls];
+    pub const ALL: [Self; 4] = [Self::Mp4, Self::FragmentedMp4, Self::Mkv, Self::Hls];
 
     /// What the recording's own path ends in. For HLS that is the playlist's,
     /// not a segment's.
     pub fn extension(self) -> &'static str {
         match self {
-            Self::Mp4 => "mp4",
+            Self::Mp4 | Self::FragmentedMp4 => "mp4",
             Self::Mkv => "mkv",
             Self::Hls => "m3u8",
         }
@@ -695,10 +702,17 @@ impl RecordingFormat {
         matches!(self, Self::Hls)
     }
 
+    /// Whether the file is written in fragments, which a recording cut off
+    /// still opens from.
+    pub fn fragmented(self) -> bool {
+        matches!(self, Self::FragmentedMp4)
+    }
+
     /// What to call it in a list.
     pub fn label(self) -> &'static str {
         match self {
             Self::Mp4 => "MP4 (.mp4)",
+            Self::FragmentedMp4 => "Fragmented MP4 (.mp4)",
             Self::Mkv => "Matroska (.mkv)",
             Self::Hls => "HLS (.m3u8)",
         }

@@ -249,8 +249,13 @@ fn open_muxer(
         ))),
         RecordingSplit::Size => Some(SegmentPolicy::Size(settings.split_bytes())),
     };
+    let fragmented = settings.format.fragmented();
     let Some(policy) = policy else {
-        let mut muxer = FileMuxer::create(path)?;
+        let mut muxer = if fragmented {
+            FileMuxer::create_fragmented(path)?
+        } else {
+            FileMuxer::create(path)?
+        };
         let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
         let mut sinks = muxer.open()?;
         return Ok(added.try_map(|track| sinks.take(track))?);
@@ -267,9 +272,12 @@ fn open_muxer(
         .to_string_lossy()
         .into_owned();
     let extension = settings.format.extension().to_owned();
-    let mut muxer = SegmentedFileMuxer::create(policy, move |index| {
-        directory.join(format!("{stem}_{index:03}.{extension}"))
-    });
+    let naming = move |index| directory.join(format!("{stem}_{index:03}.{extension}"));
+    let mut muxer = if fragmented {
+        SegmentedFileMuxer::create_fragmented(policy, naming)
+    } else {
+        SegmentedFileMuxer::create(policy, naming)
+    };
     let added = tracks.map(|track| muxer.add_stream(track.name, track.format));
     let mut sinks = muxer.open()?;
     Ok(added.try_map(|track| sinks.take(track))?)
@@ -554,6 +562,124 @@ mod tests {
             assert!(sinks.is_ok(), "{format:?}: {:?}", sinks.err());
             assert!(path.parent().is_some_and(Path::is_dir), "{format:?}");
             drop(sinks);
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// A fragmented MP4 recording still opens while it is being written —
+    /// a copy of it is what a recording that dies with the application
+    /// leaves — split or not; the file ends in `.mp4` like any other MP4
+    /// recording's.
+    #[test]
+    fn a_fragmented_mp4_recording_cut_off_still_opens() {
+        use crate::settings::RecordingSplit;
+        use media_pp::buffer::MediaBuffer;
+        use media_pp::elements::AppSource;
+        use media_pp::pipeline::Pipeline;
+
+        /// How many packets the file at `path` reads back with, from a copy
+        /// of it taken now; `None` where that copy does not open.
+        fn packets_in_a_copy(path: &Path) -> Option<usize> {
+            let copy = path.with_extension("copy.mp4");
+            std::fs::copy(path, &copy).ok()?;
+            let counted = media_pp::ffmpeg::format::input(&copy)
+                .ok()
+                .map(|mut input| {
+                    let mut packets = 0;
+                    let mut packet = media_pp::ffmpeg::Packet::empty();
+                    while packet.read(&mut input).is_ok() {
+                        packets += 1;
+                    }
+                    packets
+                });
+            let _ = std::fs::remove_file(&copy);
+            counted
+        }
+
+        for split in [RecordingSplit::Off, RecordingSplit::Time] {
+            let root = std::env::temp_dir().join(format!(
+                "obs-rs-fragmented-{}-{split:?}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let settings = RecordingSettings {
+                format: RecordingFormat::FragmentedMp4,
+                split,
+                ..RecordingSettings::default()
+            };
+            let path = crate::paths::recording_file_in(
+                &root,
+                "test",
+                time::OffsetDateTime::UNIX_EPOCH,
+                settings.format,
+            );
+            let encoder = SwAudioEncoder::new(
+                "test-audio-encode",
+                SwAudioEncoderOptions {
+                    codec: AudioCodec::Aac,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    bit_rate: 128_000,
+                },
+            )
+            .expect("AAC is built into FFmpeg");
+            let tracks = Tracks {
+                video: TrackDef {
+                    name: String::from("test-track"),
+                    format: TrackFormat::from(&encoder),
+                },
+                audio: None,
+            };
+            let sinks = open_muxer(&path, &settings, tracks).expect("the muxer opens");
+            let (source, sound) = AppSource::new("test-sound", 8);
+            let (pipeline, ()) = Pipeline::new("test-recording", source, |source, context| {
+                let branch = context.branch().pipe(encoder).to(sinks.video)?;
+                context.attach(source, 0, branch)?;
+                Ok(())
+            })
+            .expect("wire the recording");
+            pipeline.run().expect("run the recording");
+            // Three seconds and a half; sound alone is cut every second.
+            for tick in 0..175i64 {
+                let mut frame = media_pp::ffmpeg::frame::Audio::new(
+                    media_pp::ffmpeg::format::Sample::F32(
+                        media_pp::ffmpeg::format::sample::Type::Packed,
+                    ),
+                    960,
+                    media_pp::ffmpeg::ChannelLayout::STEREO,
+                );
+                frame.set_rate(48_000);
+                frame.set_pts(Some(tick * 960));
+                frame.data_mut(0).fill(0);
+                sound
+                    .push(MediaBuffer::Audio(std::sync::Arc::new(frame).into()))
+                    .expect("push sound");
+            }
+
+            let written = std::fs::read_dir(&root)
+                .expect("the recording's folder")
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .collect::<Vec<_>>();
+            assert_eq!(written.len(), 1, "{split:?}: {written:?}");
+            let file = written[0].clone();
+            assert_eq!(file.extension().and_then(|e| e.to_str()), Some("mp4"));
+            // Three whole seconds are over 140 packets of 1024 samples, once
+            // the pipeline has worked through what was pushed.
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            let packets = loop {
+                let packets = packets_in_a_copy(&file);
+                if packets.is_some_and(|packets| packets >= 140)
+                    || std::time::Instant::now() > deadline
+                {
+                    break packets;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            assert!(
+                packets.is_some_and(|packets| packets >= 140),
+                "{split:?}: a copy of the recording under way reads {packets:?} packets"
+            );
+            drop(pipeline);
             let _ = std::fs::remove_dir_all(&root);
         }
     }

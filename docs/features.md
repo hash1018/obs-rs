@@ -88,9 +88,10 @@ Everything it can do, source by source. How to use it is in
   picture that exists either way, so it is a second view rather than a
   second output: nothing is encoded, and the recording does not know it is
   there.
-- **Recording** to MP4, Matroska or HLS, with hardware encoding where the
-  machine has it. One recording can be split into several files by elapsed
-  time or by size.
+- **Recording** to MP4 (plain or fragmented), Matroska or HLS, with hardware
+  encoding where the machine has it. One recording can be split into
+  several files by elapsed time or by size. A fragmented MP4 or a Matroska
+  recording cut off by a crash still plays up to where it stopped.
 - **Streaming** to any RTMP service — Twitch, YouTube, an nginx of your own.
   The server and the stream key are kept apart, because that is how services
   hand them out and because only one of the two is a secret: the key is
