@@ -609,7 +609,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     use media_pp::elements::D3d11VideoCompositor;
     use media_pp::elements::{
-        AppSource, AudioCodec, AudioMixer, AudioMixerOptions, FileMuxer, SwAudioEncoder,
+        AppSource, AudioCodec, AudioMixer, AudioMixerOptions, FileMuxer, Mp4Layout, SwAudioEncoder,
         SwAudioEncoderOptions, SwEncoder, SwEncoderOptions, VideoCodec, VideoCompositorOptions,
         VideoLayer, VideoRect,
     };
@@ -752,7 +752,7 @@ mod tests {
             },
         )
         .expect("audio encoder");
-        let mut muxer = FileMuxer::create(&path).expect("muxer");
+        let mut muxer = FileMuxer::create(&path, Mp4Layout::Standard).expect("muxer");
         let video_track = muxer.add_stream("video", &video_encoder).expect("track");
         let audio_track = muxer.add_stream("audio", &audio_encoder).expect("track");
         let mut sinks = muxer.open().expect("open muxer");

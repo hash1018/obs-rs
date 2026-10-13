@@ -69,8 +69,8 @@ use media_pp::{
     element::BoxSink,
     elements::{
         AudioCodec, FileMuxer, HlsMode, HlsMuxer, HlsOptions, HlsSegmentFormat, MixFormat,
-        MixerHandle, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer, SwAudioEncoder,
-        SwAudioEncoderOptions, TeeHandle, TimestampOrigin, TrackFormat,
+        MixerHandle, Mp4Layout, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer,
+        SwAudioEncoder, SwAudioEncoderOptions, TeeHandle, TimestampOrigin, TrackFormat,
     },
     graph::BranchId,
     queue::OverflowPolicy,
@@ -249,13 +249,13 @@ fn open_muxer(
         ))),
         RecordingSplit::Size => Some(SegmentPolicy::Size(settings.split_bytes())),
     };
-    let fragmented = settings.format.fragmented();
+    let layout = if settings.format.fragmented() {
+        Mp4Layout::Fragmented
+    } else {
+        Mp4Layout::Standard
+    };
     let Some(policy) = policy else {
-        let mut muxer = if fragmented {
-            FileMuxer::create_fragmented(path)?
-        } else {
-            FileMuxer::create(path)?
-        };
+        let mut muxer = FileMuxer::create(path, layout)?;
         let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
         let mut sinks = muxer.open()?;
         return Ok(added.try_map(|track| sinks.take(track))?);
@@ -273,11 +273,7 @@ fn open_muxer(
         .into_owned();
     let extension = settings.format.extension().to_owned();
     let naming = move |index| directory.join(format!("{stem}_{index:03}.{extension}"));
-    let mut muxer = if fragmented {
-        SegmentedFileMuxer::create_fragmented(policy, naming)
-    } else {
-        SegmentedFileMuxer::create(policy, naming)
-    };
+    let mut muxer = SegmentedFileMuxer::create(policy, layout, naming);
     let added = tracks.map(|track| muxer.add_stream(track.name, track.format));
     let mut sinks = muxer.open()?;
     Ok(added.try_map(|track| sinks.take(track))?)

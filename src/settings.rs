@@ -651,7 +651,7 @@ pub const KEYFRAME_SECONDS_RANGE: std::ops::RangeInclusive<u32> = 1..=10;
 /// One `media-pp` element writes all but HLS: `FileMuxer` asks FFmpeg to
 /// guess a muxer from the file name, so the choice here is very nearly a
 /// choice of extension — fragmented MP4 being the same `.mp4` opened with
-/// `create_fragmented`. HLS is the exception — it is a playlist and a
+/// `Mp4Layout::Fragmented`. HLS is the exception — it is a playlist and a
 /// directory of segments rather than a file, and a different element.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
