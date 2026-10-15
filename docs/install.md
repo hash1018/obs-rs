@@ -62,13 +62,22 @@ it records where the executable is; run the script again, or
 
 - A Mac with Apple silicon, on macOS 13 or newer; capturing what other
   applications play needs 14.2.
-- Move `obs-rs.app` to Applications, or run it where it is. It carries its
-  own FFmpeg.
+- **Move `obs-rs.app` to Applications in Finder before opening it.** It
+  carries its own FFmpeg. Opened where it was downloaded, macOS runs it from
+  a temporary copy (App Translocation), and the screen recording permission
+  given to that copy does not hold, so a Display Capture stays empty. Safari
+  unpacking the zip and moving the zip to the Trash is Safari's doing.
 - The app is signed ad hoc rather than by a registered developer, so the
-  first time macOS says it cannot check it for malicious software. Open
-  **System Settings → Privacy & Security** and choose *Open Anyway* beside
-  obs-rs, once.
+  first time macOS says it cannot check it for malicious software. Choose
+  *Done* — not *Move to Trash* — then open **System Settings → Privacy &
+  Security** and choose *Open Anyway* beside obs-rs, once; the button is
+  there for about an hour after the attempt.
 - macOS asks for each permission the first time it is needed, under
   obs-rs's own name: screen recording for a Display or Window Capture, the
   camera, the microphone, and Input Monitoring for a hotkey that works while
-  another application has focus.
+  another application has focus. **Quit and reopen obs-rs after allowing
+  screen recording**; macOS lets it record only from its next start.
+- Each version is a new application to macOS, since an ad-hoc signature is
+  the build's own. If a Display Capture stays empty after an update, remove
+  obs-rs from **Privacy & Security → Screen & System Audio Recording**,
+  allow it again and reopen it.

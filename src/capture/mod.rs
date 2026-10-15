@@ -448,6 +448,18 @@ pub struct AudioDeviceWatch;
 /// let a process enumerate them at all, so a caller must read empty as a
 /// reason to trust whatever it already had rather than as a reason to
 /// discard it.
+/// The size, in pixels, a capture of `monitor` opens at: its rectangle's
+/// on Windows and Linux, where that is in pixels already, and on macOS its
+/// current mode's pixels — a Retina display's rectangle is in points, half
+/// what ScreenCaptureKit captures.
+pub fn capture_size(monitor: &MonitorTarget) -> [u32; 2] {
+    #[cfg(target_os = "macos")]
+    if let Some(size) = macos::display_pixels(&monitor.name) {
+        return size;
+    }
+    [monitor.rect.width, monitor.rect.height]
+}
+
 pub fn displays() -> Vec<MonitorRect> {
     #[cfg(target_os = "windows")]
     {

@@ -1275,9 +1275,10 @@ fn show_display_dialog(
             })
             .map(|target| DisplayCaptureSettings {
                 target: DisplayCaptureTarget::MonitorName(target.name.clone()),
-                // The dialog just showed the user this size; storing it is what
-                // makes the new item appear at the display's own shape.
-                size_hint: Some([target.rect.width, target.rect.height]),
+                // What the capture will open at, which makes the new item
+                // appear at the display's own shape — and, larger than the
+                // Canvas, fitted to it.
+                size_hint: Some(crate::capture::capture_size(target)),
             });
         if let (Some(scene_id), Some(settings)) = (snapshot.scene_id, selected) {
             actions.push(UiAction::Project(ProjectCommand::Source(

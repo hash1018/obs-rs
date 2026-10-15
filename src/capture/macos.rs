@@ -18,10 +18,11 @@ use objc2_core_foundation::{
     CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect,
 };
 use objc2_core_graphics::{
-    CGDirectDisplayID, CGDisplayBounds, CGDisplayIsBuiltin, CGGetActiveDisplayList,
-    CGMainDisplayID, CGRectMakeWithDictionaryRepresentation, CGWindowListCopyWindowInfo,
-    CGWindowListOption, kCGNullWindowID, kCGWindowBounds, kCGWindowIsOnscreen, kCGWindowLayer,
-    kCGWindowName, kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
+    CGDirectDisplayID, CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayIsBuiltin,
+    CGDisplayMode, CGGetActiveDisplayList, CGMainDisplayID, CGRectMakeWithDictionaryRepresentation,
+    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowBounds,
+    kCGWindowIsOnscreen, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
+    kCGWindowOwnerPID,
 };
 
 use std::sync::mpsc;
@@ -85,6 +86,19 @@ pub fn monitors() -> Vec<MonitorTarget> {
 pub fn display_id(name: &str) -> Option<u32> {
     let (_, id) = name.strip_suffix(')')?.rsplit_once('(')?;
     id.parse().ok()
+}
+
+/// The pixels of the display a monitor's name carries — its current mode's,
+/// which is what ScreenCaptureKit captures at — or `None` where the name is
+/// none of this platform's or the mode cannot be read.
+pub fn display_pixels(name: &str) -> Option<[u32; 2]> {
+    let id = display_id(name)?;
+    let mode = CGDisplayCopyDisplayMode(id)?;
+    let (width, height) = (
+        CGDisplayMode::pixel_width(Some(&mode)),
+        CGDisplayMode::pixel_height(Some(&mode)),
+    );
+    (width > 0 && height > 0).then_some([width as u32, height as u32])
 }
 
 /// Where the displays are, for deciding whether a remembered window position
@@ -376,6 +390,32 @@ mod tests {
         for monitor in &monitors {
             assert!(display_id(&monitor.name).is_some(), "{}", monitor.name);
             assert!(monitor.rect.width > 0 && monitor.rect.height > 0);
+        }
+    }
+
+    /// A capture opens at a display's pixels, which on a Retina display are
+    /// twice its points: what a new Display Capture is sized and fitted by.
+    #[test]
+    fn a_display_is_captured_at_its_pixels_not_its_points() {
+        for monitor in monitors() {
+            let [width, height] = crate::capture::capture_size(&monitor);
+            assert!(
+                width >= monitor.rect.width && height >= monitor.rect.height,
+                "{}: {width}x{height} for {}x{} points",
+                monitor.name,
+                monitor.rect.width,
+                monitor.rect.height
+            );
+            assert_eq!(
+                width * monitor.rect.height,
+                height * monitor.rect.width,
+                "{}: the pixels keep the points' shape",
+                monitor.name
+            );
+            eprintln!(
+                "{}: {}x{} points, {width}x{height} pixels",
+                monitor.name, monitor.rect.width, monitor.rect.height
+            );
         }
     }
 }

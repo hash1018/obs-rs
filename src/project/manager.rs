@@ -1559,6 +1559,17 @@ mod tests {
         // The picker reported an ultrawide, so the item starts at that shape
         // rather than being squared off to the 16:9 Canvas.
         assert_eq!(sources.items[0].source_size, [3440.0, 1440.0]);
+        // Wider than the Canvas, it is shrunk to its width, shape kept, in
+        // the middle — not left spilling over both sides.
+        let transform = sources.items[0].transform;
+        let fit = 1920.0 / 3440.0;
+        assert!(
+            (transform.scale[0] - fit).abs() < 1e-6,
+            "{:?}",
+            transform.scale
+        );
+        assert_eq!(transform.scale[0], transform.scale[1]);
+        assert_eq!(transform.position, [960.0, 540.0]);
         assert!(matches!(
             &sources.items[0].settings,
             crate::domain::SourceSettings::DisplayCapture(settings)

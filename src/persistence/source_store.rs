@@ -1123,7 +1123,7 @@ impl SourceStore {
                 height
             ],
         )?;
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+        add_fitted(transaction, scene_id, source_id, settings.size_hint)
     }
 
     pub(crate) fn add_window_capture(
@@ -1158,7 +1158,7 @@ impl SourceStore {
                 height
             ],
         )?;
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+        add_fitted(transaction, scene_id, source_id, settings.size_hint)
     }
 
     /// Adds a media file Source, named after the file itself.
@@ -1200,7 +1200,7 @@ impl SourceStore {
                 settings.backwards
             ],
         )?;
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+        add_fitted(transaction, scene_id, source_id, settings.size_hint)
     }
 
     /// Adds a live stream Source, named after the address it pulls from.
@@ -1241,7 +1241,7 @@ impl SourceStore {
                 settings.monitored
             ],
         )?;
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+        add_fitted(transaction, scene_id, source_id, settings.size_hint)
     }
 
     /// How this stream's session carries its video. Takes effect by reopening
@@ -1327,7 +1327,7 @@ impl SourceStore {
                 height
             ],
         )?;
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+        add_fitted(transaction, scene_id, source_id, settings.size_hint)
     }
 
     /// Which mode to ask the camera for, or `None` to take its first.
@@ -1392,7 +1392,7 @@ impl SourceStore {
              VALUES (?1, ?2, ?3, ?4)",
             params![source_id.0, settings.path.to_string_lossy(), width, height],
         )?;
-        add_to_scene(transaction, scene_id, source_id, SceneCanvas::DEFAULT)
+        add_fitted(transaction, scene_id, source_id, settings.size_hint)
     }
 
     /// Whether this media file Source starts again at its end.
@@ -1979,14 +1979,60 @@ fn add_to_scene(
     source_id: SourceId,
     canvas: SceneCanvas,
 ) -> PersistenceResult<SceneItemId> {
+    add_scaled(transaction, scene_id, source_id, canvas, 1.0)
+}
+
+/// Places a new item of a source that says it is `size` in the middle of
+/// the Canvas: at its own size where it fits, and shrunk to fit where it is
+/// larger, its shape kept. A display captured on a Retina Mac is 2940x1912
+/// pixels, which at its own size spilled over the 1920x1080 Canvas on every
+/// side; a 4K file or a large image did the same anywhere.
+fn add_fitted(
+    transaction: &Transaction<'_>,
+    scene_id: SceneId,
+    source_id: SourceId,
+    size: Option<[u32; 2]>,
+) -> PersistenceResult<SceneItemId> {
+    let canvas = SceneCanvas::DEFAULT;
+    add_scaled(
+        transaction,
+        scene_id,
+        source_id,
+        canvas,
+        fit_scale(canvas, size),
+    )
+}
+
+/// The scale that brings a source of `size` within `canvas`: 1 where it
+/// fits already or says no size, never more.
+fn fit_scale(canvas: SceneCanvas, size: Option<[u32; 2]>) -> f32 {
+    match size {
+        Some([width, height]) if width > 0 && height > 0 => (canvas.width / width as f32)
+            .min(canvas.height / height as f32)
+            .min(1.0),
+        _ => 1.0,
+    }
+}
+
+/// A new item centred on `size`'s middle — the Canvas's, for an item the
+/// size of the Canvas — at `scale`.
+fn add_scaled(
+    transaction: &Transaction<'_>,
+    scene_id: SceneId,
+    source_id: SourceId,
+    size: SceneCanvas,
+    scale: f32,
+) -> PersistenceResult<SceneItemId> {
     transaction.execute(
         "INSERT INTO scene_items
-                (scene_id, source_id, position_x, position_y, z_index)
+                (scene_id, source_id, position_x, position_y, scale_x, scale_y, z_index)
              VALUES (
                 ?1,
                 ?2,
                 ?3,
                 ?4,
+                ?5,
+                ?5,
                 COALESCE(
                     (SELECT MAX(z_index) + 1 FROM scene_items WHERE scene_id = ?1),
                     0
@@ -1995,8 +2041,9 @@ fn add_to_scene(
         params![
             scene_id.0,
             source_id.0,
-            canvas.width * 0.5,
-            canvas.height * 0.5
+            size.width * 0.5,
+            size.height * 0.5,
+            scale
         ],
     )?;
     Ok(SceneItemId(transaction.last_insert_rowid()))
@@ -2059,6 +2106,23 @@ fn reaches(nesting: &HashMap<i64, Vec<SceneId>>, from: SceneId, target: SceneId)
 }
 #[cfg(test)]
 mod tests {
+
+    /// A source larger than the Canvas is shrunk to fit it, shape kept; one
+    /// that fits, or says no size, is left at its own.
+    #[test]
+    fn a_source_larger_than_the_canvas_is_fitted_to_it() {
+        let canvas = SceneCanvas::DEFAULT;
+        // A Retina display's pixels: as tall as the Canvas after.
+        let retina = fit_scale(canvas, Some([2940, 1912]));
+        assert!((1912.0 * retina - 1080.0).abs() < 0.01);
+        assert!(2940.0 * retina <= 1920.0);
+        assert_eq!(fit_scale(canvas, Some([1280, 720])), 1.0);
+        assert_eq!(fit_scale(canvas, Some([1920, 1080])), 1.0);
+        assert_eq!(fit_scale(canvas, Some([3840, 2160])), 0.5);
+        assert_eq!(fit_scale(canvas, None), 1.0);
+        assert_eq!(fit_scale(canvas, Some([0, 1080])), 1.0);
+    }
+
     use super::*;
     use crate::persistence::{ProjectDatabase, SceneStore};
 
