@@ -1,6 +1,6 @@
 [package]
 name = "obs-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A screen recorder and scene compositor built on media-pp: capture, composite and record without leaving the GPU."
 license = "MIT OR Apache-2.0"

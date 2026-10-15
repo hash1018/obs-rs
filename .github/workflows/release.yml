@@ -523,9 +523,8 @@ jobs:
       # A draft: a first release is worth reading before it is public.
       #
       # The body is written in the repository rather than generated from
-      # commit subjects. This repository has no earlier tag, so "since the
-      # last release" would be all 207 of them — and commit messages written
-      # for a reader of the history are not release notes anyway.
+      # commit subjects: commit messages written for a reader of the history
+      # are not release notes, and a release's worth of them is dozens.
       #
       # Naming the file after the tag means a release cannot be cut without
       # someone having written its notes: a missing file fails this step.
