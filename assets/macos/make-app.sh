@@ -66,6 +66,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)
+# The oldest macOS it runs on, which the helpers say as the bundle does.
+minimum=$(plutil -extract LSMinimumSystemVersion raw "$here/Info.plist")
 if [ -z "$version" ]; then
     echo "no version in $root/Cargo.toml" >&2
     exit 1
@@ -200,7 +202,7 @@ add_browser_engine() {
 	<key>CFBundleVersion</key>
 	<string>$version</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>12.3</string>
+	<string>$minimum</string>
 	<key>LSUIElement</key>
 	<true/>
 </dict>

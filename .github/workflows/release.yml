@@ -367,7 +367,10 @@ jobs:
   #
   # What it can and cannot promise:
   #
-  # - Apple silicon only, as every Mac this build is for — see docs/macos.md.
+  # - Apple silicon only, as every Mac this build is for — see docs/macos.md —
+  #   on macOS 13 or newer, which CEF's framework is built for: FFmpeg is
+  #   built for it too (.github/vcpkg-triplets), and the check below refuses
+  #   a bundle holding anything that needs newer.
   # - Signed ad hoc, not by a developer, and not notarized: that needs a paid
   #   Apple Developer account. Gatekeeper asks about a downloaded copy the
   #   first time; docs/install.md says how to let it open.
@@ -476,6 +479,33 @@ jobs:
             plutil -extract "$key" raw "$app/Contents/Info.plist" > /dev/null \
               || { echo "no $key in Info.plist" >&2; exit 1; }
           done
+          # Nothing in the bundle may need a macOS newer than it says it runs
+          # on. A library built for the runner's SDK does not load on an older
+          # system whatever Info.plist promises, and nothing else here would
+          # notice: the runner itself is new enough to run it.
+          minimum=$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")
+          inspected=$(mktemp -d)/inspected
+          newer=$(find "$app" -type f -print0 |
+            while IFS= read -r -d '' file; do
+              file -b "$file" | grep -q '^Mach-O' || continue
+              # Through a name without parentheses: otool reads `name(member)`
+              # as a member of an archive, which `obs-rs Helper (GPU)` looks like.
+              ln -sf "$file" "$inspected"
+              needs=$(otool -l "$inspected" | awk '
+                $2 == "LC_BUILD_VERSION" { build = 1 }
+                $2 == "LC_VERSION_MIN_MACOSX" { old = 1 }
+                build && $1 == "minos" { print $2; exit }
+                old && $1 == "version" { print $2; exit }')
+              [ -n "$needs" ] || continue
+              if [ "$(printf '%s\n%s\n' "$needs" "$minimum" | sort -V | tail -n 1)" != "$minimum" ]; then
+                echo "  ${file#"$app"/} needs macOS $needs"
+              fi
+            done)
+          if [ -n "$newer" ]; then
+            echo "the bundle says it runs on macOS $minimum, but:" >&2
+            echo "$newer" >&2
+            exit 1
+          fi
           codesign --verify --deep --strict "$app"
 
       # `ditto` rather than `zip`: it keeps the bundle's symlinks, modes and

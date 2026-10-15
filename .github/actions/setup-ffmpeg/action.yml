@@ -88,7 +88,8 @@ runs:
     # The key is made once, here, for both: a cache key may not contain a
     # comma, and a list of features is written with them.
     #
-    # `PATCH` names what the Linux install step changes in the port, so a
+    # `PATCH` names what the install steps change from vcpkg's own build — the
+    # Linux port's CUDA filters, the macOS triplet's deployment target — so a
     # tree built without that change is never restored as one built with it.
     # It is part of the key rather than of the ref because the ref is
     # vcpkg's, and this change is ours.
@@ -99,7 +100,7 @@ runs:
         TRIPLET: ${{ runner.os == 'Windows' && 'x64-windows' || runner.os == 'macOS' && 'arm64-osx-dynamic' || 'x64-linux-dynamic' }}
         REF: ${{ inputs.vcpkg-ref }}
         FEATURES: ${{ inputs.vcpkg-features }}
-        PATCH: ${{ runner.os == 'Linux' && '-cuda-llvm' || '' }}
+        PATCH: ${{ runner.os == 'Linux' && '-cuda-llvm' || runner.os == 'macOS' && '-macos13' || '' }}
       run: echo "key=vcpkg-ffmpeg-$TRIPLET-$REF-${FEATURES//,/-}$PATCH" >> "$GITHUB_OUTPUT"
 
     - name: Restore cached FFmpeg development libraries
@@ -196,13 +197,20 @@ runs:
 
     # The port enables VideoToolbox and AudioToolbox on macOS by itself, which
     # is what media-pp's macOS backend decodes and encodes with.
+    #
+    # Through this repository's own arm64-osx-dynamic, vcpkg's with a
+    # deployment target (.github/vcpkg-triplets): built for the runner's SDK
+    # instead, FFmpeg would not load on any macOS older than the runner,
+    # whatever the bundle's Info.plist says.
     - name: Install FFmpeg development libraries (macOS)
       if: steps.ffmpeg.outputs.cache-hit != 'true' && runner.os == 'macOS'
       shell: bash
       run: |
         set -euo pipefail
         "$GITHUB_WORKSPACE/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-        "$GITHUB_WORKSPACE/.vcpkg/vcpkg" install "ffmpeg[${{ inputs.vcpkg-features }}]:arm64-osx-dynamic"
+        "$GITHUB_WORKSPACE/.vcpkg/vcpkg" install \
+          --overlay-triplets="$GITHUB_WORKSPACE/.github/vcpkg-triplets" \
+          "ffmpeg[${{ inputs.vcpkg-features }}]:arm64-osx-dynamic"
         rm -rf "$GITHUB_WORKSPACE/.vcpkg/installed/arm64-osx-dynamic/debug"
 
     # Export `FFMPEG_DIR`, not `VCPKG_ROOT`: `ffmpeg-sys-next` reads it before

@@ -42,9 +42,13 @@
 	<string>0.0.0</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.video</string>
-	<!-- ScreenCaptureKit's own floor. -->
+	<!-- The browser engine's: CEF's framework is built for 13.0, above
+	     ScreenCaptureKit's own 12.3. Every library in the bundle is built
+	     for it or older — the release workflow refuses a bundle with one
+	     that is not, and builds FFmpeg for it
+	     (.github/vcpkg-triplets) — and the helpers take it from here. -->
 	<key>LSMinimumSystemVersion</key>
-	<string>12.3</string>
+	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>

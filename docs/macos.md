@@ -118,8 +118,10 @@ Source, which takes a page's pixels as on Linux.
   Worth running locally too: a permission belongs to the application that
   asked, and from a terminal that is the terminal. An ad-hoc signature
   identifies a build by its hash, so the system asks again for each new
-  build of the bundle. The minimum version in `Info.plist` is
-  ScreenCaptureKit's, 12.3; only macOS 26 has run it.
+  build of the bundle. The minimum version in `Info.plist` is 13.0, which
+  CEF's framework is built for (ScreenCaptureKit alone would allow 12.3);
+  the release workflow builds FFmpeg for it and refuses a bundle holding a
+  library built for anything newer. Only macOS 26 has run it.
 
 - **The menu bar** (`ui/shell/native_menu.rs`) is the system's, at the
   top of the screen, and the window has none of its own. Both are drawn

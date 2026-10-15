@@ -60,7 +60,7 @@ it records where the executable is; run the script again, or
 
 **macOS**
 
-- A Mac with Apple silicon, on macOS 12.3 or newer; capturing what other
+- A Mac with Apple silicon, on macOS 13 or newer; capturing what other
   applications play needs 14.2.
 - Move `obs-rs.app` to Applications, or run it where it is. It carries its
   own FFmpeg.
