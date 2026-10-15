@@ -71,7 +71,12 @@ it records where the executable is; run the script again, or
   first time macOS says it cannot check it for malicious software. Choose
   *Done* — not *Move to Trash* — then open **System Settings → Privacy &
   Security** and choose *Open Anyway* beside obs-rs, once; the button is
-  there for about an hour after the attempt.
+  there for about an hour after the attempt. Clearing the download mark
+  from the copy in Applications instead lets it open without the question:
+
+  ```
+  xattr -dr com.apple.quarantine /Applications/obs-rs.app
+  ```
 - macOS asks for each permission the first time it is needed, under
   obs-rs's own name: screen recording for a Display or Window Capture, the
   camera, the microphone, and Input Monitoring for a hotkey that works while
