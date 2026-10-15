@@ -51,6 +51,12 @@ pub struct LogGuard {
 /// why it could not — which is then the only place anything is said.
 pub fn start(directory: &Path) -> Option<LogGuard> {
     let level = level_from(std::env::var("OBS_RS_LOG").ok().as_deref());
+    // Made first: the appender prunes old files before it makes the
+    // directory, and on a first run says on stderr that it found none.
+    if let Err(error) = std::fs::create_dir_all(directory) {
+        eprintln!("obs-rs logging is off: {}: {error}", directory.display());
+        return None;
+    }
     let appender = match RollingFileAppender::builder()
         .filename_prefix("obs-rs")
         .filename_suffix("log")
