@@ -2412,9 +2412,9 @@ dependencies = [
 
 [[package]]
 name = "media-pp"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82934c828c045a9102ed4fdcb737ad6cdacf6f364fd4aab9ce6ee437cd08515a"
+checksum = "e2cad609413c17182dd7631834d92d1854a05fe32dd9b0a0bbcb7c8ab2ce6d45"
 dependencies = [
  "ab_glyph",
  "arc-swap",
