@@ -90,7 +90,7 @@ raw-window-handle = "0.6"
 # that cloning this repository alone is enough to build it, and named by
 # version rather than by location.
 [dependencies.media-pp]
-version = "0.3"
+version = "0.4"
 
 # Stamps the icon and version information onto the executable — see `build.rs`.
 [target.'cfg(target_os = "windows")'.build-dependencies]
@@ -169,7 +169,7 @@ x11rb = { version = "0.13.2", features = ["randr"] }
 # Linux takes two such sets and picks one when it starts: CUDA on an NVIDIA
 # GPU, Vulkan on any other — see `engine::backend`.
 [target.'cfg(target_os = "linux")'.dependencies.media-pp]
-version = "0.3"
+version = "0.4"
 features = [
     "cuda",
     "vulkan",
@@ -182,7 +182,7 @@ features = [
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.media-pp]
-version = "0.3"
+version = "0.4"
 features = [
     "d3d11",
     "rnnoise",
@@ -275,7 +275,7 @@ pollster = "1"
 # other platforms' are: a capture, a decoder and an upload all hand over pixel
 # buffers, and the Metal compositor, filters and VideoToolbox encoder take them.
 [target.'cfg(target_os = "macos")'.dependencies.media-pp]
-version = "0.3"
+version = "0.4"
 features = [
     "metal",
     "rnnoise",
@@ -284,9 +284,3 @@ features = [
     "coreaudio-capture",
     "coreaudio-renderer",
 ]
-
-# media-pp from its repository rather than crates.io, for what is not
-# released yet: the Vulkan backend the Linux build chooses where there is no
-# NVIDIA GPU. Back to the published crate once it carries that.
-[patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp", rev = "783211e7c38f74313d4bde804f74f449f3d06bce" }
