@@ -291,4 +291,4 @@ features = [
 # (`WebRtcMuxer`) a broadcast to a WebRTC server is made with is not on
 # crates.io yet. Back to crates.io alone once media-pp 0.5 is published.
 [patch.crates-io]
-media-pp = { git = "https://github.com/hash1018/media-pp", rev = "44cebcc24eac05663d4d4c7446f65d126e2321b4" }
+media-pp = { git = "https://github.com/hash1018/media-pp", rev = "ab8561218e37ad54b5060379557519547d4d142b" }
