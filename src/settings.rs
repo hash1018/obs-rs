@@ -300,8 +300,15 @@ impl Default for RecordingSettings {
 /// Where a broadcast is published, and how it is encoded.
 ///
 /// Read when a broadcast *starts*, as a recording's settings are and for the
-/// same reason: the FLV header goes out before the first frame and nothing
-/// in it can be renegotiated afterwards.
+/// same reason: the FLV header goes out before the first frame, and a WebRTC
+/// connection's tracks are offered once, and nothing in either can be
+/// renegotiated afterwards.
+///
+/// # RTMP or WebRTC
+///
+/// Which one is read off the server's address — `rtmp://` or `rtmps://` for
+/// RTMP, `http://` or `https://` for a WHIP endpoint — and never stored
+/// apart from it, so the two cannot disagree. See [`Self::protocol`].
 ///
 /// # The stream key is stored as it was typed
 ///
@@ -320,10 +327,12 @@ impl Default for RecordingSettings {
 #[serde(default)]
 pub struct StreamingSettings {
     /// The publish address, without the key — `rtmp://live.twitch.tv/app`
-    /// and the like. Kept apart from the key because that is how every
-    /// service hands them out, and because only one of the two is a secret.
+    /// and the like, or a WHIP endpoint, `https://example.com/live/whip`.
+    /// Kept apart from the key because that is how every service hands them
+    /// out, and because only one of the two is a secret.
     pub server: String,
-    /// The secret half of the address. See this type's own docs.
+    /// The secret half of the address — over WHIP, the `Bearer` token, and
+    /// left empty for a server that asks for none. See this type's own docs.
     pub stream_key: String,
     pub encoder: RecordingEncoder,
     pub bit_rate_mbps: u32,
@@ -359,8 +368,37 @@ impl Default for StreamingSettings {
     }
 }
 
+/// How a broadcast reaches its server — see [`StreamingSettings::protocol`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamProtocol {
+    /// RTMP, to a streaming service's ingest: the key is the address's last
+    /// part.
+    Rtmp,
+    /// WebRTC to a WHIP endpoint: well under a second behind, H.264 without
+    /// reordered pictures and Opus, the key sent as a `Bearer` token.
+    Whip,
+}
+
 impl StreamingSettings {
-    /// The whole publish address, key and all.
+    /// RTMP or WebRTC, by the server's address: `http://` and `https://`
+    /// are a WHIP endpoint's, anything else RTMP's.
+    pub fn protocol(&self) -> StreamProtocol {
+        let server = self.server.trim().to_ascii_lowercase();
+        if server.starts_with("http://") || server.starts_with("https://") {
+            StreamProtocol::Whip
+        } else {
+            StreamProtocol::Rtmp
+        }
+    }
+
+    /// The key, as a WHIP endpoint is handed it: `None` where none was
+    /// typed.
+    pub fn bearer_token(&self) -> Option<String> {
+        let key = self.stream_key.trim();
+        (!key.is_empty()).then(|| key.to_owned())
+    }
+
+    /// The whole RTMP publish address, key and all.
     ///
     /// The one place the two are put together, and deliberately not a field:
     /// what is stored, shown and logged is the two halves, and this is made
@@ -384,7 +422,10 @@ impl StreamingSettings {
     /// does. This is what greys the button out.
     pub fn is_addressable(&self) -> bool {
         let server = self.server.trim();
-        !server.is_empty() && !self.stream_key.trim().is_empty() && server.contains("://")
+        // A WHIP endpoint may ask for no token at all; an RTMP ingest always
+        // takes its key in the address.
+        let keyed = self.protocol() == StreamProtocol::Whip || !self.stream_key.trim().is_empty();
+        !server.is_empty() && keyed && server.contains("://")
     }
 
     /// How long to wait before connecting again, if it should at all.
@@ -395,9 +436,17 @@ impl StreamingSettings {
 
     /// What a broadcast encodes with, resolved against the Canvas — the
     /// streaming counterpart of [`RecordingSettings::encoding`].
+    ///
+    /// Over WebRTC the pictures are never reordered, which a browser's
+    /// decoder playing WebRTC does not take, and the sound is Opus whatever
+    /// the stored codec, which is the only one WebRTC carries. Neither is a
+    /// choice the page offers there, and neither touches a recording running
+    /// beside the broadcast: each has its own encoders.
     pub fn encoding(&self, canvas: [u32; 2]) -> crate::engine::OutputEncoding {
+        let whip = self.protocol() == StreamProtocol::Whip;
         crate::engine::OutputEncoding {
             encoder: self.encoder,
+            max_b_frames: whip.then_some(0),
             size: RecordingSettings {
                 output_height: self.output_height,
                 ..RecordingSettings::default()
@@ -412,7 +461,11 @@ impl StreamingSettings {
                 *KEYFRAME_SECONDS_RANGE.start(),
                 *KEYFRAME_SECONDS_RANGE.end(),
             ),
-            audio_codec: self.audio_codec,
+            audio_codec: if whip {
+                RecordingAudioCodec::Opus
+            } else {
+                self.audio_codec
+            },
             audio_bit_rate_kbps: self.audio_bit_rate_kbps,
         }
     }
@@ -811,6 +864,7 @@ impl RecordingSettings {
     pub fn encoding(&self, canvas: [u32; 2]) -> crate::engine::OutputEncoding {
         crate::engine::OutputEncoding {
             encoder: self.encoder,
+            max_b_frames: None,
             size: self.output_size(canvas),
             bit_rate_bits: self.bit_rate_bits(),
             keyframe_seconds: self.keyframe_seconds_clamped(),
@@ -940,6 +994,51 @@ fn settings_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn streaming(server: &str, key: &str) -> StreamingSettings {
+        StreamingSettings {
+            server: server.to_owned(),
+            stream_key: key.to_owned(),
+            ..StreamingSettings::default()
+        }
+    }
+
+    /// The address alone says RTMP or WebRTC, and what WebRTC needs follows
+    /// from it: no key required, the key sent as a token rather than in the
+    /// address, Opus and no reordered pictures whatever was stored.
+    #[test]
+    fn a_whip_address_broadcasts_over_webrtc() {
+        let rtmp = streaming("rtmp://live.twitch.tv/app", "live_123");
+        assert_eq!(rtmp.protocol(), StreamProtocol::Rtmp);
+        assert_eq!(rtmp.publish_url(), "rtmp://live.twitch.tv/app/live_123");
+        assert!(!streaming("rtmp://live.twitch.tv/app", "").is_addressable());
+        let encoding = rtmp.encoding([1920, 1080]);
+        assert_eq!(encoding.max_b_frames, None);
+        assert_eq!(encoding.audio_codec, RecordingAudioCodec::Aac);
+
+        for server in [
+            "https://example.com/live/whip",
+            " HTTP://127.0.0.1:8888/cam1/whip ",
+        ] {
+            let whip = streaming(server, "");
+            assert_eq!(whip.protocol(), StreamProtocol::Whip, "{server}");
+            assert!(whip.is_addressable(), "no token needed: {server}");
+            assert_eq!(whip.bearer_token(), None);
+        }
+        let whip = StreamingSettings {
+            audio_codec: RecordingAudioCodec::Aac,
+            ..streaming("https://example.com/live/whip", " secret ")
+        };
+        assert_eq!(whip.bearer_token().as_deref(), Some("secret"));
+        let encoding = whip.encoding([1920, 1080]);
+        assert_eq!(encoding.max_b_frames, Some(0));
+        assert_eq!(encoding.audio_codec, RecordingAudioCodec::Opus);
+        assert_eq!(
+            whip.audio_codec,
+            RecordingAudioCodec::Aac,
+            "the stored choice is left for an RTMP server"
+        );
+    }
 
     #[test]
     fn locale_uses_expected_toml_value() {

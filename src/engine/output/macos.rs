@@ -158,7 +158,7 @@ impl Backend {
                         frame_rate,
                         bit_rate,
                         gop_size,
-                        max_b_frames: None,
+                        max_b_frames: encoding.max_b_frames,
                     },
                     color,
                 )?,
@@ -183,7 +183,7 @@ impl Backend {
                         frame_rate,
                         bit_rate,
                         gop_size,
-                        max_b_frames: None,
+                        max_b_frames: encoding.max_b_frames,
                     },
                     color,
                 )?))

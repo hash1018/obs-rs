@@ -276,8 +276,11 @@ impl Backend {
                     // tuning latency, which `output`'s own HLS notes say
                     // this application does not do, and would cost
                     // quality at the same bitrate against the encoder
-                    // everyone compares it to.
-                    max_b_frames: None,
+                    // everyone compares it to. A broadcast over WebRTC is
+                    // the exception, and turns them off: a browser playing
+                    // WebRTC takes no reordered pictures — see
+                    // `StreamingSettings::encoding`.
+                    max_b_frames: encoding.max_b_frames,
                 };
                 let name = format!("{}-encode", kind.prefix());
                 let encoder = if nvenc {
@@ -306,7 +309,7 @@ impl Backend {
                     frame_rate,
                     bit_rate,
                     gop_size,
-                    max_b_frames: None,
+                    max_b_frames: encoding.max_b_frames,
                 },
                 SOFTWARE_YUV,
             )?)),

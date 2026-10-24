@@ -168,8 +168,8 @@ fn choose(source: &RtspSource, mixer: Option<&MixerHandle>) -> Result<Chosen, Ba
         .best(ffmpeg::media::Type::Video)
         .map_err(|_| "the stream carries no video")?;
     Ok(Chosen {
-        video: video.index,
-        video_params: video.parameters.clone(),
+        video: video.index(),
+        video_params: video.parameters().clone(),
         audio: mixer
             .and(source.best(ffmpeg::media::Type::Audio).ok())
             .map(|audio| Track::of(&audio)),

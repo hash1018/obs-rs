@@ -72,8 +72,8 @@ impl Track {
     /// The stream `open` reported, as a branch for it is built from.
     pub(in crate::engine) fn of(stream: &media_pp::elements::StreamInfo) -> Self {
         Self {
-            index: stream.index,
-            params: stream.parameters.clone(),
+            index: stream.index(),
+            params: stream.parameters().clone(),
         }
     }
 }

@@ -19,7 +19,7 @@ use eframe::egui;
 use crate::i18n::{LocalizationManager, TextKey};
 use crate::settings::{
     AUDIO_BIT_RATE_KBPS_RANGE, AppSettings, BIT_RATE_MBPS_RANGE, KEYFRAME_SECONDS_RANGE,
-    RecordingAudioCodec, RecordingEncoder, STREAM_RECONNECT_CHOICES,
+    RecordingAudioCodec, RecordingEncoder, STREAM_RECONNECT_CHOICES, StreamProtocol,
 };
 
 /// How long the key field stays revealed once the eye is clicked.
@@ -65,9 +65,24 @@ pub(super) fn show(
             ui.add(
                 egui::TextEdit::singleline(&mut draft.streaming.server)
                     .desired_width(f32::INFINITY)
-                    .hint_text("rtmp://live.twitch.tv/app"),
+                    .hint_text("rtmp://live.twitch.tv/app  ·  https://example.com/live/whip"),
             );
             ui.end_row();
+
+            // Which of the two the address makes it, said under it: the
+            // choice is the address's alone, so this is the only place it
+            // shows.
+            let whip = draft.streaming.protocol() == StreamProtocol::Whip;
+            if !draft.streaming.server.trim().is_empty() {
+                ui.label("");
+                let over = if whip {
+                    TextKey::SettingsStreamingOverWhip
+                } else {
+                    TextKey::SettingsStreamingOverRtmp
+                };
+                ui.label(egui::RichText::new(i18n.text(over)).weak().small());
+                ui.end_row();
+            }
 
             ui.label(i18n.text(TextKey::SettingsStreamingKey));
             ui.horizontal(|ui| {
@@ -92,11 +107,20 @@ pub(super) fn show(
             // discovered. Someone deciding whether to paste a key into this
             // field is entitled to know that before they do, not after.
             ui.label("");
-            ui.label(
-                egui::RichText::new(i18n.text(TextKey::SettingsStreamingKeyStored))
-                    .weak()
-                    .small(),
-            );
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new(i18n.text(TextKey::SettingsStreamingKeyStored))
+                        .weak()
+                        .small(),
+                );
+                if whip {
+                    ui.label(
+                        egui::RichText::new(i18n.text(TextKey::SettingsStreamingWhipToken))
+                            .weak()
+                            .small(),
+                    );
+                }
+            });
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsStreamingEncoder));
@@ -160,25 +184,45 @@ pub(super) fn show(
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsStreamingAudioCodec));
-            egui::ComboBox::from_id_salt("settings_stream_audio_codec")
-                .selected_text(draft.streaming.audio_codec.label())
-                .show_ui(ui, |ui| {
-                    for codec in RecordingAudioCodec::ALL {
-                        let available = audio_codecs.contains(&codec);
-                        ui.add_enabled_ui(available, |ui| {
-                            let label = if available {
-                                codec.label().to_owned()
-                            } else {
-                                format!(
-                                    "{} — {}",
-                                    codec.label(),
-                                    i18n.text(TextKey::SettingsEncoderUnavailable)
-                                )
-                            };
-                            ui.selectable_value(&mut draft.streaming.audio_codec, codec, label);
-                        });
-                    }
+            if whip {
+                // Not a choice over WebRTC, which carries Opus alone: shown
+                // as what is sent, and the stored choice left as it is for
+                // an RTMP server typed in later.
+                ui.vertical(|ui| {
+                    ui.add_enabled_ui(false, |ui| {
+                        egui::ComboBox::from_id_salt("settings_stream_audio_codec_whip")
+                            .selected_text(RecordingAudioCodec::Opus.label())
+                            .show_ui(ui, |_| {});
+                    });
+                    let note = if audio_codecs.contains(&RecordingAudioCodec::Opus) {
+                        egui::RichText::new(i18n.text(TextKey::SettingsStreamingWhipOpus)).weak()
+                    } else {
+                        egui::RichText::new(i18n.text(TextKey::SettingsStreamingWhipNoOpus))
+                            .color(ui.visuals().warn_fg_color)
+                    };
+                    ui.label(note.small());
                 });
+            } else {
+                egui::ComboBox::from_id_salt("settings_stream_audio_codec")
+                    .selected_text(draft.streaming.audio_codec.label())
+                    .show_ui(ui, |ui| {
+                        for codec in RecordingAudioCodec::ALL {
+                            let available = audio_codecs.contains(&codec);
+                            ui.add_enabled_ui(available, |ui| {
+                                let label = if available {
+                                    codec.label().to_owned()
+                                } else {
+                                    format!(
+                                        "{} — {}",
+                                        codec.label(),
+                                        i18n.text(TextKey::SettingsEncoderUnavailable)
+                                    )
+                                };
+                                ui.selectable_value(&mut draft.streaming.audio_codec, codec, label);
+                            });
+                        }
+                    });
+            }
             ui.end_row();
 
             ui.label(i18n.text(TextKey::SettingsStreamingAudioBitRate));

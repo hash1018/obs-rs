@@ -29,9 +29,9 @@
 use std::sync::Arc;
 
 use media_pp::element::BoxSink;
-use media_pp::elements::{MixerHandle, RtmpMuxer, TeeHandle};
+use media_pp::elements::{MixerHandle, RtmpMuxer, TeeHandle, WebRtcMuxer, WebRtcOptions};
 
-use crate::settings::StreamingSettings;
+use crate::settings::{RecordingAudioCodec, StreamProtocol, StreamingSettings};
 
 use super::super::backend::{Backend, BackendError};
 use super::{Output, OutputKind, TrackDef, Tracks};
@@ -68,6 +68,15 @@ pub(in crate::engine) fn connect(
             .and_then(|(_, handle)| handle.mix_format())
             .unwrap_or(super::super::audio::DEFAULT_MIX_FORMAT),
     );
+    let protocol = settings.protocol();
+    // WebRTC carries Opus and nothing else this application encodes: no
+    // other codec to fall back to.
+    if protocol == StreamProtocol::Whip {
+        if !audio_codecs.contains(&RecordingAudioCodec::Opus) {
+            return Err("WebRTC carries Opus, and this build cannot encode it".into());
+        }
+        settings.audio_codec = RecordingAudioCodec::Opus;
+    }
     if !audio_codecs.contains(&settings.audio_codec) {
         let Some(fallback) = audio_codecs.first().copied() else {
             return Err("this build has no audio codec a broadcast can carry".into());
@@ -95,11 +104,19 @@ pub(in crate::engine) fn connect(
         OutputKind::Broadcast,
         request.fps,
         &settings.encoding(backend.size),
-        |tracks| open_rtmp_muxer(&settings.publish_url(), tracks),
+        |tracks| match protocol {
+            StreamProtocol::Rtmp => open_rtmp_muxer(&settings.publish_url(), tracks),
+            StreamProtocol::Whip => {
+                open_whip_muxer(settings.server.trim(), settings.bearer_token(), tracks)
+            }
+        },
     )?;
     // The address without its key, which is the only form of it that leaves
     // this function.
-    tracing::info!("broadcasting to {}", redacted(&settings.server));
+    tracing::info!(
+        "broadcasting to {} over {protocol:?}",
+        redacted(&settings.server)
+    );
     Ok(running)
 }
 
@@ -108,6 +125,30 @@ pub(in crate::engine) fn connect(
 /// `url` carries the stream key and is borrowed for exactly this call.
 fn open_rtmp_muxer(url: &str, tracks: Tracks<TrackDef>) -> Result<Tracks<BoxSink>, BackendError> {
     let mut muxer = RtmpMuxer::create(url)?;
+    let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
+    let mut sinks = muxer.open()?;
+    Ok(added.try_map(|track| sinks.take(track))?)
+}
+
+/// Posts the offer to a WHIP endpoint, takes its answer and waits for the
+/// connection: a server that refuses — a wrong token, a path it does not
+/// take, one already published to — says so here.
+///
+/// `token` is the stream key, sent as a `Bearer` token rather than in the
+/// address, and borrowed for exactly this call.
+fn open_whip_muxer(
+    url: &str,
+    token: Option<String>,
+    tracks: Tracks<TrackDef>,
+) -> Result<Tracks<BoxSink>, BackendError> {
+    let mut muxer = WebRtcMuxer::create(
+        "broadcast",
+        url,
+        WebRtcOptions {
+            bearer_token: token,
+            ..WebRtcOptions::default()
+        },
+    )?;
     let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
     let mut sinks = muxer.open()?;
     Ok(added.try_map(|track| sinks.take(track))?)

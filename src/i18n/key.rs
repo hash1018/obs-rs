@@ -461,6 +461,11 @@ text_keys! {
     SettingsPageStreaming           => "settings-page-streaming";
     SettingsStreamingWhileRunning   => "settings-streaming-while-running";
     SettingsStreamingServer         => "settings-streaming-server";
+    SettingsStreamingOverRtmp       => "settings-streaming-over-rtmp";
+    SettingsStreamingOverWhip       => "settings-streaming-over-whip";
+    SettingsStreamingWhipToken      => "settings-streaming-whip-token";
+    SettingsStreamingWhipOpus       => "settings-streaming-whip-opus";
+    SettingsStreamingWhipNoOpus     => "settings-streaming-whip-no-opus";
     SettingsStreamingKey            => "settings-streaming-key";
     SettingsStreamingKeyShow        => "settings-streaming-key-show";
     SettingsStreamingKeyHide        => "settings-streaming-key-hide";

@@ -70,7 +70,7 @@ use media_pp::{
     elements::{
         AudioCodec, FileMuxer, HlsMode, HlsMuxer, HlsOptions, HlsSegmentFormat, MixFormat,
         MixerHandle, Mp4Layout, PauseGate, PauseGateHandle, SegmentPolicy, SegmentedFileMuxer,
-        SwAudioEncoder, SwAudioEncoderOptions, TeeHandle, TimestampOrigin, TrackFormat,
+        StreamInfo, SwAudioEncoder, SwAudioEncoderOptions, TeeHandle, TimestampOrigin,
     },
     graph::BranchId,
     queue::OverflowPolicy,
@@ -171,6 +171,9 @@ impl OutputKind {
 )]
 pub struct OutputEncoding {
     pub encoder: crate::settings::RecordingEncoder,
+    /// How many pictures the encoder may hold back to reorder: `None` for
+    /// its own default, `Some(0)` for none — a broadcast over WebRTC.
+    pub max_b_frames: Option<u32>,
     /// The picture size to encode at, already resolved against the Canvas.
     pub size: [u32; 2],
     pub bit_rate_bits: usize,
@@ -188,7 +191,7 @@ pub struct OutputEncoding {
 /// them.
 pub(in crate::engine) struct TrackDef {
     pub(in crate::engine) name: String,
-    pub(in crate::engine) format: TrackFormat,
+    pub(in crate::engine) format: StreamInfo,
 }
 
 /// An output's tracks by what they carry: always a picture, and sound when
@@ -301,6 +304,7 @@ fn open_hls_muxer(path: &Path, tracks: Tracks<TrackDef>) -> Result<Tracks<BoxSin
         segment_format: HlsSegmentFormat::Fmp4,
         init_filename: String::from("init.mp4"),
         base_url: None,
+        single_file: false,
     })?;
     let added = tracks.try_map(|track| muxer.add_stream(track.name, track.format))?;
     let mut sinks = muxer.open()?;
@@ -392,11 +396,11 @@ impl Output {
         let tracks = Tracks {
             video: TrackDef {
                 name: format!("{}-video", kind.prefix()),
-                format: TrackFormat::new(video.parameters(), video.time_base()),
+                format: StreamInfo::new(video.parameters(), video.time_base()),
             },
             audio: audio.as_ref().map(|(_, encoder)| TrackDef {
                 name: format!("{}-audio", kind.prefix()),
-                format: TrackFormat::from(encoder),
+                format: StreamInfo::from(encoder),
             }),
         };
         let Tracks {
@@ -526,7 +530,7 @@ mod tests {
         Tracks {
             video: TrackDef {
                 name: String::from("test-track"),
-                format: TrackFormat::from(&encoder),
+                format: StreamInfo::from(&encoder),
             },
             audio: None,
         }
@@ -622,7 +626,7 @@ mod tests {
             let tracks = Tracks {
                 video: TrackDef {
                     name: String::from("test-track"),
-                    format: TrackFormat::from(&encoder),
+                    format: StreamInfo::from(&encoder),
                 },
                 audio: None,
             };

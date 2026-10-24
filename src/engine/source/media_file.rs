@@ -142,9 +142,9 @@ fn choose(demuxer: &FileDemuxer, mixer: Option<&MixerHandle>) -> Result<Chosen, 
         .best(ffmpeg::media::Type::Video)
         .map_err(|_| "the file has no video stream")?;
     Ok(Chosen {
-        video: video.index,
-        video_params: video.parameters.clone(),
-        video_time_base: video.time_base,
+        video: video.index(),
+        video_params: video.parameters().clone(),
+        video_time_base: video.time_base(),
         audio: mixer
             .and(demuxer.best(ffmpeg::media::Type::Audio).ok())
             .map(|audio| Track::of(&audio)),
