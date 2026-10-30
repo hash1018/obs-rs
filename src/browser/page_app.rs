@@ -61,20 +61,41 @@ wrap_app! {
                 // does on Linux.
                 #[cfg(target_os = "macos")]
                 command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
-                // Linux: no display server at all. A page here is drawn
-                // off-screen and handed over as pixels, so Chromium has no
-                // window to put anywhere, and left to itself it connects to
-                // the session's Wayland or X11 server anyway — measured, on
-                // Wayland, with a GTK complaint and a GPU process reporting
-                // that platform incompatible with Vulkan. Headless draws the
-                // same pictures at the same cost with neither, and does not
-                // care which kind of session obs-rs itself is running in.
+                // Linux: which display platform Chromium runs on decides how
+                // a page's pictures can arrive — see `pictures_on_gpu`.
+                // Without GPU pictures, no display server at all: a page
+                // drawn as pixels needs none, and left to itself Chromium
+                // connects to the session's anyway — measured, on Wayland,
+                // with a GTK complaint and a GPU process reporting that
+                // platform incompatible with Vulkan.
                 #[cfg(target_os = "linux")]
                 command_line.append_switch_with_value(
                     Some(&CefString::from("ozone-platform")),
-                    Some(&CefString::from("headless")),
+                    Some(&CefString::from(if pictures_on_gpu() {
+                        "wayland"
+                    } else {
+                        "headless"
+                    })),
                 );
             }
         }
     }
+}
+
+/// Whether a Linux page hands its pictures over as GPU buffers rather than
+/// as pixels: on a Wayland session alone.
+///
+/// Measured with CEF 156 on an NVIDIA GPU (595.91.07), a page off-screen
+/// on Chromium's Wayland platform hands over DMA-BUFs in NVIDIA's own tiled
+/// layout, holding the page. Its X11 platform, with GL or Vulkan, and
+/// headless hand over no GPU buffer at all, or ones nothing was drawn into.
+/// `OBS_RS_BROWSER_GPU=0` keeps the pixels regardless.
+///
+/// The same answer in every process, which each reaches by itself from the
+/// same environment: a child started on another platform than the browser
+/// process's could not share its buffers.
+#[cfg(target_os = "linux")]
+pub fn pictures_on_gpu() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
+        && std::env::var("OBS_RS_BROWSER_GPU").as_deref() != Ok("0")
 }

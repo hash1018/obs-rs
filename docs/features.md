@@ -44,7 +44,8 @@ Everything it can do, source by source. How to use it is in
 - **Browser.** A web page as a source: an overlay, an alert box, a chat
   window. It is rendered off-screen by Chromium; on Windows and macOS it is
   handed over as a GPU texture, so the page reaches the compositor without
-  a copy through system memory, and on Linux as its pixels, which are
+  a copy through system memory, and so it is on Linux on a Wayland session
+  with an NVIDIA GPU. Elsewhere on Linux it comes as its pixels, which are
   copied up. Either way its transparency is real transparency, not a black
   rectangle. Address, size and frame rate are set in the Properties dock.
   Whatever the page plays gets a channel in the audio mixer, like a media

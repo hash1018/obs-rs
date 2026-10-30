@@ -30,10 +30,11 @@
 //! # Where it exists
 //!
 //! Windows, Linux and macOS, with the `browser` feature. They hand a picture
-//! over differently — a shared GPU texture on Windows, pixels on Linux and
-//! macOS; see `cef.rs` — because importing a GPU buffer is a per-backend
-//! operation and those two have no bridge for what Chromium hands over there
-//! yet. On macOS only from inside the application bundle, where the
+//! over differently — a shared texture on Windows, an `IOSurface` on macOS,
+//! and on Linux a DMA-BUF where Chromium can draw into one and the
+//! compositor import it, its pixels where not; see `cef.rs` — because
+//! importing a GPU buffer is a per-backend operation. On macOS only from
+//! inside the application bundle, where the
 //! framework is; run from outside one it has none. Anywhere else this module
 //! still compiles, as `absent.rs`, and answers that there is no browser
 //! engine here.
@@ -69,3 +70,5 @@ pub use engine::{
 // and an export nothing reads is a warning there.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use engine::Painted;
+#[cfg(target_os = "linux")]
+pub use engine::{Picture, pictures_on_gpu};

@@ -28,8 +28,26 @@ pub struct Painted {
 /// See the other platforms' twin.
 #[cfg(target_os = "linux")]
 pub struct Painted<'a> {
-    pub pixels: &'a [u8],
+    pub picture: Picture<'a>,
     pub size: [u32; 2],
+}
+
+/// See `cef.rs`.
+#[cfg(target_os = "linux")]
+pub enum Picture<'a> {
+    Pixels(&'a [u8]),
+    Buffer {
+        fd: std::os::raw::c_int,
+        offset: u32,
+        stride: u32,
+        modifier: u64,
+    },
+}
+
+/// Never: there is no browser engine to hand anything over.
+#[cfg(target_os = "linux")]
+pub fn pictures_on_gpu() -> bool {
+    false
 }
 
 /// See the other platforms' twin.
@@ -111,6 +129,8 @@ pub struct PageOptions {
     pub size: [u32; 2],
     pub fps: u32,
     pub paint: OnPaint,
+    #[cfg(target_os = "linux")]
+    pub gpu: bool,
     pub audio: Option<OnAudio>,
 }
 

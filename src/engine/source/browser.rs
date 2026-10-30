@@ -14,9 +14,12 @@
 //! `MetalSharedTextureSource` copies it, with a Metal blit, into a
 //! VideoToolbox frame of the pipeline's own.
 //!
-//! On Linux the browser draws on the CPU and hands over its pixels — see
-//! `crate::browser` for why — and they go the way a Text Source's do: into
-//! a frame, through the GPU's upload, and on to the compositor.
+//! On Linux, on a Wayland session with the CUDA compositor, it is the same
+//! again with a DMA-BUF: `CudaDmaBufSource` imports it, through OpenGL, into
+//! a CUDA frame of the pipeline's own. Anywhere else there — an X11 session,
+//! or the Vulkan compositor — the browser draws on the CPU and hands over its
+//! pixels, and they go the way a Text Source's do: into a frame, through the
+//! GPU's upload, and on to the compositor. See `crate::browser` for why.
 //!
 //! # Its alpha is already in its colour
 //!
@@ -25,9 +28,9 @@
 //! `layer_for` — and the compositor blends it by what it already holds
 //! rather than applying that alpha a second time. The CUDA compositor has no
 //! such blend, so on Linux — on either GPU, for one way to serve both — the
-//! colour is divided back out as the pixels are copied, and the page
-//! arrives with straight alpha like every other Source there — which is
-//! also what the filters in its rack expect.
+//! colour is divided back out, by the import's shader or as the pixels are
+//! copied, and the page arrives with straight alpha like every other Source
+//! there — which is also what the filters in its rack expect.
 //!
 //! # Changing anything reopens it
 //!
@@ -535,13 +538,9 @@ pub(in crate::engine) fn open(
 ) -> Result<OpenOutcome, BackendError> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    #[cfg(target_os = "linux")]
-    use media_pp::buffer::MediaBuffer;
     use media_pp::elements::{AppSource, CompositorInput};
     use media_pp::ffmpeg;
     use media_pp::pipeline::PipelineBuilder;
-    #[cfg(target_os = "linux")]
-    use media_pp::pool::UnboundObjectPool;
 
     use super::{FilledRack, MediaFile, MediaMeters, OpenSource, filters, input_name, sound};
 
@@ -552,13 +551,11 @@ pub(in crate::engine) fn open(
     let size = page_size(settings);
     let name = input_name(item);
 
-    // Linux: the page's pixels, uploaded. macOS: the surface Chromium drew
-    // into, copied GPU to GPU into a frame of this pipeline's own, as the
-    // Windows twin's texture is.
+    // Linux: the page's buffers, imported, or its pixels, uploaded — see
+    // `LinuxVideo`. macOS: the surface Chromium drew into, copied GPU to GPU
+    // into a frame of this pipeline's own, as the Windows twin's texture is.
     #[cfg(target_os = "linux")]
-    let (source, pusher) = AppSource::new(name.clone(), PICTURE_QUEUE_DEPTH);
-    #[cfg(target_os = "linux")]
-    let upload = gpu.upload(format!("{name}-upload"), filters::ChainFormat::Bgra);
+    let video = LinuxVideo::open(gpu, &name, size, &item.name);
     #[cfg(target_os = "macos")]
     let (source, pusher) = media_pp::elements::MetalSharedTextureSource::new(
         name.clone(),
@@ -597,10 +594,10 @@ pub(in crate::engine) fn open(
     let CompositorInput { sink, layer } = handle.add_source(name.clone(), layer)?;
     let sound_name = name.clone();
     let builder = PipelineBuilder::new(name.clone());
+    #[cfg(target_os = "linux")]
+    let (builder, deliver) = video.attach(builder, rack, sink)?;
+    #[cfg(target_os = "macos")]
     let (builder, ()) = builder.add_source(source, move |source, context| {
-        #[cfg(target_os = "linux")]
-        let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
-        #[cfg(target_os = "macos")]
         let branch = context.branch().pipe(rack).to(sink)?;
         context.attach(source, 0, branch)?;
         Ok(())
@@ -619,15 +616,8 @@ pub(in crate::engine) fn open(
     let pipeline = builder.build();
     pipeline.run()?;
 
-    // Frames that go back to be drawn into again once the upload has let go
-    // of them: a page repaints at its own rate, and a fresh allocation of a
-    // whole picture every time is what this saves.
     #[cfg(target_os = "linux")]
-    let pictures = UnboundObjectPool::new(
-        PICTURE_QUEUE_DEPTH + 1,
-        move || ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, size[0], size[1]),
-        |_| {},
-    );
+    let on_gpu = deliver.on_gpu();
     let complained = AtomicBool::new(false);
     let complained_about = name.clone();
     let paint = move |painted: crate::browser::Painted<'_>| {
@@ -639,15 +629,7 @@ pub(in crate::engine) fn open(
         } else {
             #[cfg(target_os = "linux")]
             {
-                let mut frame = pictures.get();
-                straighten(painted.pixels, &mut frame, size[0] as usize);
-                // Dropped rather than waited on, as on Windows: this is the
-                // browser engine's one thread, shared by every page. And not
-                // complained about when it fails: the one way it can is the
-                // pipeline having gone, which is this Source closing — a page
-                // told to close can still be in the middle of a picture.
-                let _ = pusher.try_push(MediaBuffer::Video(Arc::new(frame).into()));
-                Ok(())
+                deliver.deliver(painted.picture, size)
             }
             // Dropped rather than waited on, for the reason above; and only a
             // surface this cannot take is said, not the pipeline having gone.
@@ -668,6 +650,8 @@ pub(in crate::engine) fn open(
         size,
         fps: settings.fps,
         paint: Arc::new(paint),
+        #[cfg(target_os = "linux")]
+        gpu: on_gpu,
         audio: routing.is_some().then(|| {
             let clock = std::sync::Mutex::new(SampleClock::default());
             Arc::new(move |heard: crate::browser::Heard<'_>| {
@@ -718,6 +702,180 @@ pub(in crate::engine) fn open(
         pushed: None,
         page: Some(page),
     }))
+}
+
+/// Where a Linux page's pictures come into its pipeline: imported as the
+/// GPU buffers Chromium drew them into, where it hands those over — see
+/// `crate::browser::pictures_on_gpu` — and the compositor is CUDA's; and
+/// otherwise as pixels, copied into frames and uploaded. An import that
+/// cannot be set up falls back to the pixels, and says why.
+#[cfg(target_os = "linux")]
+enum LinuxVideo {
+    Pixels {
+        source: media_pp::elements::AppSource,
+        pusher: media_pp::elements::AppSourceHandle,
+        upload: media_pp::element::BoxFilter,
+    },
+    Buffers {
+        source: media_pp::elements::CudaDmaBufSource,
+        handle: media_pp::elements::CudaDmaBufHandle,
+    },
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxVideo {
+    fn open(gpu: &crate::engine::backend::Gpu, name: &str, size: [u32; 2], shown_as: &str) -> Self {
+        use crate::engine::backend::Gpu;
+        use media_pp::elements::{AppSource, CudaDmaBufSource, DmaBufAlpha};
+
+        if let Gpu::Cuda(device) = gpu
+            && crate::browser::pictures_on_gpu()
+        {
+            match CudaDmaBufSource::new(
+                name,
+                device,
+                size[0],
+                size[1],
+                // Divided back out as it is imported — see this module's
+                // docs on why the CUDA compositor needs it straight.
+                DmaBufAlpha::Premultiplied,
+                PICTURE_QUEUE_DEPTH,
+            ) {
+                Ok((source, handle)) => return Self::Buffers { source, handle },
+                Err(error) => tracing::warn!(
+                    "\"{shown_as}\": the page's pictures cannot be taken on the GPU ({error}); \
+                     drawing it on the CPU instead"
+                ),
+            }
+        }
+        let (source, pusher) = AppSource::new(name, PICTURE_QUEUE_DEPTH);
+        let upload = gpu.upload(format!("{name}-upload"), super::filters::ChainFormat::Bgra);
+        Self::Pixels {
+            source,
+            pusher,
+            upload,
+        }
+    }
+
+    /// Adds it to `builder`, ending in `rack` and `sink`, and answers what
+    /// the page's paint hands its pictures to.
+    fn attach(
+        self,
+        builder: media_pp::pipeline::PipelineBuilder,
+        rack: media_pp::elements::Rack,
+        sink: media_pp::element::BoxSink,
+    ) -> Result<(media_pp::pipeline::PipelineBuilder, Deliver), BackendError> {
+        match self {
+            Self::Pixels {
+                source,
+                pusher,
+                upload,
+            } => {
+                let (builder, ()) = builder.add_source(source, move |source, context| {
+                    let branch = context.branch().pipe(upload).pipe(rack).to(sink)?;
+                    context.attach(source, 0, branch)?;
+                    Ok(())
+                })?;
+                Ok((builder, Deliver::pixels(pusher)))
+            }
+            // Already on the GPU, so nothing between the import and the rack.
+            Self::Buffers { source, handle } => {
+                let (builder, ()) = builder.add_source(source, move |source, context| {
+                    let branch = context.branch().pipe(rack).to(sink)?;
+                    context.attach(source, 0, branch)?;
+                    Ok(())
+                })?;
+                Ok((builder, Deliver::Buffers(handle)))
+            }
+        }
+    }
+}
+
+/// What a Linux page's paint hands its pictures to — the other end of a
+/// [`LinuxVideo`].
+#[cfg(target_os = "linux")]
+enum Deliver {
+    Pixels {
+        pusher: media_pp::elements::AppSourceHandle,
+        /// Frames that go back to be drawn into again once the upload has
+        /// let go of them: a page repaints at its own rate, and a fresh
+        /// allocation of a whole picture every time is what this saves.
+        pictures: media_pp::pool::UnboundObjectPool<media_pp::ffmpeg::frame::Video>,
+    },
+    Buffers(media_pp::elements::CudaDmaBufHandle),
+}
+
+#[cfg(target_os = "linux")]
+impl Deliver {
+    fn pixels(pusher: media_pp::elements::AppSourceHandle) -> Self {
+        Self::Pixels {
+            pusher,
+            pictures: media_pp::pool::UnboundObjectPool::new(
+                PICTURE_QUEUE_DEPTH + 1,
+                media_pp::ffmpeg::frame::Video::empty,
+                |_| {},
+            ),
+        }
+    }
+
+    /// Whether the page is to hand over GPU buffers.
+    fn on_gpu(&self) -> bool {
+        matches!(self, Self::Buffers(_))
+    }
+
+    /// Takes one picture into the pipeline.
+    ///
+    /// Dropped rather than waited on, as on Windows: this is the browser
+    /// engine's one thread, shared by every page. And a full queue or a
+    /// pipeline that has gone is not complained about: the second is this
+    /// Source closing, and a page told to close can still be in the middle
+    /// of a picture.
+    fn deliver(&self, picture: crate::browser::Picture<'_>, size: [u32; 2]) -> Result<(), String> {
+        use crate::browser::Picture;
+        use media_pp::buffer::MediaBuffer;
+        use media_pp::elements::{CudaDmaBufSourceError, DmaBuf};
+
+        match (self, picture) {
+            (Self::Pixels { pusher, pictures }, Picture::Pixels(pixels)) => {
+                let mut frame = pictures.get();
+                if frame.width() != size[0] || frame.height() != size[1] {
+                    *frame = media_pp::ffmpeg::frame::Video::new(
+                        media_pp::ffmpeg::format::Pixel::BGRA,
+                        size[0],
+                        size[1],
+                    );
+                }
+                straighten(pixels, &mut frame, size[0] as usize);
+                let _ = pusher.try_push(MediaBuffer::Video(Arc::new(frame).into()));
+                Ok(())
+            }
+            (
+                Self::Buffers(handle),
+                Picture::Buffer {
+                    fd,
+                    offset,
+                    stride,
+                    modifier,
+                },
+            ) => {
+                let buffer = DmaBuf {
+                    fd,
+                    offset,
+                    stride,
+                    modifier,
+                    width: size[0],
+                    height: size[1],
+                };
+                match handle.try_push(&buffer, None) {
+                    Ok(_) | Err(CudaDmaBufSourceError::Closed) => Ok(()),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            // A page opened for one kind is never handed the other; one that
+            // were would be a picture this pipeline has no way in for.
+            _ => Err("the page handed over a picture of the other kind".to_owned()),
+        }
+    }
 }
 
 /// Copies a page's premultiplied BGRA into `frame` with the alpha divided

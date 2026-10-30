@@ -8,14 +8,14 @@
 //! # Two ways a picture arrives
 //!
 //! On Windows a page is drawn on Chromium's GPU and handed over as a shared
-//! D3D11 texture, which the compositor's device opens directly. On Linux it
-//! is drawn on the CPU and handed over as its pixels. Chromium can hand over
-//! a GPU buffer there too, but as a dmabuf, and the Linux compositor is CUDA,
-//! which cannot open one — getting it there is a Vulkan import and an export
-//! CUDA *can* read, which is a bridge of its own. [`Painted`] is shaped for
-//! whichever this platform has. macOS takes Chromium's GPU picture as Windows
-//! does, as an `IOSurface`, which the compositor's Metal device copies from
-//! directly.
+//! D3D11 texture, which the compositor's device opens directly. macOS takes
+//! it the same way, as an `IOSurface`, which the compositor's Metal device
+//! copies from directly. On Linux either way, page by page: on a Wayland
+//! session it is drawn on the GPU and handed over as a DMA-BUF, which the
+//! CUDA compositor imports through OpenGL; anywhere else — an X11 session,
+//! the Vulkan compositor, which has no import for one — it is drawn on the
+//! CPU and handed over as its pixels. See [`pictures_on_gpu`] for why the
+//! session decides. [`Painted`] is shaped for whichever this platform has.
 //!
 //! # macOS
 //!
@@ -58,6 +58,8 @@ mod mac;
 #[path = "page_app.rs"]
 mod page_app;
 use page_app::PageApp;
+#[cfg(target_os = "linux")]
+pub use page_app::pictures_on_gpu;
 
 /// How long the runtime thread waits between turns of CEF's message pump.
 ///
@@ -320,17 +322,32 @@ pub struct Painted<'a> {
     pub size: [u32; 2],
 }
 
-/// What a page hands over when it has drawn: its pixels, and the size of
-/// them.
+/// What a page hands over when it has drawn, and the size of it.
 ///
-/// Four bytes a pixel, BGRA, top row first, `size[0]` pixels to a row and no
-/// padding — and premultiplied, as Chromium composites: a pixel's colour has
+/// Premultiplied either way, as Chromium composites: a pixel's colour has
 /// already been multiplied by its alpha. Borrowed for the call; what keeps
-/// them has to copy them.
+/// the picture has to copy it before returning.
 #[cfg(target_os = "linux")]
 pub struct Painted<'a> {
-    pub pixels: &'a [u8],
+    pub picture: Picture<'a>,
     pub size: [u32; 2],
+}
+
+/// The two ways a Linux page's picture arrives — see [`pictures_on_gpu`].
+#[cfg(target_os = "linux")]
+pub enum Picture<'a> {
+    /// Drawn on the CPU: four bytes a pixel, BGRA, top row first, `size[0]`
+    /// pixels to a row and no padding.
+    Pixels(&'a [u8]),
+    /// Drawn on the GPU into a DMA-BUF: one plane of BGRA, `stride` bytes to
+    /// a row, laid out as `modifier` says. The file descriptor is Chromium's
+    /// and is only open for the call.
+    Buffer {
+        fd: std::os::raw::c_int,
+        offset: u32,
+        stride: u32,
+        modifier: u64,
+    },
 }
 
 /// What a page does with each picture it draws. Called on the runtime
@@ -565,6 +582,11 @@ pub struct PageOptions {
     /// The rate it is redrawn at, at most.
     pub fps: u32,
     pub paint: OnPaint,
+    /// Whether the page hands its pictures over as GPU buffers rather than
+    /// as pixels — see [`pictures_on_gpu`]. Linux only: Windows and macOS
+    /// always do.
+    #[cfg(target_os = "linux")]
+    pub gpu: bool,
     /// What its sound goes to, or `None` to leave the page's audio to
     /// Chromium — which plays it on this machine's own output, where
     /// nothing here can record it.
@@ -687,7 +709,7 @@ wrap_render_handler! {
                     // four bytes each, live for the length of this call.
                     let pixels = unsafe { std::slice::from_raw_parts(buffer, columns * rows * 4) };
                     (self.paint)(Painted {
-                        pixels,
+                        picture: Picture::Pixels(pixels),
                         size: [columns as u32, rows as u32],
                     });
                 });
@@ -738,17 +760,42 @@ wrap_render_handler! {
                     });
                 });
             }
-            // Never asked for here — see `shared_texture_enabled` where a page
-            // is opened — so one arriving is worth saying, once.
+            // Linux: a buffer Chromium keeps, whose descriptor is good only
+            // for as long as this call — which is why the paint callback
+            // must take what it needs before returning.
             #[cfg(target_os = "linux")]
             {
-                let _ = (type_, info);
-                if !self.warned.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(
-                        "the browser engine handed over a GPU buffer, which obs-rs does not take \
-                         on this platform; the page will show nothing"
-                    );
+                // The page itself, not a popup — see the CPU paint.
+                if type_ != PaintElementType::VIEW {
+                    return;
                 }
+                let Some(info) = info else { return };
+                let coded = &info.extra.coded_size;
+                // One plane of packed BGRA is what is asked for and what an
+                // import can take; anything else is said once and skipped.
+                let [plane, ..] = &info.planes;
+                if info.plane_count != 1 || info.format != ColorType::BGRA_8888 {
+                    if !self.warned.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            "the browser engine handed over a {}-plane {:?} buffer, which obs-rs \
+                             cannot take; the page will show nothing",
+                            info.plane_count,
+                            info.format
+                        );
+                    }
+                    return;
+                }
+                guarded("paint", || {
+                    (self.paint)(Painted {
+                        picture: Picture::Buffer {
+                            fd: plane.fd,
+                            offset: u32::try_from(plane.offset).unwrap_or(u32::MAX),
+                            stride: plane.stride,
+                            modifier: info.modifier,
+                        },
+                        size: [coded.width.max(0) as u32, coded.height.max(0) as u32],
+                    });
+                });
             }
         }
     }
@@ -916,6 +963,8 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
                 fps,
                 paint,
                 audio,
+                #[cfg(target_os = "linux")]
+                gpu,
             } = options;
             let mut client = PageClient::new(
                 PageRenderHandler::new(size, paint, Arc::new(AtomicBool::new(false))),
@@ -924,15 +973,15 @@ fn apply(command: Command, open: &mut HashMap<PageId, Browser>) {
             );
             let window = WindowInfo {
                 windowless_rendering_enabled: 1,
-                // On Windows and macOS, the reason a page costs so little:
-                // its pictures arrive as textures this machine's GPU already
-                // holds, rather than as pixels copied out to system memory
-                // and back. On Linux the pixels are what this can take — see
-                // this module's docs.
-                shared_texture_enabled: i32::from(cfg!(any(
-                    target_os = "windows",
-                    target_os = "macos"
-                ))),
+                // The reason a page costs so little: its pictures arrive as
+                // textures or buffers this machine's GPU already holds,
+                // rather than as pixels copied out to system memory and
+                // back. On Linux only where that works — see
+                // `pictures_on_gpu`.
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                shared_texture_enabled: 1,
+                #[cfg(target_os = "linux")]
+                shared_texture_enabled: i32::from(gpu),
                 ..Default::default()
             };
             let settings = BrowserSettings {
