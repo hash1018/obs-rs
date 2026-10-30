@@ -14,12 +14,13 @@
 //! `MetalSharedTextureSource` copies it, with a Metal blit, into a
 //! VideoToolbox frame of the pipeline's own.
 //!
-//! On Linux, on a Wayland session with the CUDA compositor, it is the same
-//! again with a DMA-BUF: `CudaDmaBufSource` imports it, through OpenGL, into
-//! a CUDA frame of the pipeline's own. Anywhere else there — an X11 session,
-//! or the Vulkan compositor — the browser draws on the CPU and hands over its
-//! pixels, and they go the way a Text Source's do: into a frame, through the
-//! GPU's upload, and on to the compositor. See `crate::browser` for why.
+//! On Linux, on a Wayland session, it is the same again with a DMA-BUF:
+//! `CudaDmaBufSource` imports it, through OpenGL, into a CUDA frame of the
+//! pipeline's own, and `VulkanDmaBufSource` as a Vulkan image, copied by a
+//! kernel into a Vulkan frame. On an X11 session the browser draws on the
+//! CPU and hands over its pixels, and they go the way a Text Source's do:
+//! into a frame, through the GPU's upload, and on to the compositor. See
+//! `crate::browser` for why.
 //!
 //! # Its alpha is already in its colour
 //!
@@ -705,10 +706,11 @@ pub(in crate::engine) fn open(
 }
 
 /// Where a Linux page's pictures come into its pipeline: imported as the
-/// GPU buffers Chromium drew them into, where it hands those over — see
-/// `crate::browser::pictures_on_gpu` — and the compositor is CUDA's; and
-/// otherwise as pixels, copied into frames and uploaded. An import that
-/// cannot be set up falls back to the pixels, and says why.
+/// GPU buffers Chromium drew them into, into CUDA or Vulkan as the
+/// compositor is, where it hands those over — see
+/// `crate::browser::pictures_on_gpu` — and otherwise as pixels, copied into
+/// frames and uploaded. An import that cannot be set up falls back to the
+/// pixels, and says why.
 #[cfg(target_os = "linux")]
 enum LinuxVideo {
     Pixels {
@@ -716,9 +718,13 @@ enum LinuxVideo {
         pusher: media_pp::elements::AppSourceHandle,
         upload: media_pp::element::BoxFilter,
     },
-    Buffers {
+    Cuda {
         source: media_pp::elements::CudaDmaBufSource,
         handle: media_pp::elements::CudaDmaBufHandle,
+    },
+    Vulkan {
+        source: media_pp::elements::VulkanDmaBufSource,
+        handle: media_pp::elements::VulkanDmaBufHandle,
     },
 }
 
@@ -726,22 +732,27 @@ enum LinuxVideo {
 impl LinuxVideo {
     fn open(gpu: &crate::engine::backend::Gpu, name: &str, size: [u32; 2], shown_as: &str) -> Self {
         use crate::engine::backend::Gpu;
-        use media_pp::elements::{AppSource, CudaDmaBufSource, DmaBufAlpha};
+        use media_pp::elements::{AppSource, CudaDmaBufSource, DmaBufAlpha, VulkanDmaBufSource};
 
-        if let Gpu::Cuda(device) = gpu
-            && crate::browser::pictures_on_gpu()
-        {
-            match CudaDmaBufSource::new(
-                name,
-                device,
-                size[0],
-                size[1],
-                // Divided back out as it is imported — see this module's
-                // docs on why the CUDA compositor needs it straight.
-                DmaBufAlpha::Premultiplied,
-                PICTURE_QUEUE_DEPTH,
-            ) {
-                Ok((source, handle)) => return Self::Buffers { source, handle },
+        // Divided back out as it is imported — see this module's docs on why
+        // the compositor needs it straight.
+        let alpha = DmaBufAlpha::Premultiplied;
+        let [width, height] = size;
+        if crate::browser::pictures_on_gpu() {
+            let imported = match gpu {
+                Gpu::Cuda(device) => {
+                    CudaDmaBufSource::new(name, device, width, height, alpha, PICTURE_QUEUE_DEPTH)
+                        .map(|(source, handle)| Self::Cuda { source, handle })
+                        .map_err(|error| error.to_string())
+                }
+                Gpu::Vulkan(device) => {
+                    VulkanDmaBufSource::new(name, device, width, height, alpha, PICTURE_QUEUE_DEPTH)
+                        .map(|(source, handle)| Self::Vulkan { source, handle })
+                        .map_err(|error| error.to_string())
+                }
+            };
+            match imported {
+                Ok(video) => return video,
                 Err(error) => tracing::warn!(
                     "\"{shown_as}\": the page's pictures cannot be taken on the GPU ({error}); \
                      drawing it on the CPU instead"
@@ -779,13 +790,21 @@ impl LinuxVideo {
                 Ok((builder, Deliver::pixels(pusher)))
             }
             // Already on the GPU, so nothing between the import and the rack.
-            Self::Buffers { source, handle } => {
+            Self::Cuda { source, handle } => {
                 let (builder, ()) = builder.add_source(source, move |source, context| {
                     let branch = context.branch().pipe(rack).to(sink)?;
                     context.attach(source, 0, branch)?;
                     Ok(())
                 })?;
-                Ok((builder, Deliver::Buffers(handle)))
+                Ok((builder, Deliver::Cuda(handle)))
+            }
+            Self::Vulkan { source, handle } => {
+                let (builder, ()) = builder.add_source(source, move |source, context| {
+                    let branch = context.branch().pipe(rack).to(sink)?;
+                    context.attach(source, 0, branch)?;
+                    Ok(())
+                })?;
+                Ok((builder, Deliver::Vulkan(handle)))
             }
         }
     }
@@ -802,7 +821,8 @@ enum Deliver {
         /// allocation of a whole picture every time is what this saves.
         pictures: media_pp::pool::UnboundObjectPool<media_pp::ffmpeg::frame::Video>,
     },
-    Buffers(media_pp::elements::CudaDmaBufHandle),
+    Cuda(media_pp::elements::CudaDmaBufHandle),
+    Vulkan(media_pp::elements::VulkanDmaBufHandle),
 }
 
 #[cfg(target_os = "linux")]
@@ -820,7 +840,7 @@ impl Deliver {
 
     /// Whether the page is to hand over GPU buffers.
     fn on_gpu(&self) -> bool {
-        matches!(self, Self::Buffers(_))
+        !matches!(self, Self::Pixels { .. })
     }
 
     /// Takes one picture into the pipeline.
@@ -833,7 +853,7 @@ impl Deliver {
     fn deliver(&self, picture: crate::browser::Picture<'_>, size: [u32; 2]) -> Result<(), String> {
         use crate::browser::Picture;
         use media_pp::buffer::MediaBuffer;
-        use media_pp::elements::{CudaDmaBufSourceError, DmaBuf};
+        use media_pp::elements::{CudaDmaBufSourceError, DmaBuf, VulkanDmaBufSourceError};
 
         match (self, picture) {
             (Self::Pixels { pusher, pictures }, Picture::Pixels(pixels)) => {
@@ -850,7 +870,7 @@ impl Deliver {
                 Ok(())
             }
             (
-                Self::Buffers(handle),
+                Self::Cuda(_) | Self::Vulkan(_),
                 Picture::Buffer {
                     fd,
                     offset,
@@ -866,9 +886,16 @@ impl Deliver {
                     width: size[0],
                     height: size[1],
                 };
-                match handle.try_push(&buffer, None) {
-                    Ok(_) | Err(CudaDmaBufSourceError::Closed) => Ok(()),
-                    Err(error) => Err(error.to_string()),
+                match self {
+                    Self::Cuda(handle) => match handle.try_push(&buffer, None) {
+                        Ok(_) | Err(CudaDmaBufSourceError::Closed) => Ok(()),
+                        Err(error) => Err(error.to_string()),
+                    },
+                    Self::Vulkan(handle) => match handle.try_push(&buffer, None) {
+                        Ok(_) | Err(VulkanDmaBufSourceError::Closed) => Ok(()),
+                        Err(error) => Err(error.to_string()),
+                    },
+                    Self::Pixels { .. } => unreachable!("matched as an import above"),
                 }
             }
             // A page opened for one kind is never handed the other; one that

@@ -10,12 +10,12 @@
 //! On Windows a page is drawn on Chromium's GPU and handed over as a shared
 //! D3D11 texture, which the compositor's device opens directly. macOS takes
 //! it the same way, as an `IOSurface`, which the compositor's Metal device
-//! copies from directly. On Linux either way, page by page: on a Wayland
-//! session it is drawn on the GPU and handed over as a DMA-BUF, which the
-//! CUDA compositor imports through OpenGL; anywhere else — an X11 session,
-//! the Vulkan compositor, which has no import for one — it is drawn on the
-//! CPU and handed over as its pixels. See [`pictures_on_gpu`] for why the
-//! session decides. [`Painted`] is shaped for whichever this platform has.
+//! copies from directly. On Linux either way: on a Wayland session it is
+//! drawn on the GPU and handed over as a DMA-BUF, which the compositor
+//! imports — the CUDA one through OpenGL, the Vulkan one as an image of its
+//! own; on an X11 session it is drawn on the CPU and handed over as its
+//! pixels. See [`pictures_on_gpu`] for why the session decides. [`Painted`]
+//! is shaped for whichever this platform has.
 //!
 //! # macOS
 //!
